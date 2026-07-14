@@ -125,7 +125,8 @@
     </div>
     
     <div id="accounts-container">
-        {% for username, acc in accounts.items() %}
+        {% for acc in accounts %}
+        {% set username = acc.username %}
         <div class="account-card">
             <div class="account-header">
                 <div class="username">{{ username }}</div>
@@ -182,12 +183,13 @@
             fetch('/api/accounts')
                 .then(res => res.json())
                 .then(data => {
-                    for (const [username, acc] of Object.entries(data)) {
+                    for (const acc of data) {
+                        const username = acc.username;
                         const statusEl = document.getElementById('status-' + username);
                         statusEl.textContent = acc.status;
                         statusEl.className = 'status ' + (acc.status === 'Running' ? 'status-running' : 'status-stopped');
                         
-                        document.getElementById('task-' + username).textContent = acc.current_task;
+                        document.getElementById('task-' + username).textContent = acc.task || 'Idle';
                         document.getElementById('last-' + username).textContent = acc.last_post || 'Never';
                         document.getElementById('next-' + username).textContent = acc.next_post || '-';
                         
