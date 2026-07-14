@@ -49,14 +49,15 @@ def connect_account(username):
         
         context = pw.chromium.launch_persistent_context(
             user_data_dir=session_dir,
-            headless=True,
+            headless=False,                    # ← Visible browser
             viewport={"width": 1280, "height": 720},
             args=[
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
-                "--single-process"
+                "--single-process",
+                "--start-maximized"
             ]
         )
         
