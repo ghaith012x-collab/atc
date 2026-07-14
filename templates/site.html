@@ -88,26 +88,9 @@
             </div>
         </div>
 
-        <div class="controls">
-            <button onclick="openRemoteBrowser('{{ acc.username }}')" class="btn-connect">
-                🖥️ Open Remote Browser
-            </button>
-            
-            {% if not acc.connected %}
-                <button onclick="connectAccount('{{ acc.username }}')" class="btn-connect">
-                    Connect TikTok
-                </button>
-            {% else %}
-                <button onclick="startAutomation('{{ acc.username }}')" class="btn-start">▶ Start</button>
-                <button onclick="stopAutomation('{{ acc.username }}')" class="btn-stop">■ Stop</button>
-            {% endif %}
-            
-            <button onclick="deleteAccount('{{ acc.username }}')" class="btn-delete">Delete</button>
-        </div>
-
-        <!-- Login Credentials Form -->
+        <!-- Login Credentials Form - always visible when not connected -->
         {% if not acc.connected %}
-        <div style="background:#222; border-radius:12px; padding:16px; margin-top:16px; border:1px solid #333;">
+        <div style="background:#222; border-radius:12px; padding:16px; margin-bottom:16px; border:1px solid #333;">
             <h4 style="margin:0 0 12px 0; color:#ff0050;">Login Credentials</h4>
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
                 <input type="text" id="email-{{ acc.username }}" placeholder="Email or username" 
@@ -123,6 +106,19 @@
             </div>
         </div>
         {% endif %}
+
+        <div class="controls">
+            <button onclick="openRemoteBrowser('{{ acc.username }}')" class="btn-connect">
+                🖥️ Open Remote Browser
+            </button>
+            
+            {% if acc.connected %}
+                <button onclick="startAutomation('{{ acc.username }}')" class="btn-start">▶ Start</button>
+                <button onclick="stopAutomation('{{ acc.username }}')" class="btn-stop">■ Stop</button>
+            {% endif %}
+            
+            <button onclick="deleteAccount('{{ acc.username }}')" class="btn-delete">Delete</button>
+        </div>
     </div>
     {% endfor %}
 
@@ -137,14 +133,6 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({username, category})
             }).then(() => location.reload());
-        }
-        
-        function connectAccount(username) {
-            fetch('/connect/' + encodeURIComponent(username))
-                .then(() => {
-                    alert("Browser started. Please login to TikTok.");
-                    setTimeout(() => location.reload(), 4000);
-                });
         }
         
         function startAutomation(username) {
@@ -192,9 +180,9 @@
                 return r.json();
             }).then(data => {
                 if (data.success) {
-                    alert("Credentials submitted! Check if a verification code is needed.");
+                    alert("Logging in... Watch the live view. Enter 6-digit code if asked.");
                 } else {
-                    alert("Failed: " + (data.error || "Browser session not found. Click Connect TikTok first."));
+                    alert("Failed: " + (data.error || "Unknown error"));
                 }
             }).catch(err => {
                 alert("Request error: " + err.message);
@@ -236,19 +224,16 @@
             document.getElementById('remoteModal').style.display = 'block';
             document.getElementById('remoteTitle').innerText = 'Remote Browser - ' + username;
             
-            // Reset click mode
             clickMode = false;
             document.getElementById('clickModeBtn').style.background = '#ff0050';
             document.getElementById('clickModeBtn').innerText = '🖱️ Click Mode';
             
-            // Load live view
             const img = document.getElementById('remoteView');
-            img.src = '/live/' + username + '?t=' + Date.now();
+            img.src = '/live/' + encodeURIComponent(username) + '?t=' + Date.now();
             
-            // Auto refresh
             window.remoteInterval = setInterval(() => {
                 if (currentRemoteUser) {
-                    img.src = '/live/' + currentRemoteUser + '?t=' + Date.now();
+                    img.src = '/live/' + encodeURIComponent(currentRemoteUser) + '?t=' + Date.now();
                 }
             }, 500);
         }
@@ -279,25 +264,20 @@
             const img = event.currentTarget;
             const rect = img.getBoundingClientRect();
             
-            // Get the real size of the image (not the container)
             const naturalWidth = img.naturalWidth || 1280;
             const naturalHeight = img.naturalHeight || 720;
             
-            // Calculate click position based on actual image size
             const x = Math.round((event.clientX - rect.left) * (naturalWidth / rect.width));
             const y = Math.round((event.clientY - rect.top) * (naturalHeight / rect.height));
             
-            // Create visual click cursor
             createClickCursor(event.clientX, event.clientY, rect);
             
-            // Send click to browser
-            fetch('/api/click/' + currentRemoteUser, {
+            fetch('/api/click/' + encodeURIComponent(currentRemoteUser), {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({x: x, y: y})
             });
             
-            // Auto turn off click mode after click
             if (clickMode) {
                 clickMode = false;
                 const btn = document.getElementById('clickModeBtn');
@@ -322,7 +302,6 @@
             
             document.body.appendChild(cursor);
             
-            // Animate and remove
             setTimeout(() => {
                 cursor.style.transform = 'translate(-50%, -50%) scale(2)';
                 cursor.style.opacity = '0';
@@ -336,13 +315,9 @@
             const modal = document.getElementById('remoteModal');
             if (!modal) return;
             
-            const content = modal.querySelector('div');
-            
             if (!document.fullscreenElement) {
-                // Try to fullscreen the whole modal
                 if (modal.requestFullscreen) {
                     modal.requestFullscreen().catch(() => {
-                        // Fallback: make it bigger manually
                         modal.style.position = 'fixed';
                         modal.style.top = '0';
                         modal.style.left = '0';
@@ -363,7 +338,7 @@
             const text = document.getElementById('remoteText').value;
             if (!text) return;
             
-            fetch('/api/type/' + currentRemoteUser, {
+            fetch('/api/type/' + encodeURIComponent(currentRemoteUser), {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({text: text})
@@ -373,7 +348,7 @@
         
         function sendKey(key) {
             if (!currentRemoteUser) return;
-            fetch('/api/key/' + currentRemoteUser, {
+            fetch('/api/key/' + encodeURIComponent(currentRemoteUser), {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({key: key})
@@ -389,20 +364,17 @@
                 <button onclick="closeRemoteBrowser()" style="background:#ff5252; color:white; padding:8px 16px; border-radius:8px; border:none;">Close</button>
             </div>
             
-            <!-- Remote Browser View -->
             <div style="position: relative; margin-bottom: 12px;">
                 <img id="remoteView" 
                      style="width:100%; max-width:100%; border:3px solid #333; border-radius:12px; cursor:crosshair; display:block;"
                      onclick="handleRemoteClick(event)">
                 
-                <!-- Fullscreen Button -->
                 <button onclick="toggleFullscreen()" 
                         style="position:absolute; top:12px; right:12px; background:#ff0050; color:white; padding:10px 16px; border-radius:8px; border:none; font-size:14px; font-weight:600; z-index:10; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
                     ⛶ Fullscreen
                 </button>
             </div>
             
-            <!-- Control Bar -->
             <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
                 <button id="clickModeBtn" onclick="toggleClickMode()" 
                         style="background:#ff0050; color:white; padding:14px 22px; border-radius:10px; border:none; font-weight:700; font-size:15px; min-width:140px;">

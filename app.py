@@ -135,6 +135,14 @@ def api_login(username):
         if not email or not password:
             return jsonify({"success": False, "error": "Missing credentials"})
         
+        # If no browser session exists, start one and navigate to login page
+        if username not in browser_sessions:
+            print(f"No session for {username}, starting browser...")
+            from bot import start_browser_for_login
+            started = start_browser_for_login(username)
+            if not started:
+                return jsonify({"success": False, "error": "Failed to start browser"})
+        
         success = login_with_credentials(username, email, password)
         return jsonify({"success": success})
     except Exception as e:

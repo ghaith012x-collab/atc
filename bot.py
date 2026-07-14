@@ -39,6 +39,63 @@ def take_screenshot(username):
     except:
         screenshots[username] = create_placeholder(username, "Screenshot error")
 
+def start_browser_for_login(username):
+    """Start browser and navigate to email login page. Returns True when ready."""
+    try:
+        session_dir = f"sessions/{username}"
+        os.makedirs(session_dir, exist_ok=True)
+        
+        pw = sync_playwright().start()
+        
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir=session_dir,
+            headless=True,
+            viewport={"width": 1280, "height": 720},
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+        )
+        
+        page = context.pages[0] if context.pages else context.new_page()
+        
+        browser_sessions[username] = {
+            "pw": pw,
+            "context": context,
+            "page": page
+        }
+        
+        update_account(username, status="Connecting", current_task="Loading login page...")
+        page.goto("https://www.tiktok.com/login/phone-or-email/email", timeout=30000)
+        page.wait_for_load_state("networkidle", timeout=15000)
+        time.sleep(2)
+        take_screenshot(username)
+        
+        # Start screenshot loop
+        def screenshot_loop():
+            while username in browser_sessions:
+                take_screenshot(username)
+                time.sleep(0.5)
+        threading.Thread(target=screenshot_loop, daemon=True).start()
+        
+        # Verify login form is visible
+        try:
+            page.locator('input[name="username"], input[placeholder*="Email or username"]').first.wait_for(state="visible", timeout=10000)
+            update_account(username, current_task="Login form ready")
+            print(f"✓ Browser ready for {username}")
+            return True
+        except (TimeoutError, Exception) as e:
+            print(f"Login page didn't load for {username}: {e}")
+            update_account(username, current_task="Login page failed to load")
+            return True  # Still return True - the session exists, credentials might still work
+    except Exception as e:
+        print(f"start_browser_for_login failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def connect_account(username):
     """Start persistent browser and wait for login"""
     update_account(username, status="Connecting", current_task="Starting browser...")
