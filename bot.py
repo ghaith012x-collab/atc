@@ -1067,6 +1067,9 @@ def upload_video_to_tiktok(username, file_path, caption):
         take_screenshot(username)
         print(f"[{username}] ✓ video posted")
 
+        # Auto turn on content checks (appears right after posting)
+        handle_content_check_dialog(page, username)
+
         # Leave the page in a good state for the live cam
         try:
             page.goto("https://www.tiktok.com", timeout=30000)
