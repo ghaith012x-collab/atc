@@ -67,8 +67,66 @@ def connect_account(username):
             ]
         )
         
+        # Sanitize cookies for Playwright - it requires name, value, and domain/url
+        sanitized_cookies = []
+        for cookie in cookies:
+            if not isinstance(cookie, dict):
+                continue
+            if "name" not in cookie or "value" not in cookie:
+                continue
+            
+            clean = {
+                "name": str(cookie["name"]),
+                "value": str(cookie["value"]),
+            }
+            
+            # Must have domain or url
+            if "domain" in cookie:
+                clean["domain"] = str(cookie["domain"])
+            elif "url" in cookie:
+                clean["url"] = str(cookie["url"])
+            else:
+                clean["domain"] = ".tiktok.com"
+            
+            # Optional fields
+            if "path" in cookie:
+                clean["path"] = str(cookie["path"])
+            else:
+                clean["path"] = "/"
+            
+            if "secure" in cookie:
+                clean["secure"] = bool(cookie["secure"])
+            
+            if "httpOnly" in cookie:
+                clean["httpOnly"] = bool(cookie["httpOnly"])
+            
+            if "sameSite" in cookie:
+                ss = str(cookie["sameSite"])
+                if ss in ["Strict", "Lax", "None"]:
+                    clean["sameSite"] = ss
+            
+            # Handle expiry - Playwright uses 'expires' as a Unix timestamp float
+            if "expirationDate" in cookie:
+                try:
+                    clean["expires"] = float(cookie["expirationDate"])
+                except (ValueError, TypeError):
+                    pass
+            elif "expires" in cookie:
+                try:
+                    exp = float(cookie["expires"])
+                    if exp > 0:
+                        clean["expires"] = exp
+                except (ValueError, TypeError):
+                    pass
+            
+            sanitized_cookies.append(clean)
+        
+        if not sanitized_cookies:
+            update_account(username, status="Invalid Session", current_task="No valid cookies found")
+            return False
+        
         # Load cookies into context
-        context.add_cookies(cookies)
+        context.add_cookies(sanitized_cookies)
         
         page = context.pages[0] if context.pages else context.new_page()
         
