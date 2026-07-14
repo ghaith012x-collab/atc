@@ -197,14 +197,28 @@ def delete_account_session(username):
 # ==================== REMOTE CONTROL ====================
 def click_browser(username, x, y):
     """Click at specific coordinates in the browser"""
-    if username in browser_sessions:
-        try:
-            page = browser_sessions[username]["page"]
-            page.mouse.click(x, y)
-            return True
-        except:
-            return False
-    return False
+    print(f"CLICK REQUEST: {username} at ({x}, {y})")
+    
+    if username not in browser_sessions:
+        print("→ No browser session found!")
+        return False
+    
+    try:
+        page = browser_sessions[username]["page"]
+        print(f"→ Current page: {page.url}")
+        
+        # Better click method
+        page.mouse.move(x, y)
+        page.wait_for_timeout(200)
+        page.mouse.down()
+        page.wait_for_timeout(100)
+        page.mouse.up()
+        
+        print("→ Click executed successfully")
+        return True
+    except Exception as e:
+        print(f"→ Click failed: {e}")
+        return False
 
 def type_in_browser(username, text):
     """Type text in the browser"""
