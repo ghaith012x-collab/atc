@@ -104,6 +104,25 @@
             
             <button onclick="deleteAccount('{{ acc.username }}')" class="btn-delete">Delete</button>
         </div>
+
+        <!-- Login Credentials Form -->
+        {% if not acc.connected %}
+        <div style="background:#222; border-radius:12px; padding:16px; margin-top:16px; border:1px solid #333;">
+            <h4 style="margin:0 0 12px 0; color:#ff0050;">Login Credentials</h4>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+                <input type="text" id="email-{{ acc.username }}" placeholder="Email or username" 
+                       style="flex:1; min-width:180px; padding:12px; background:#1a1a1a; border:1px solid #444; color:white; border-radius:8px; font-size:14px;">
+                <input type="password" id="pass-{{ acc.username }}" placeholder="Password" 
+                       style="flex:1; min-width:180px; padding:12px; background:#1a1a1a; border:1px solid #444; color:white; border-radius:8px; font-size:14px;">
+                <button onclick="submitLogin('{{ acc.username }}')" style="background:#00c853; color:white; padding:12px 20px; border-radius:8px; border:none; font-weight:600;">Login</button>
+            </div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                <input type="text" id="code-{{ acc.username }}" placeholder="6-digit code (if asked)" maxlength="6"
+                       style="width:200px; padding:12px; background:#1a1a1a; border:1px solid #444; color:white; border-radius:8px; font-size:14px; letter-spacing:4px; text-align:center;">
+                <button onclick="submitCode('{{ acc.username }}')" style="background:#ff0050; color:white; padding:12px 20px; border-radius:8px; border:none; font-weight:600;">Submit Code</button>
+            </div>
+        </div>
+        {% endif %}
     </div>
     {% endfor %}
 
@@ -157,6 +176,42 @@
                         if (el) el.textContent = acc.current_task || 'Idle';
                     });
                 });
+        }
+        
+        function submitLogin(username) {
+            const email = document.getElementById('email-' + username).value.trim();
+            const password = document.getElementById('pass-' + username).value;
+            if (!email || !password) return alert("Enter email/username and password");
+            
+            fetch('/api/login/' + username, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({email: email, password: password})
+            }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    alert("Credentials submitted! Check if a verification code is needed.");
+                } else {
+                    alert("Failed to submit credentials.");
+                }
+            });
+        }
+        
+        function submitCode(username) {
+            const code = document.getElementById('code-' + username).value.trim();
+            if (!code || code.length !== 6) return alert("Enter a 6-digit code");
+            
+            fetch('/api/verify-code/' + username, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({code: code})
+            }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    alert("Code submitted!");
+                    setTimeout(() => location.reload(), 3000);
+                } else {
+                    alert("Failed to submit code.");
+                }
+            });
         }
         
         setInterval(refreshCams, 1000);
