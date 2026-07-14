@@ -89,17 +89,19 @@
         </div>
 
         <div class="controls">
+            <button onclick="openRemoteBrowser('{{ acc.username }}')" class="btn-connect">
+                🖥️ Open Remote Browser
+            </button>
+            
             {% if not acc.connected %}
                 <button onclick="connectAccount('{{ acc.username }}')" class="btn-connect">
                     Connect TikTok
                 </button>
             {% else %}
-                <button onclick="openRemoteBrowser('{{ acc.username }}')" class="btn-connect">
-                    🖥️ Open Remote Browser
-                </button>
                 <button onclick="startAutomation('{{ acc.username }}')" class="btn-start">▶ Start</button>
                 <button onclick="stopAutomation('{{ acc.username }}')" class="btn-stop">■ Stop</button>
             {% endif %}
+            
             <button onclick="deleteAccount('{{ acc.username }}')" class="btn-delete">Delete</button>
         </div>
     </div>
