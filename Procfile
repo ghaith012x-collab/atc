@@ -1,1 +1,1 @@
-web: xvfb-run -a gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+web: playwright install chromium && xvfb-run -a gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
