@@ -7,6 +7,7 @@ import random
 import threading
 import urllib.parse
 from datetime import datetime, timedelta
+from typing import Optional, Tuple, Any
 
 import requests
 from playwright.sync_api import sync_playwright, TimeoutError
