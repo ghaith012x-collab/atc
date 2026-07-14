@@ -49,7 +49,7 @@ def add_new_account():
     return jsonify({"success": False, "error": "Account already exists"})
 
 
-@app.route("/connect/<username>")
+@app.route("/connect/<path:username>")
 def connect(username):
     def connect_thread():
         connect_account(username)
@@ -57,7 +57,7 @@ def connect(username):
     return jsonify({"success": True, "message": "Connecting..."})
 
 
-@app.route("/api/start/<username>", methods=["POST"])
+@app.route("/api/start/<path:username>", methods=["POST"])
 def start(username):
     account = get_account(username)
     if account and account["connected"]:
@@ -67,21 +67,21 @@ def start(username):
     return jsonify({"success": False, "error": "Account not connected"})
 
 
-@app.route("/api/stop/<username>", methods=["POST"])
+@app.route("/api/stop/<path:username>", methods=["POST"])
 def stop(username):
     update_account(username, enabled=0)
     stop_automation(username)
     return jsonify({"success": True})
 
 
-@app.route("/api/delete/<username>", methods=["POST"])
+@app.route("/api/delete/<path:username>", methods=["POST"])
 def delete(username):
     delete_account(username)
     delete_account_session(username)
     return jsonify({"success": True})
 
 
-@app.route("/live/<username>")
+@app.route("/live/<path:username>")
 def live(username):
     if username not in screenshots:
         from PIL import Image
@@ -105,7 +105,7 @@ def api_click(username):
     return jsonify({"success": success})
 
 
-@app.route("/api/type/<username>", methods=["POST"])
+@app.route("/api/type/<path:username>", methods=["POST"])
 def api_type(username):
     data = request.json
     text = data.get("text", "")
@@ -113,7 +113,7 @@ def api_type(username):
     return jsonify({"success": success})
 
 
-@app.route("/api/key/<username>", methods=["POST"])
+@app.route("/api/key/<path:username>", methods=["POST"])
 def api_key(username):
     data = request.json
     key = data.get("key", "Enter")

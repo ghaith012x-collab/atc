@@ -140,7 +140,7 @@
         }
         
         function connectAccount(username) {
-            fetch('/connect/' + username)
+            fetch('/connect/' + encodeURIComponent(username))
                 .then(() => {
                     alert("Browser started. Please login to TikTok.");
                     setTimeout(() => location.reload(), 4000);
@@ -148,22 +148,22 @@
         }
         
         function startAutomation(username) {
-            fetch('/api/start/' + username, {method: 'POST'}).then(() => location.reload());
+            fetch('/api/start/' + encodeURIComponent(username), {method: 'POST'}).then(() => location.reload());
         }
         
         function stopAutomation(username) {
-            fetch('/api/stop/' + username, {method: 'POST'}).then(() => location.reload());
+            fetch('/api/stop/' + encodeURIComponent(username), {method: 'POST'}).then(() => location.reload());
         }
         
         function deleteAccount(username) {
             if (!confirm("Delete this account?")) return;
-            fetch('/api/delete/' + username, {method: 'POST'}).then(() => location.reload());
+            fetch('/api/delete/' + encodeURIComponent(username), {method: 'POST'}).then(() => location.reload());
         }
         
         function refreshCams() {
             document.querySelectorAll('[id^="cam-"]').forEach(img => {
                 const username = img.id.replace('cam-', '');
-                img.src = `/live/${username}?t=` + Date.now();
+                img.src = `/live/${encodeURIComponent(username)}?t=` + Date.now();
             });
         }
         
