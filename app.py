@@ -1,12 +1,11 @@
 import os
+import json
 import threading
 from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
     connect_account, start_automation, stop_automation, 
-    delete_account_session, screenshots, browser_sessions,
-    click_browser, type_in_browser, press_key,
-    login_with_credentials, submit_verification_code
+    delete_account_session, screenshots, browser_sessions
 )
 
 app = Flask(__name__)
@@ -32,7 +31,12 @@ def dashboard():
 
 @app.route("/api/accounts")
 def api_accounts():
-    return jsonify(get_all_accounts())
+    # Never send session_data to frontend
+    accounts = get_all_accounts()
+    for acc in accounts:
+        if "session_data" in acc:
+            del acc["session_data"]
+    return jsonify(accounts)
 
 
 @app.route("/api/add", methods=["POST"])
@@ -49,12 +53,38 @@ def add_new_account():
     return jsonify({"success": False, "error": "Account already exists"})
 
 
-@app.route("/connect/<path:username>")
-def connect(username):
-    def connect_thread():
-        connect_account(username)
-    threading.Thread(target=connect_thread, daemon=True).start()
-    return jsonify({"success": True, "message": "Connecting..."})
+@app.route("/api/session/<path:username>", methods=["POST"])
+def save_session(username):
+    data = request.json
+    session_json = data.get("session", "").strip()
+    
+    if not session_json:
+        return jsonify({"success": False, "error": "No session data provided"})
+        
+    try:
+        cookies = json.loads(session_json)
+        if not isinstance(cookies, list):
+            return jsonify({"success": False, "error": "Session must be a JSON array of cookies"})
+            
+        # Basic validation that it looks like Playwright/EditThisCookie format
+        has_name = any("name" in c for c in cookies)
+        has_value = any("value" in c for c in cookies)
+        
+        if not (has_name and has_value):
+            return jsonify({"success": False, "error": "Invalid cookie format. Expected array of {name, value, domain} objects."})
+            
+        # Save to DB
+        update_account(username, session_data=session_json, status="Session saved", current_task="Ready to connect")
+        
+        # Connect to verify
+        def connect_thread():
+            connect_account(username)
+        threading.Thread(target=connect_thread, daemon=True).start()
+        
+        return jsonify({"success": True, "message": "Session saved and verifying..."})
+        
+    except json.JSONDecodeError:
+        return jsonify({"success": False, "error": "Invalid JSON format"})
 
 
 @app.route("/api/start/<path:username>", methods=["POST"])
@@ -81,6 +111,12 @@ def delete(username):
     return jsonify({"success": True})
 
 
+@app.route("/api/delete_session/<path:username>", methods=["POST"])
+def api_delete_session(username):
+    delete_account_session(username)
+    return jsonify({"success": True})
+
+
 @app.route("/live/<path:username>")
 def live(username):
     if username not in screenshots:
@@ -93,73 +129,6 @@ def live(username):
     screenshots[username].save(buffer, "JPEG", quality=80)
     buffer.seek(0)
     return Response(buffer.getvalue(), mimetype="image/jpeg")
-
-
-# ==================== REMOTE CONTROL ROUTES ====================
-@app.route("/api/click/<path:username>", methods=["POST"])
-def api_click(username):
-    data = request.json
-    x = data.get("x", 0)
-    y = data.get("y", 0)
-    success = click_browser(username, x, y)
-    return jsonify({"success": success})
-
-
-@app.route("/api/type/<path:username>", methods=["POST"])
-def api_type(username):
-    data = request.json
-    text = data.get("text", "")
-    success = type_in_browser(username, text)
-    return jsonify({"success": success})
-
-
-@app.route("/api/key/<path:username>", methods=["POST"])
-def api_key(username):
-    data = request.json
-    key = data.get("key", "Enter")
-    success = press_key(username, key)
-    return jsonify({"success": success})
-
-
-# ==================== FORM LOGIN ROUTES ====================
-@app.route("/api/login/<path:username>", methods=["POST"])
-def api_login(username):
-    try:
-        data = request.json
-        email = data.get("email", "")
-        password = data.get("password", "")
-        
-        print(f"API LOGIN: username='{username}', email='{email}', has_password={bool(password)}")
-        print(f"Active browser sessions: {list(browser_sessions.keys())}")
-        
-        if not email or not password:
-            return jsonify({"success": False, "error": "Missing credentials"})
-        
-        # If no browser session exists, start one and navigate to login page
-        if username not in browser_sessions:
-            print(f"No session for {username}, starting browser...")
-            from bot import start_browser_for_login
-            started = start_browser_for_login(username)
-            if not started:
-                return jsonify({"success": False, "error": "Failed to start browser"})
-        
-        success = login_with_credentials(username, email, password)
-        return jsonify({"success": success})
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 200
-
-
-@app.route("/api/verify-code/<path:username>", methods=["POST"])
-def api_verify_code(username):
-    data = request.json
-    code = data.get("code", "")
-    
-    print(f"API VERIFY: username='{username}', code='{code}'")
-    
-    success = submit_verification_code(username, code)
-    return jsonify({"success": success})
 
 
 if __name__ == "__main__":

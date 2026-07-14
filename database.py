@@ -15,7 +15,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE,
             category TEXT DEFAULT 'dance',
-            session_path TEXT,
+            session_data TEXT,
             connected INTEGER DEFAULT 0,
             enabled INTEGER DEFAULT 0,
             status TEXT DEFAULT 'Disconnected',
@@ -51,8 +51,8 @@ def add_account(username, category="dance"):
     conn = get_db()
     try:
         conn.execute(
-            "INSERT INTO accounts (username, category, session_path) VALUES (?, ?, ?)",
-            (username, category, f"sessions/{username}")
+            "INSERT INTO accounts (username, category) VALUES (?, ?)",
+            (username, category)
         )
         conn.commit()
         return True

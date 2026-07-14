@@ -4,43 +4,80 @@
     <title>TikTok Auto Poster</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: system-ui; background:#0f0f0f; color:#fff; margin:0; padding:20px; }
-        .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:30px; }
-        h1 { background:linear-gradient(90deg,#ff0050,#00f2ea); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
-        
-        .add-form { background:#1a1a1a; padding:20px; border-radius:16px; margin-bottom:30px; border:1px solid #333; }
-        .account-card { background:#1a1a1a; border-radius:16px; padding:24px; margin-bottom:24px; border:1px solid #333; }
-        
-        .live-cam { background:#111; border:3px solid #333; border-radius:14px; overflow:hidden; margin-bottom:20px; position:relative; }
-        .live-cam img { width:100%; height:220px; object-fit:cover; display:block; }
-        .live-label { position:absolute; top:12px; left:12px; background:#ff0050; color:white; font-size:10px; padding:2px 10px; border-radius:9999px; font-weight:700; }
-        
-        .info-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:20px; }
-        .info-item { background:#222; padding:12px; border-radius:10px; }
-        .info-label { font-size:11px; color:#888; }
-        
-        .status { padding:4px 14px; border-radius:9999px; font-size:13px; font-weight:600; }
-        .connected { background:#00c85320; color:#00c853; border:1px solid #00c853; }
-        .disconnected { background:#ff525220; color:#ff5252; border:1px solid #ff5252; }
-        
-        button { padding:11px 20px; border-radius:8px; font-weight:600; border:none; cursor:pointer; font-size:14px; }
-        .btn-connect { background:#ff0050; color:white; flex:1; }
-        .btn-start { background:#00c853; color:white; }
-        .btn-stop { background:#ff5252; color:white; }
-        .btn-delete { background:#444; color:#ccc; }
-        .controls { display:flex; gap:10px; flex-wrap:wrap; margin-top:20px; }
+        *, *::before, *::after { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f0f; color: #fff; margin: 0; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        h1 { background: linear-gradient(90deg, #ff0050, #00f2ea); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }
+
+        .add-form { background: #1a1a1a; padding: 20px; border-radius: 16px; margin-bottom: 30px; border: 1px solid #333; }
+        .add-form h3 { margin: 0 0 15px 0; }
+        .add-form .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+        .add-form input, .add-form select { background: #222; border: 1px solid #444; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
+        .add-form input:focus, .add-form select:focus { outline: none; border-color: #ff0050; }
+
+        .account-card { background: #1a1a1a; border-radius: 16px; padding: 24px; margin-bottom: 24px; border: 1px solid #333; }
+
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+        .card-username { font-size: 22px; font-weight: 600; }
+
+        .live-cam { background: #111; border: 3px solid #333; border-radius: 14px; overflow: hidden; margin-bottom: 20px; position: relative; }
+        .live-cam img { width: 100%; height: 220px; object-fit: cover; display: block; }
+        .live-label { position: absolute; top: 12px; left: 12px; background: #ff0050; color: white; font-size: 10px; padding: 2px 10px; border-radius: 9999px; font-weight: 700; }
+
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .info-item { background: #222; padding: 12px; border-radius: 10px; }
+        .info-label { font-size: 11px; color: #888; margin-bottom: 4px; }
+        .info-value { font-weight: 600; }
+
+        .status-badge { padding: 4px 14px; border-radius: 9999px; font-size: 13px; font-weight: 600; }
+        .status-connected { background: #00c85320; color: #00c853; border: 1px solid #00c853; }
+        .status-disconnected { background: #ff525220; color: #ff5252; border: 1px solid #ff5252; }
+        .status-pending { background: #ffa72620; color: #ffa726; border: 1px solid #ffa726; }
+
+        button { padding: 11px 20px; border-radius: 8px; font-weight: 600; border: none; cursor: pointer; font-size: 14px; transition: opacity .15s; }
+        button:hover { opacity: .85; }
+        .btn-primary { background: #ff0050; color: white; }
+        .btn-start { background: #00c853; color: white; }
+        .btn-stop { background: #ff5252; color: white; }
+        .btn-delete { background: #444; color: #ccc; }
+        .btn-delete-session { background: #2a1a1a; color: #ff5252; border: 1px solid #ff5252; }
+        .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
+
+        /* Session paste panel */
+        .session-panel { background: #111; border: 1px solid #333; border-radius: 12px; padding: 18px; margin-top: 16px; }
+        .session-panel h4 { margin: 0 0 10px 0; color: #ffa726; font-size: 14px; }
+        .session-panel textarea {
+            width: 100%; height: 120px; background: #1a1a1a; border: 1px solid #444;
+            color: #ccc; border-radius: 8px; padding: 10px; font-size: 12px;
+            font-family: monospace; resize: vertical;
+        }
+        .session-panel textarea:focus { outline: none; border-color: #ff0050; }
+        .session-panel .hint { font-size: 11px; color: #666; margin-top: 6px; }
+        .session-panel .btn-row { display: flex; gap: 10px; margin-top: 10px; }
+        .session-verified { background: #00c85310; border: 1px solid #00c85350; border-radius: 10px; padding: 10px 14px; font-size: 13px; color: #00c853; margin-top: 10px; }
+
+        .toast {
+            position: fixed; bottom: 24px; right: 24px; background: #222; color: #fff;
+            padding: 14px 22px; border-radius: 10px; font-size: 14px; z-index: 9999;
+            border-left: 4px solid #ff0050; opacity: 0; transition: opacity .3s;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+        .toast.success { border-left-color: #00c853; }
+        .toast.error { border-left-color: #ff5252; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>TikTok Auto Poster</h1>
-        <div>{{ accounts|length }} Accounts</div>
+        <div style="color:#888;">{{ accounts|length }} Account{{ 's' if accounts|length != 1 else '' }}</div>
     </div>
 
+    <!-- Add Account Form -->
     <div class="add-form">
-        <h3 style="margin:0 0 15px 0;">Add New Account</h3>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <input type="text" id="new-username" placeholder="@username">
+        <h3>Add New Account</h3>
+        <div class="row">
+            <input type="text" id="new-username" placeholder="@username" style="flex:1;min-width:160px;">
             <select id="new-category">
                 <option value="dance">Dance</option>
                 <option value="comedy">Comedy</option>
@@ -49,408 +86,233 @@
                 <option value="story">Story Animation</option>
                 <option value="memes">Memes</option>
             </select>
-            <button onclick="addAccount()" style="background:#ff0050;color:white;">Add Account</button>
+            <button class="btn-primary" onclick="addAccount()">Add Account</button>
         </div>
     </div>
 
+    <!-- Account Cards -->
     {% for acc in accounts %}
-    <div class="account-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div style="font-size:22px;font-weight:600;">{{ acc.username }}</div>
+    <div class="account-card" id="card-{{ acc.username }}">
+        <div class="card-header">
+            <div class="card-username">{{ acc.username }}</div>
             {% if acc.connected %}
-                <span class="status connected">🟢 Connected</span>
+                <span class="status-badge status-connected">Connected</span>
+            {% elif acc.status in ['Session saved', 'Connecting', 'Verifying session...'] %}
+                <span class="status-badge status-pending">{{ acc.status }}</span>
             {% else %}
-                <span class="status disconnected">🔴 Not Connected</span>
+                <span class="status-badge status-disconnected">{{ acc.status or 'Disconnected' }}</span>
             {% endif %}
         </div>
 
+        <!-- Live Screenshot -->
         <div class="live-cam">
             <div class="live-label">LIVE</div>
-            <img id="cam-{{ acc.username }}" src="/live/{{ acc.username }}?t={{ range(10000)|random }}">
+            <img id="cam-{{ acc.username }}" src="/live/{{ acc.username }}?t={{ range(10000)|random }}" alt="Live view">
         </div>
 
+        <!-- Info Grid -->
         <div class="info-grid">
             <div class="info-item">
                 <div class="info-label">CATEGORY</div>
-                <div style="font-weight:600;">{{ acc.category }}</div>
+                <div class="info-value">{{ acc.category }}</div>
             </div>
             <div class="info-item">
                 <div class="info-label">STATUS</div>
-                <div style="font-weight:600;">{{ acc.status }}</div>
+                <div class="info-value" id="status-{{ acc.username }}">{{ acc.status }}</div>
             </div>
             <div class="info-item">
                 <div class="info-label">CURRENT TASK</div>
-                <div style="font-weight:600;" id="task-{{ acc.username }}">{{ acc.current_task }}</div>
+                <div class="info-value" id="task-{{ acc.username }}">{{ acc.current_task }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">LAST POST</div>
+                <div class="info-value">{{ acc.last_post or '—' }}</div>
             </div>
             <div class="info-item">
                 <div class="info-label">NEXT POST</div>
-                <div style="font-weight:600;">{{ acc.next_post or '—' }}</div>
+                <div class="info-value" id="next-{{ acc.username }}">{{ acc.next_post or '—' }}</div>
             </div>
         </div>
 
+        <!-- Session Panel (disconnected) -->
+        {% if not acc.connected %}
+        <div class="session-panel" id="session-panel-{{ acc.username }}">
+            <h4>Paste TikTok Session</h4>
+            <textarea
+                id="session-input-{{ acc.username }}"
+                placeholder='[{"name":"sessionid","value":"...","domain":".tiktok.com"},...]'
+            ></textarea>
+            <div class="hint">Export cookies from your browser using an extension like "EditThisCookie" or "Cookie-Editor" on tiktok.com, then paste the JSON here.</div>
+            <div class="btn-row">
+                <button class="btn-primary" onclick="saveSession('{{ acc.username }}')">Save Session</button>
+            </div>
+        </div>
+        {% else %}
+        <!-- Connected panel -->
+        <div class="session-verified">
+            Session verified &mdash; account is connected and ready.
+        </div>
+        {% endif %}
+
+        <!-- Controls -->
         <div class="controls">
-            <button onclick="openRemoteBrowser('{{ acc.username }}')" class="btn-connect">
-                🖥️ Open Remote Browser
-            </button>
-            
-            {% if not acc.connected %}
-                <button onclick="connectAccount('{{ acc.username }}')" class="btn-connect">
-                    Connect TikTok
-                </button>
-            {% else %}
-                <button onclick="startAutomation('{{ acc.username }}')" class="btn-start">▶ Start</button>
-                <button onclick="stopAutomation('{{ acc.username }}')" class="btn-stop">■ Stop</button>
+            {% if acc.connected %}
+                <button class="btn-start" onclick="startAutomation('{{ acc.username }}')">&#9654; Start Automation</button>
+                <button class="btn-stop" onclick="stopAutomation('{{ acc.username }}')">&#9632; Stop</button>
+                <button class="btn-delete-session" onclick="deleteSession('{{ acc.username }}')">Delete Session</button>
             {% endif %}
-            
-            <button onclick="deleteAccount('{{ acc.username }}')" class="btn-delete">Delete</button>
+            <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
         </div>
     </div>
     {% endfor %}
 
+    {% if not accounts %}
+    <div style="text-align:center;padding:60px 20px;color:#555;">
+        <div style="font-size:48px;margin-bottom:16px;">&#128247;</div>
+        <div style="font-size:18px;">No accounts yet. Add one above to get started.</div>
+    </div>
+    {% endif %}
+
+    <!-- Toast notification -->
+    <div class="toast" id="toast"></div>
+
     <script>
+        // ==================== TOAST ====================
+        function showToast(msg, type) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast show ' + (type || '');
+            setTimeout(() => { t.className = 'toast'; }, 3000);
+        }
+
+        // ==================== ADD ACCOUNT ====================
         function addAccount() {
             const username = document.getElementById('new-username').value.trim();
             const category = document.getElementById('new-category').value;
-            if (!username) return alert("Enter username");
-            
+            if (!username) { showToast('Enter a username', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({username, category})
-            }).then(() => location.reload());
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { location.reload(); }
+                else { showToast(d.error || 'Failed to add account', 'error'); }
+            });
         }
-        
-        function connectAccount(username) {
-            fetch('/connect/' + username)
-                .then(() => {
-                    alert("Browser started. Please login to TikTok.");
-                    setTimeout(() => location.reload(), 4000);
+
+        // ==================== SAVE SESSION ====================
+        function saveSession(username) {
+            const raw = document.getElementById('session-input-' + username).value.trim();
+            if (!raw) { showToast('Paste your session cookies first', 'error'); return; }
+
+            // Client-side JSON validation
+            let parsed;
+            try { parsed = JSON.parse(raw); } catch(e) {
+                showToast('Invalid JSON — check your cookie format', 'error');
+                return;
+            }
+            if (!Array.isArray(parsed) || parsed.length === 0) {
+                showToast('Expected a JSON array of cookies', 'error');
+                return;
+            }
+
+            showToast('Saving and verifying session...', '');
+            fetch('/api/session/' + username, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({session: raw})
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) {
+                    showToast('Session saved — verifying login...', 'success');
+                    // Poll for connected status
+                    pollConnected(username, 0);
+                } else {
+                    showToast(d.error || 'Failed to save session', 'error');
+                }
+            });
+        }
+
+        function pollConnected(username, attempts) {
+            if (attempts > 20) {
+                showToast('Verification timed out — check session', 'error');
+                return;
+            }
+            setTimeout(() => {
+                fetch('/api/accounts')
+                .then(r => r.json())
+                .then(data => {
+                    const acc = data.find(a => a.username === username);
+                    if (!acc) return;
+                    if (acc.connected) {
+                        showToast('Connected! Session verified.', 'success');
+                        setTimeout(() => location.reload(), 1200);
+                    } else if (acc.status === 'Session expired') {
+                        showToast('Session expired — please paste a fresh session', 'error');
+                    } else {
+                        pollConnected(username, attempts + 1);
+                    }
                 });
+            }, 1500);
         }
-        
+
+        // ==================== AUTOMATION ====================
         function startAutomation(username) {
-            fetch('/api/start/' + username, {method: 'POST'}).then(() => location.reload());
+            fetch('/api/start/' + username, {method: 'POST'})
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { showToast('Automation started', 'success'); }
+                else { showToast(d.error || 'Failed to start', 'error'); }
+            });
         }
-        
+
         function stopAutomation(username) {
-            fetch('/api/stop/' + username, {method: 'POST'}).then(() => location.reload());
+            fetch('/api/stop/' + username, {method: 'POST'})
+            .then(r => r.json())
+            .then(() => { showToast('Automation stopped', ''); });
         }
-        
+
+        // ==================== DELETE ====================
+        function deleteSession(username) {
+            if (!confirm('Delete saved session for ' + username + '? The account will be disconnected.')) return;
+            fetch('/api/delete_session/' + username, {method: 'POST'})
+            .then(() => { showToast('Session deleted', ''); setTimeout(() => location.reload(), 800); });
+        }
+
         function deleteAccount(username) {
-            if (!confirm("Delete this account?")) return;
-            fetch('/api/delete/' + username, {method: 'POST'}).then(() => location.reload());
+            if (!confirm('Permanently delete account ' + username + '?')) return;
+            fetch('/api/delete/' + username, {method: 'POST'})
+            .then(() => location.reload());
         }
-        
+
+        // ==================== LIVE REFRESH ====================
         function refreshCams() {
             document.querySelectorAll('[id^="cam-"]').forEach(img => {
                 const username = img.id.replace('cam-', '');
-                img.src = `/live/${username}?t=` + Date.now();
+                img.src = '/live/' + username + '?t=' + Date.now();
             });
         }
-        
-        function updateTasks() {
-            fetch('/api/accounts')
-                .then(r => r.json())
-                .then(data => {
-                    data.forEach(acc => {
-                        const el = document.getElementById('task-' + acc.username);
-                        if (el) el.textContent = acc.current_task || 'Idle';
-                    });
-                });
-        }
-        
-        setInterval(refreshCams, 1000);
-        setInterval(updateTasks, 4000);
 
-        // ==================== REMOTE BROWSER ====================
-        let currentRemoteUser = null;
-        let clickMode = false;
-        
-        function openRemoteBrowser(username) {
-            currentRemoteUser = username;
-            document.getElementById('remoteModal').style.display = 'block';
-            document.getElementById('remoteTitle').innerText = 'Remote Browser - ' + username;
-            
-            // Reset click mode
-            clickMode = false;
-            document.getElementById('clickModeBtn').style.background = '#ff0050';
-            document.getElementById('clickModeBtn').innerText = '🖱️ Click Mode';
-            
-            // Load live view
-            const img = document.getElementById('remoteView');
-            img.src = '/live/' + username + '?t=' + Date.now();
-            
-            // Auto refresh
-            window.remoteInterval = setInterval(() => {
-                if (currentRemoteUser) {
-                    img.src = '/live/' + currentRemoteUser + '?t=' + Date.now();
-                }
-            }, 500);
-        }
-        
-        function closeRemoteBrowser() {
-            document.getElementById('remoteModal').style.display = 'none';
-            clearInterval(window.remoteInterval);
-            currentRemoteUser = null;
-            clickMode = false;
-        }
-        
-        function toggleClickMode() {
-            clickMode = !clickMode;
-            const btn = document.getElementById('clickModeBtn');
-            
-            if (clickMode) {
-                btn.style.background = '#00c853';
-                btn.innerText = '✅ Click Mode ON';
-            } else {
-                btn.style.background = '#ff0050';
-                btn.innerText = '🖱️ Click Mode';
-            }
-        }
-        
-        function handleRemoteClick(event) {
-            if (!currentRemoteUser) return;
-            
-            const img = event.currentTarget;
-            const rect = img.getBoundingClientRect();
-            
-            // Get the real size of the image (not the container)
-            const naturalWidth = img.naturalWidth || 1280;
-            const naturalHeight = img.naturalHeight || 720;
-            
-            // Calculate click position based on actual image size
-            const x = Math.round((event.clientX - rect.left) * (naturalWidth / rect.width));
-            const y = Math.round((event.clientY - rect.top) * (naturalHeight / rect.height));
-            
-            // Create visual click cursor
-            createClickCursor(event.clientX, event.clientY, rect);
-            
-            // Send click to browser
-            fetch('/api/click/' + currentRemoteUser, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({x: x, y: y})
-            });
-            
-            // Auto turn off click mode after click
-            if (clickMode) {
-                clickMode = false;
-                const btn = document.getElementById('clickModeBtn');
-                btn.style.background = '#ff0050';
-                btn.innerText = '🖱️ Click Mode';
-            }
-        }
-        
-        function createClickCursor(clientX, clientY, rect) {
-            const cursor = document.createElement('div');
-            cursor.style.position = 'fixed';
-            cursor.style.left = clientX + 'px';
-            cursor.style.top = clientY + 'px';
-            cursor.style.width = '20px';
-            cursor.style.height = '20px';
-            cursor.style.border = '3px solid #ff0050';
-            cursor.style.borderRadius = '50%';
-            cursor.style.pointerEvents = 'none';
-            cursor.style.zIndex = '9999';
-            cursor.style.transition = 'all 0.3s ease';
-            cursor.style.transform = 'translate(-50%, -50%)';
-            
-            document.body.appendChild(cursor);
-            
-            // Animate and remove
-            setTimeout(() => {
-                cursor.style.transform = 'translate(-50%, -50%) scale(2)';
-                cursor.style.opacity = '0';
-                setTimeout(() => {
-                    cursor.parentNode.removeChild(cursor);
-                }, 200);
-            }, 400);
-        }
-        
-        function toggleFullscreen() {
-            const modal = document.getElementById('remoteModal');
-            if (!modal) return;
-            
-            const content = modal.querySelector('div');
-            
-            if (!document.fullscreenElement) {
-                // Try to fullscreen the whole modal
-                if (modal.requestFullscreen) {
-                    modal.requestFullscreen().catch(() => {
-                        // Fallback: make it bigger manually
-                        modal.style.position = 'fixed';
-                        modal.style.top = '0';
-                        modal.style.left = '0';
-                        modal.style.width = '100vw';
-                        modal.style.height = '100vh';
-                        modal.style.zIndex = '99999';
-                    });
-                }
-            } else {
-                if (document.exitFullscreen) {
-                    document.exitFullscreen();
-                }
-            }
-        }
-        
-        function sendText() {
-            if (!currentRemoteUser) return;
-            const text = document.getElementById('remoteText').value;
-            if (!text) return;
-            
-            fetch('/api/type/' + currentRemoteUser, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: text})
-            });
-            document.getElementById('remoteText').value = '';
-        }
-        
-        function sendKey(key) {
-            if (!currentRemoteUser) return;
-            fetch('/api/key/' + currentRemoteUser, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({key: key})
-            });
-        }
-        
-        function showLoginForm() {
-            document.getElementById('loginForm').style.display = 'block';
-            document.getElementById('codeForm').style.display = 'none';
-        }
-        
-        function showCodeForm() {
-            document.getElementById('loginForm').style.display = 'none';
-            document.getElementById('codeForm').style.display = 'block';
-        }
-        
-        function submitLogin() {
-            if (!currentRemoteUser) return;
-            
-            const email = document.getElementById('loginEmail').value;
-            const password = document.getElementById('loginPassword').value;
-            
-            if (!email || !password) {
-                alert("Please enter email and password");
-                return;
-            }
-            
-            fetch('/api/login/' + currentRemoteUser, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({email: email, password: password})
-            })
-            .then(res => res.json())
+        function updateInfo() {
+            fetch('/api/accounts')
+            .then(r => r.json())
             .then(data => {
-                if (data.success) {
-                    alert("Credentials sent! Check browser for next step.");
-                    document.getElementById('loginForm').style.display = 'none';
-                } else {
-                    alert("Login failed");
-                }
+                data.forEach(acc => {
+                    const taskEl = document.getElementById('task-' + acc.username);
+                    if (taskEl) taskEl.textContent = acc.current_task || 'Idle';
+                    const statusEl = document.getElementById('status-' + acc.username);
+                    if (statusEl) statusEl.textContent = acc.status || '';
+                    const nextEl = document.getElementById('next-' + acc.username);
+                    if (nextEl) nextEl.textContent = acc.next_post || '—';
+                });
             });
         }
-        
-        function submitCode() {
-            if (!currentRemoteUser) return;
-            
-            const code = document.getElementById('verificationCode').value;
-            
-            if (!code || code.length !== 6) {
-                alert("Please enter 6-digit code");
-                return;
-            }
-            
-            fetch('/api/verify-code/' + currentRemoteUser, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({code: code})
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.success) {
-                    alert("Code submitted!");
-                    document.getElementById('codeForm').style.display = 'none';
-                } else {
-                    alert("Code submission failed");
-                }
-            });
-        }
+
+        setInterval(refreshCams, 1000);
+        setInterval(updateInfo, 4000);
     </script>
-    
-    <!-- Remote Browser Modal -->
-    <div id="remoteModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:1000;">
-        <div style="max-width:860px; margin:20px auto; background:#1a1a1a; border-radius:16px; padding:20px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <h3 id="remoteTitle" style="margin:0;">Remote Browser</h3>
-                <button onclick="closeRemoteBrowser()" style="background:#ff5252; color:white; padding:8px 16px; border-radius:8px; border:none;">Close</button>
-            </div>
-            
-            <!-- Remote Browser View -->
-            <div style="position: relative; margin-bottom: 12px;">
-                <img id="remoteView" 
-                     style="width:100%; max-width:100%; border:3px solid #333; border-radius:12px; cursor:crosshair; display:block;"
-                     onclick="handleRemoteClick(event)">
-                
-                <!-- Fullscreen Button -->
-                <button onclick="toggleFullscreen()" 
-                        style="position:absolute; top:12px; right:12px; background:#ff0050; color:white; padding:10px 16px; border-radius:8px; border:none; font-size:14px; font-weight:600; z-index:10; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
-                    ⛶ Fullscreen
-                </button>
-            </div>
-            
-            <!-- Control Bar -->
-            <!-- Login Form -->
-            <div id="loginForm" style="margin-top:15px; background:#222; padding:15px; border-radius:12px; display:none;">
-                <h4 style="margin:0 0 12px 0; color:#ff0050;">Login with Email / Username</h4>
-                <input type="text" id="loginEmail" placeholder="Email or Username" 
-                       style="width:100%; margin-bottom:8px; padding:12px; background:#111; border:1px solid #444; color:white; border-radius:8px;">
-                <input type="password" id="loginPassword" placeholder="Password" 
-                       style="width:100%; margin-bottom:12px; padding:12px; background:#111; border:1px solid #444; color:white; border-radius:8px;">
-                <button onclick="submitLogin()" style="background:#00c853; color:white; width:100%; padding:14px; border-radius:10px; border:none; font-weight:600;">
-                    Login
-                </button>
-            </div>
-            
-            <!-- Verification Code Form -->
-            <div id="codeForm" style="margin-top:15px; background:#222; padding:15px; border-radius:12px; display:none;">
-                <h4 style="margin:0 0 12px 0; color:#ff0050;">Enter Verification Code</h4>
-                <input type="text" id="verificationCode" placeholder="6-digit code" maxlength="6"
-                       style="width:100%; margin-bottom:12px; padding:12px; background:#111; border:1px solid #444; color:white; border-radius:8px; font-size:18px; text-align:center; letter-spacing:4px;">
-                <button onclick="submitCode()" style="background:#ff0050; color:white; width:100%; padding:14px; border-radius:10px; border:none; font-weight:600;">
-                    Submit Code
-                </button>
-            </div>
-            
-            <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-                <button onclick="showLoginForm()" style="background:#ff0050; color:white; padding:10px 16px; border-radius:8px; border:none; font-size:14px;">
-                    Login Form
-                </button>
-                <button onclick="showCodeForm()" style="background:#ff0050; color:white; padding:10px 16px; border-radius:8px; border:none; font-size:14px;">
-                    Enter Code
-                </button>
-            </div>
-            
-            <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-                <button id="clickModeBtn" onclick="toggleClickMode()" 
-                        style="background:#ff0050; color:white; padding:14px 22px; border-radius:10px; border:none; font-weight:700; font-size:15px; min-width:140px;">
-                    🖱️ Click Mode
-                </button>
-                
-                <input type="text" id="remoteText" placeholder="Type text here..." 
-                       style="flex:1; min-width:160px; padding:14px; background:#222; border:1px solid #444; color:white; border-radius:10px; font-size:15px;"
-                       onkeypress="if(event.key==='Enter') sendText()">
-                
-                <button onclick="sendText()" style="background:#00c853; color:white; padding:14px 20px; border-radius:10px; border:none; font-weight:600;">Send</button>
-                <button onclick="sendKey('Enter')" style="background:#555; color:white; padding:14px 18px; border-radius:10px; border:none; font-size:18px;">↵</button>
-                <button onclick="sendKey('Backspace')" style="background:#555; color:white; padding:14px 18px; border-radius:10px; border:none; font-size:18px;">⌫</button>
-            </div>
-            
-            <p style="color:#888; font-size:13px; margin-top:10px;">
-                Click on the browser image above to interact. Type in the box and press Send.
-            </p>
-        </div>
-    </div>
 </body>
 </html>
