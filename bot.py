@@ -270,11 +270,8 @@ def _get_page(username):
 
 
 def search_on_tiktok(username, category):
-    """Step 1: Use the browser to search TikTok for the account's category.
-
-    Clicks the real search bar and types the query like a human. Falls back
-    to navigating directly to the search results URL if the search bar can't
-    be interacted with (headless variations of the TikTok UI).
+    """Step 1: Navigate to TikTok search results for the category.
+    Uses direct URL navigation (most reliable in headless).
     """
     page = _get_page(username)
     if page is None:
@@ -283,47 +280,19 @@ def search_on_tiktok(username, category):
     update_account(username, current_task=f"Searching TikTok for '{category}'...")
 
     try:
-        # Make sure we start from tiktok.com
-        if "tiktok.com" not in page.url:
-            page.goto("https://www.tiktok.com", timeout=30000)
-            try:
-                page.wait_for_load_state("domcontentloaded", timeout=15000)
-            except TimeoutError:
-                pass
-            time.sleep(2)
-
-        typed = False
-        try:
-            search_box = page.locator(
-                'input[data-e2e="search-user-input"], '
-                'input[type="search"], '
-                'input[placeholder*="Search" i]'
-            ).first
-            if search_box.count() > 0:
-                search_box.click(timeout=5000)
-                time.sleep(1)
-                search_box.fill("")
-                search_box.type(category, delay=random.randint(80, 160))
-                time.sleep(1)
-                search_box.press("Enter")
-                typed = True
-        except Exception as e:
-            print(f"[{username}] search bar interaction failed: {e}")
-
-        if not typed:
-            # Fallback: go straight to the search results URL
-            q = urllib.parse.quote(category)
-            page.goto(f"https://www.tiktok.com/search?q={q}", timeout=30000)
-
+        q = urllib.parse.quote(category)
+        page.goto(f"https://www.tiktok.com/search/video?q={q}", timeout=30000)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
         except TimeoutError:
             pass
         time.sleep(4)
         take_screenshot(username)
+        print(f"[{username}] search page loaded for '{category}'")
         return True
     except Exception as e:
         print(f"[{username}] search failed: {e}")
+        update_account(username, current_task=f"Search failed: {str(e)[:40]}")
         return False
 
 
@@ -515,32 +484,65 @@ def upload_video_to_tiktok(username, file_path, caption):
 
     try:
         update_account(username, current_task="Opening TikTok upload page...")
-        page.goto("https://www.tiktok.com/upload", timeout=45000)
-        try:
-            page.wait_for_load_state("domcontentloaded", timeout=20000)
-        except TimeoutError:
-            pass
-        time.sleep(5)
-        take_screenshot(username)
-
-        # The upload UI may live inside an iframe on some TikTok versions
+        
+        # Try multiple upload URLs (TikTok changes these)
+        upload_urls = [
+            "https://www.tiktok.com/creator#/upload/upload",
+            "https://www.tiktok.com/upload",
+            "https://www.tiktok.com/tiktokstudio/upload",
+        ]
+        
+        file_input_found = False
         target = page
-        try:
-            iframe_el = page.query_selector('iframe[src*="upload"], iframe[data-tt="Upload_index_iframe"]')
-            if iframe_el:
-                frame = iframe_el.content_frame()
-                if frame:
-                    target = frame
-        except Exception:
-            pass
+        
+        for upload_url in upload_urls:
+            try:
+                page.goto(upload_url, timeout=45000)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=20000)
+                except TimeoutError:
+                    pass
+                time.sleep(5)
+                take_screenshot(username)
+                
+                # Check if we got redirected to login
+                if "/login" in page.url:
+                    print(f"[{username}] upload URL {upload_url} redirected to login, trying next...")
+                    update_account(username, current_task=f"Upload page redirected to login, trying alternate...")
+                    continue
+                
+                # Check for iframe
+                try:
+                    iframe_el = page.query_selector('iframe[src*="upload"], iframe[data-tt="Upload_index_iframe"]')
+                    if iframe_el:
+                        frame = iframe_el.content_frame()
+                        if frame:
+                            target = frame
+                except Exception:
+                    pass
+                
+                # Look for file input
+                try:
+                    target.wait_for_selector('input[type="file"]', timeout=15000, state="attached")
+                    file_input_found = True
+                    print(f"[{username}] file input found on {upload_url}")
+                    break
+                except TimeoutError:
+                    print(f"[{username}] no file input on {upload_url}, trying next...")
+                    target = page  # reset target
+                    continue
+            except Exception as e:
+                print(f"[{username}] failed to load {upload_url}: {e}")
+                continue
+        
+        if not file_input_found:
+            update_account(username, current_task="Upload page failed - no file input found")
+            print(f"[{username}] no file input found on any upload URL")
+            take_screenshot(username)
+            return False
 
         # --- Step 4: set the video file on the file input ---
         update_account(username, current_task="Uploading video file...")
-        try:
-            target.wait_for_selector('input[type="file"]', timeout=30000, state="attached")
-        except TimeoutError:
-            print(f"[{username}] no file input found on upload page")
-            return False
 
         file_input = target.locator('input[type="file"]').first
         file_input.set_input_files(file_path)
@@ -683,9 +685,13 @@ def automation_worker(username):
             category = account.get("category") or "dance"
 
             # --- Step 1: search TikTok in the browser ---
-            search_on_tiktok(username, category)
+            update_account(username, current_task=f"Step 1: Searching '{category}'...")
+            search_ok = search_on_tiktok(username, category)
+            if not search_ok:
+                print(f"[{username}] search step failed, using API fallback")
 
             # --- Step 2: find a viral video in the results ---
+            update_account(username, current_task="Step 2: Finding viral video...")
             video_info = find_viral_video(username, category)
             if not video_info:
                 update_account(username, current_task="No viral video found, retrying in 2 min")
@@ -699,6 +705,7 @@ def automation_worker(username):
                 continue
 
             # --- Step 3: download without watermark (tikwm.com API) ---
+            update_account(username, current_task="Step 3: Downloading video (no watermark)...")
             video_file = download_video_no_watermark(username, video_info)
             if not video_file:
                 update_account(username, current_task="Download failed, retrying in 2 min")
@@ -706,10 +713,12 @@ def automation_worker(username):
                 continue
 
             # --- Step 5 prep: generate a caption with hashtags ---
+            update_account(username, current_task="Step 4: Generating caption...")
             caption = generate_caption(video_info, category)
             print(f"[{username}] caption: {caption}")
 
             # --- Steps 4-6: upload, add caption, click Post ---
+            update_account(username, current_task="Step 5: Uploading to TikTok...")
             success = upload_video_to_tiktok(username, video_file, caption)
 
             if success:

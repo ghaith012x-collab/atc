@@ -91,7 +91,7 @@ def save_session(username):
 def start(username):
     account = get_account(username)
     if account and account["connected"]:
-        update_account(username, enabled=1, status="Running")
+        update_account(username, enabled=1, status="Running", current_task="Starting automation...")
         start_automation(username)
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Account not connected"})
