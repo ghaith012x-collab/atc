@@ -1,2 +1,7 @@
 flask
+gunicorn
+playwright
 pillow
+apscheduler
+requests
+moviepy

@@ -228,27 +228,28 @@
             btn.textContent = 'Connecting...';
             btn.disabled = true;
             
-            // Simulate connecting to TikTok (opens modal or redirects)
-            setTimeout(() => {
-                alert(`Connecting ${username} to TikTok...\n\n` +
-                      `In real version this would:\n` +
-                      `- Open Playwright browser\n` +
-                      `- Go to tiktok.com/login\n` +
-                      `- Save cookies/session\n` +
-                      `- Update status to "Connected"`);
-                
-                btn.textContent = 'Connected ✓';
-                btn.style.background = '#00c853';
-                btn.disabled = false;
-                
-                // Update current task
-                fetch('/api/accounts').then(r => r.json()).then(data => {
-                    const acc = data[username];
-                    if (acc) {
-                        document.getElementById('task-' + username).textContent = 'Connected to TikTok';
+            fetch('/connect/tiktok/' + username)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        btn.textContent = 'Connected ✓';
+                        btn.style.background = '#00c853';
+                        
+                        // Update task on dashboard
+                        document.getElementById('task-' + username).textContent = 'Browser connected';
+                    } else {
+                        btn.textContent = 'Connect Failed';
+                        btn.style.background = '#ff5252';
+                        alert('Connection error: ' + data.message);
                     }
+                    btn.disabled = false;
+                })
+                .catch(err => {
+                    btn.textContent = 'Error';
+                    btn.style.background = '#ff5252';
+                    btn.disabled = false;
+                    alert('Failed to connect');
                 });
-            }, 1200);
         }
         
         setInterval(updateDashboard, 3000);
