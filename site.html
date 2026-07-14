@@ -183,16 +183,21 @@
             const password = document.getElementById('pass-' + username).value;
             if (!email || !password) return alert("Enter email/username and password");
             
-            fetch('/api/login/' + username, {
+            fetch('/api/login/' + encodeURIComponent(username), {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({email: email, password: password})
-            }).then(r => r.json()).then(data => {
+            }).then(r => {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(data => {
                 if (data.success) {
                     alert("Credentials submitted! Check if a verification code is needed.");
                 } else {
-                    alert("Failed to submit credentials.");
+                    alert("Failed: " + (data.error || "Browser session not found. Click Connect TikTok first."));
                 }
+            }).catch(err => {
+                alert("Request error: " + err.message);
             });
         }
         
@@ -200,17 +205,22 @@
             const code = document.getElementById('code-' + username).value.trim();
             if (!code || code.length !== 6) return alert("Enter a 6-digit code");
             
-            fetch('/api/verify-code/' + username, {
+            fetch('/api/verify-code/' + encodeURIComponent(username), {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({code: code})
-            }).then(r => r.json()).then(data => {
+            }).then(r => {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(data => {
                 if (data.success) {
                     alert("Code submitted!");
                     setTimeout(() => location.reload(), 3000);
                 } else {
                     alert("Failed to submit code.");
                 }
+            }).catch(err => {
+                alert("Request error: " + err.message);
             });
         }
         

@@ -122,20 +122,28 @@ def api_key(username):
 
 
 # ==================== FORM LOGIN ROUTES ====================
-@app.route("/api/login/<username>", methods=["POST"])
+@app.route("/api/login/<path:username>", methods=["POST"])
 def api_login(username):
     data = request.json
     email = data.get("email", "")
     password = data.get("password", "")
     
+    print(f"API LOGIN: username='{username}', email='{email}', has_password={bool(password)}")
+    print(f"Active browser sessions: {list(browser_sessions.keys())}")
+    
+    if not email or not password:
+        return jsonify({"success": False, "error": "Missing credentials"})
+    
     success = login_with_credentials(username, email, password)
     return jsonify({"success": success})
 
 
-@app.route("/api/verify-code/<username>", methods=["POST"])
+@app.route("/api/verify-code/<path:username>", methods=["POST"])
 def api_verify_code(username):
     data = request.json
     code = data.get("code", "")
+    
+    print(f"API VERIFY: username='{username}', code='{code}'")
     
     success = submit_verification_code(username, code)
     return jsonify({"success": success})
