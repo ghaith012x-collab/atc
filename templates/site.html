@@ -180,17 +180,22 @@
                 </div>
             </div>
             
-            <div class="controls">
+            <div class="controls" style="margin-top: 15px;">
+                {% if not acc.connected %}
+                <!-- BIG CONNECT BUTTON -->
                 <button onclick="connectToTikTok('{{ username }}')" 
-                        style="background:#ff0050;color:white;" id="connect-btn-{{ username }}">
-                    Connect to TikTok
+                        style="background:#ff0050; color:white; font-size:16px; padding:14px 32px; width:100%;"
+                        id="connect-btn-{{ username }}">
+                    🔗 Connect TikTok Account
                 </button>
+                {% else %}
                 <button onclick="startAutomation('{{ username }}')" class="btn-start" id="start-btn-{{ username }}">
-                    Start Automation
+                    ▶ Start Automation
                 </button>
                 <button onclick="stopAutomation('{{ username }}')" class="btn-stop" id="stop-btn-{{ username }}">
-                    Stop Automation
+                    ■ Stop Automation
                 </button>
+                {% endif %}
             </div>
         </div>
         {% endfor %}

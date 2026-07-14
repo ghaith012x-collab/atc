@@ -57,12 +57,12 @@ def create_screen(username, task):
 # ==========================
 # PLAYWRIGHT BROWSER SESSION
 # ==========================
-def start_browser(username):
+def start_browser(username, headless=True):
     if username in browser_sessions:
         return browser_sessions[username]
 
     pw = sync_playwright().start()
-    browser = pw.chromium.launch(headless=True)
+    browser = pw.chromium.launch(headless=headless)
     context = browser.new_context(
         viewport={"width": 1280, "height": 720},
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -76,7 +76,7 @@ def start_browser(username):
         "page": page
     }
     
-    page.goto("https://www.tiktok.com")
+    page.goto("https://www.tiktok.com/login")
     return browser_sessions[username]
 
 def take_browser_screenshot(username):

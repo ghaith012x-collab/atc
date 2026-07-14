@@ -36,6 +36,7 @@ def init_db():
         username TEXT UNIQUE,
         category TEXT,
         enabled INTEGER DEFAULT 0,
+        connected INTEGER DEFAULT 0,
         status TEXT DEFAULT 'Stopped',
         task TEXT DEFAULT 'Idle',
         last_post TEXT,
@@ -83,7 +84,7 @@ def add_account():
     category = data.get("category", "horror")
     conn = db()
     conn.execute(
-        "INSERT INTO accounts (username, category) VALUES (?,?)",
+        "INSERT INTO accounts (username, category, connected) VALUES (?,?,0)",
         (username, category)
     )
     conn.commit()
@@ -96,16 +97,26 @@ def add_account():
 @app.route("/connect/tiktok/<username>")
 def connect_tiktok(username):
     try:
-        session = start_browser(username)
+        # Launch browser in NON-headless mode so user can log in
+        session = start_browser(username, headless=False)
+        page = session["page"]
+        
+        # Wait for login to complete (user manually logs in)
+        # We check if they are on the home page after login
+        page.wait_for_url("https://www.tiktok.com/*", timeout=300000)  # 5 minutes
+        
+        # Mark as connected in database
+        update_account(username, connected=1, status="Connected", task="Ready to automate")
+        
         return jsonify({
             "success": True,
-            "message": "Browser session started",
+            "message": "Account connected successfully!",
             "account": username
         })
     except Exception as e:
         return jsonify({
             "success": False,
-            "message": str(e)
+            "message": "Connection failed or timed out. " + str(e)
         })
 
 # ==========================
