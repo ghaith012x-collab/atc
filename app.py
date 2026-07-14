@@ -4,7 +4,7 @@ from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
     connect_account, start_automation, stop_automation, 
-    delete_account_session, screenshots,
+    delete_account_session, screenshots, browser_sessions,
     click_browser, type_in_browser, press_key,
     login_with_credentials, submit_verification_code
 )
@@ -45,15 +45,11 @@ def add_new_account():
         username = "@" + username
     
     if add_account(username, category):
-        # Auto start browser connection when account is added
-        def auto_connect():
-            connect_account(username)
-        threading.Thread(target=auto_connect, daemon=True).start()
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Account already exists"})
 
 
-@app.route("/connect/<username>")
+@app.route("/connect/<path:username>")
 def connect(username):
     def connect_thread():
         connect_account(username)
@@ -61,7 +57,7 @@ def connect(username):
     return jsonify({"success": True, "message": "Connecting..."})
 
 
-@app.route("/api/start/<username>", methods=["POST"])
+@app.route("/api/start/<path:username>", methods=["POST"])
 def start(username):
     account = get_account(username)
     if account and account["connected"]:
@@ -71,21 +67,21 @@ def start(username):
     return jsonify({"success": False, "error": "Account not connected"})
 
 
-@app.route("/api/stop/<username>", methods=["POST"])
+@app.route("/api/stop/<path:username>", methods=["POST"])
 def stop(username):
     update_account(username, enabled=0)
     stop_automation(username)
     return jsonify({"success": True})
 
 
-@app.route("/api/delete/<username>", methods=["POST"])
+@app.route("/api/delete/<path:username>", methods=["POST"])
 def delete(username):
     delete_account(username)
     delete_account_session(username)
     return jsonify({"success": True})
 
 
-@app.route("/live/<username>")
+@app.route("/live/<path:username>")
 def live(username):
     if username not in screenshots:
         from PIL import Image
@@ -109,7 +105,7 @@ def api_click(username):
     return jsonify({"success": success})
 
 
-@app.route("/api/type/<username>", methods=["POST"])
+@app.route("/api/type/<path:username>", methods=["POST"])
 def api_type(username):
     data = request.json
     text = data.get("text", "")
@@ -117,7 +113,7 @@ def api_type(username):
     return jsonify({"success": success})
 
 
-@app.route("/api/key/<username>", methods=["POST"])
+@app.route("/api/key/<path:username>", methods=["POST"])
 def api_key(username):
     data = request.json
     key = data.get("key", "Enter")
@@ -126,20 +122,41 @@ def api_key(username):
 
 
 # ==================== FORM LOGIN ROUTES ====================
-@app.route("/api/login/<username>", methods=["POST"])
+@app.route("/api/login/<path:username>", methods=["POST"])
 def api_login(username):
-    data = request.json
-    email = data.get("email", "")
-    password = data.get("password", "")
-    
-    success = login_with_credentials(username, email, password)
-    return jsonify({"success": success})
+    try:
+        data = request.json
+        email = data.get("email", "")
+        password = data.get("password", "")
+        
+        print(f"API LOGIN: username='{username}', email='{email}', has_password={bool(password)}")
+        print(f"Active browser sessions: {list(browser_sessions.keys())}")
+        
+        if not email or not password:
+            return jsonify({"success": False, "error": "Missing credentials"})
+        
+        # If no browser session exists, start one and navigate to login page
+        if username not in browser_sessions:
+            print(f"No session for {username}, starting browser...")
+            from bot import start_browser_for_login
+            started = start_browser_for_login(username)
+            if not started:
+                return jsonify({"success": False, "error": "Failed to start browser"})
+        
+        success = login_with_credentials(username, email, password)
+        return jsonify({"success": success})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 200
 
 
-@app.route("/api/verify-code/<username>", methods=["POST"])
+@app.route("/api/verify-code/<path:username>", methods=["POST"])
 def api_verify_code(username):
     data = request.json
     code = data.get("code", "")
+    
+    print(f"API VERIFY: username='{username}', code='{code}'")
     
     success = submit_verification_code(username, code)
     return jsonify({"success": success})
