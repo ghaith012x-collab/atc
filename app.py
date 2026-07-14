@@ -149,5 +149,13 @@ def live(username):
 # ==========================
 if __name__ == "__main__":
     init_db()
+    
+    # Auto-install Playwright browsers on first run (Railway fix)
+    try:
+        import subprocess
+        subprocess.run(["playwright", "install", "--with-deps", "chromium"], check=True)
+    except:
+        pass
+    
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
