@@ -29,45 +29,112 @@ except Exception:
 # ------------------------------------------------------------
 
 def _detect_tiktok_captcha(page) -> Optional[str]:
-    """Returns 'rotate', 'slide', or None if no captcha detected."""
+    """Improved detection for TikTok captchas.
+    Returns 'rotate', 'slide', 'puzzle', or None.
+    """
+    if page is None:
+        return None
+
     try:
-        # Common TikTok captcha indicators (rotate/whirl is our target)
-        rotate_indicators = [
-            'text:has-text("Rotate")',
-            '[data-e2e*="rotate"]',
-            '.captcha-rotate',
-            'canvas[style*="transform"]',
-            'img[src*="rotate"]',
-            'div[role="dialog"] img',
-            'text:has-text("whirl")',
-            'text:has-text("Turn")',
+        # === BROAD KEYWORD DETECTION (very reliable) ===
+        captcha_keywords = [
+            "drag the slider", "fit the puzzle", "puzzle", "slider",
+            "drag to", "slide to", "rotate", "whirl", "turn the", 
+            "align", "verify your", "security check", "captcha"
         ]
-        
-        for sel in rotate_indicators:
+
+        # 1. Check common TikTok captcha containers (most reliable)
+        containers = [
+            'div[role="dialog"]',
+            '[class*="captcha"]',
+            '[class*="verify"]',
+            '[class*="slide"]',
+            '[class*="puzzle"]',
+            'div[aria-modal="true"]',
+            '.geetest',           # Geetest (TikTok often uses)
+            '[data-e2e*="captcha"]',
+            '[data-e2e*="verify"]',
+        ]
+
+        for container_sel in containers:
             try:
-                if page.locator(sel).count() > 0:
-                    # Further confirm it's rotate type
-                    if any(x in sel.lower() for x in ['rotate', 'whirl', 'turn']):
-                        return "rotate"
-                    # Check text content
-                    txt = page.locator(sel).first.inner_text(timeout=800) or ""
-                    if any(kw in txt.lower() for kw in ["rotate", "turn", "whirl", "align"]):
-                        return "rotate"
+                container = page.locator(container_sel).first
+                if container.count() > 0 and container.is_visible():
+                    try:
+                        text = container.inner_text(timeout=1500) or ""
+                        text_lower = text.lower()
+                        if any(kw in text_lower for kw in captcha_keywords):
+                            # Classify type
+                            if any(k in text_lower for k in ["rotate", "whirl", "turn"]):
+                                return "rotate"
+                            if any(k in text_lower for k in ["drag", "slider", "puzzle", "fit"]):
+                                return "slide"
+                            return "slide"  # default for TikTok captchas
+                    except:
+                        pass
             except:
                 continue
-        
-        # Generic dialog check (fallback)
-        dialogs = page.locator('div[role="dialog"], .verify-container, [class*="captcha"]')
-        if dialogs.count() > 0:
-            try:
-                content = dialogs.first.inner_text(timeout=1200) or ""
-                if any(k in content.lower() for k in ["rotate", "turn the", "align the", "whirl"]):
+
+        # 2. Direct text search across page (very effective)
+        try:
+            body_text = page.inner_text("body", timeout=2000) or ""
+            body_lower = body_text.lower()
+            
+            if any(kw in body_lower for kw in captcha_keywords):
+                if any(k in body_lower for k in ["rotate", "whirl", "turn"]):
                     return "rotate"
+                if any(k in body_lower for k in ["drag", "slider", "puzzle", "fit the"]):
+                    return "slide"
+                return "slide"
+        except:
+            pass
+
+        # 3. Look for visible slider / puzzle elements
+        slider_selectors = [
+            'input[type="range"]',
+            '[class*="slider"]',
+            '[class*="geetest"]',
+            'canvas',
+            '[role="slider"]',
+            'button[aria-label*="slide"]',
+            'div[style*="cursor:"]',   # often the drag handle
+        ]
+        for sel in slider_selectors:
+            try:
+                el = page.locator(sel).first
+                if el.count() > 0 and el.is_visible():
+                    # Check nearby text
+                    try:
+                        parent = el.locator("xpath=..").first
+                        txt = parent.inner_text(timeout=800) or ""
+                        if any(k in txt.lower() for k in ["drag", "slide", "puzzle", "fit"]):
+                            return "slide"
+                    except:
+                        return "slide"
             except:
-                pass
-        
+                continue
+
+        # 4. Fallback: any visible modal/dialog with captcha-like content
+        try:
+            dialogs = page.locator('div[role="dialog"], [aria-modal="true"]')
+            for i in range(min(dialogs.count(), 3)):
+                try:
+                    d = dialogs.nth(i)
+                    if d.is_visible():
+                        txt = d.inner_text(timeout=1000) or ""
+                        if any(k in txt.lower() for k in ["drag", "slide", "puzzle", "rotate", "verify"]):
+                            if "rotate" in txt.lower() or "whirl" in txt.lower():
+                                return "rotate"
+                            return "slide"
+                except:
+                    continue
+        except:
+            pass
+
         return None
-    except Exception:
+
+    except Exception as e:
+        print(f"[captcha] Detection error: {str(e)[:60]}")
         return None
 
 
@@ -280,6 +347,78 @@ def handle_captcha_if_present(page, username: str) -> bool:
         return False
     except Exception as e:
         print(f"[{username}] handle_captcha error: {e}")
+        return False
+
+
+# -----------------------------------------------------------------
+# NEW: Auto "Turn on" for TikTok automatic content checks dialog
+# -----------------------------------------------------------------
+def handle_content_check_dialog(page, username: str = "") -> bool:
+    """Automatically clicks 'Turn on' when TikTok shows the
+    'Turn on automatic content checks?' dialog.
+    
+    This appears after posting on some accounts.
+    """
+    if page is None:
+        return False
+    try:
+        # Look for the specific dialog
+        dialog = page.locator(
+            'div[role="dialog"]:has-text("automatic content checks"), '
+            'div[role="dialog"]:has-text("Turn on automatic")'
+        ).first
+
+        if dialog.count() == 0:
+            # Broader fallback
+            dialog = page.locator('text="Turn on automatic content checks?"').first
+            if dialog.count() == 0:
+                return False
+
+        if not dialog.is_visible():
+            return False
+
+        print(f"[{username}] Detected 'Turn on automatic content checks' dialog")
+
+        # Find and click the "Turn on" button (usually the red one)
+        turn_on_selectors = [
+            'button:has-text("Turn on")',
+            'button:has-text("Turn on") >> nth=0',
+            '[data-e2e*="turn-on"]',
+            'button.red',
+            'button[style*="background-color: rgb(255, 0, 80)"]',  # TikTok red
+            'div[role="dialog"] button:has-text("Turn")',
+        ]
+
+        for sel in turn_on_selectors:
+            try:
+                btn = page.locator(sel).first
+                if btn.count() > 0 and btn.is_visible():
+                    btn.click(timeout=5000)
+                    print(f"[{username}] ✓ Auto-turned on content checks")
+                    time.sleep(1.5)
+                    return True
+            except:
+                continue
+
+        # Fallback: click the rightmost prominent button in the dialog
+        try:
+            buttons = page.locator('div[role="dialog"] button')
+            if buttons.count() >= 2:
+                # Usually the last button is "Turn on"
+                last_btn = buttons.nth(buttons.count() - 1)
+                if last_btn.is_visible():
+                    last_btn.click(timeout=4000)
+                    print(f"[{username}] ✓ Clicked rightmost button (Turn on)")
+                    time.sleep(1.5)
+                    return True
+        except:
+            pass
+
+        print(f"[{username}] Could not find 'Turn on' button")
+        return False
+
+    except Exception as e:
+        print(f"[{username}] Content check dialog error: {str(e)[:70]}")
         return False
 
 # Force unbuffered output so Railway logs show prints immediately
@@ -771,6 +910,9 @@ def upload_video_to_tiktok(username, file_path, caption):
         
         # CAPTCHA CHECK (isolated)
         handle_captcha_if_present(page, username)
+
+        # Auto turn on content checks dialog (new)
+        handle_content_check_dialog(page, username)
         
         # Try multiple upload URLs (TikTok changes these)
         upload_urls = [
