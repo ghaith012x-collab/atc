@@ -252,17 +252,20 @@ def solve_tiktok_rotate_captcha(page, username: str = "") -> bool:
 
 
 def handle_captcha_if_present(page, username: str) -> bool:
-    """Safe wrapper. Returns True if no captcha or captcha was handled."""
+    """Safe wrapper. Returns True if no captcha or captcha was handled.
+    Gracefully handles missing page."""
+    if page is None:
+        return True
     try:
         # Quick check
         captcha_type = _detect_tiktok_captcha(page)
         if not captcha_type:
             return True
-        
+
         print(f"[{username}] Captcha detected — attempting to solve...")
-        
+
         solved = solve_tiktok_rotate_captcha(page, username)
-        
+
         if solved:
             # Give TikTok time to process
             time.sleep(3)
