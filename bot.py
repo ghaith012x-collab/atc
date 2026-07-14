@@ -71,28 +71,45 @@ def connect_account(username):
         page.goto("https://www.tiktok.com/login", timeout=30000)
         take_screenshot(username)
         
-        # Auto click "Use phone / email / username" button
+        # Auto click "Use phone / email / username" - more reliable version
         try:
-            page.wait_for_timeout(2500)
+            # Wait longer for page to fully load
+            page.wait_for_timeout(3000)
             
-            # Most reliable selector for TikTok login
+            # Try to find and click the phone/email option
+            clicked = False
+            
+            # Method 1: Look for text containing "phone" or "email"
             try:
-                # Click the "Use phone / email / username" option (usually the second one)
-                buttons = page.locator('div[data-e2e="channel-item"]')
-                if buttons.count() > 0:
-                    # The second button is usually "Use phone / email / username"
-                    if buttons.count() >= 2:
-                        buttons.nth(1).click()
-                    else:
-                        buttons.first.click()
-                    
-                    update_account(username, current_task="Clicked phone/email option")
-                    page.wait_for_timeout(1500)
+                phone_option = page.get_by_text("Use phone / email / username", exact=False)
+                if phone_option.is_visible():
+                    phone_option.click()
+                    clicked = True
+                    print("Clicked using text selector")
             except:
                 pass
+            
+            # Method 2: Click the second channel item (most reliable)
+            if not clicked:
+                try:
+                    items = page.locator('div[data-e2e="channel-item"]')
+                    if items.count() >= 2:
+                        items.nth(1).click()
+                        clicked = True
+                        print("Clicked using nth(1)")
+                except:
+                    pass
+            
+            if clicked:
+                update_account(username, current_task="Clicked phone/email option")
+                page.wait_for_timeout(2000)
+                take_screenshot(username)
+            else:
+                update_account(username, current_task="Auto-click failed - click manually")
                 
-        except:
-            pass
+        except Exception as e:
+            print(f"Auto-click error: {e}")
+            update_account(username, current_task="Auto-click error")
         
         # Wait for user to login
         try:
