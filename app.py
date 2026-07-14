@@ -145,17 +145,26 @@ def live(username):
     return Response(buffer.getvalue(), mimetype="image/jpeg")
 
 # ==========================
+# INSTALL PLAYWRIGHT BROWSERS (runs on every start)
+# ==========================
+def install_browser():
+    try:
+        import subprocess
+        subprocess.run(
+            ["playwright", "install", "--with-deps", "chromium"],
+            check=True,
+            capture_output=True
+        )
+        print("✓ Chromium browser installed successfully")
+    except Exception as e:
+        print(f"Browser install warning: {e}")
+
+install_browser()
+init_db()
+
+# ==========================
 # START SERVER
 # ==========================
 if __name__ == "__main__":
-    init_db()
-    
-    # Auto-install Playwright browsers on first run (Railway fix)
-    try:
-        import subprocess
-        subprocess.run(["playwright", "install", "--with-deps", "chromium"], check=True)
-    except:
-        pass
-    
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

@@ -5,3 +5,4 @@ pillow
 apscheduler
 requests
 moviepy
+greenlet
