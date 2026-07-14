@@ -209,7 +209,7 @@
         }
         
         function handleRemoteClick(event) {
-            if (!currentRemoteUser || !clickMode) return;
+            if (!currentRemoteUser) return;
             
             const img = event.currentTarget;
             const rect = img.getBoundingClientRect();
@@ -217,28 +217,74 @@
             const x = Math.round((event.clientX - rect.left) * (1280 / rect.width));
             const y = Math.round((event.clientY - rect.top) * (720 / rect.height));
             
-            // Send click
+            // Create visual click cursor
+            createClickCursor(event.clientX, event.clientY, rect);
+            
+            // Send click to browser
             fetch('/api/click/' + currentRemoteUser, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({x: x, y: y})
             });
             
-            // Turn off click mode after one click
-            clickMode = false;
-            const btn = document.getElementById('clickModeBtn');
-            btn.style.background = '#ff0050';
-            btn.innerText = '🖱️ Click Mode';
+            // Auto turn off click mode after click
+            if (clickMode) {
+                clickMode = false;
+                const btn = document.getElementById('clickModeBtn');
+                btn.style.background = '#ff0050';
+                btn.innerText = '🖱️ Click Mode';
+            }
+        }
+        
+        function createClickCursor(clientX, clientY, rect) {
+            const cursor = document.createElement('div');
+            cursor.style.position = 'fixed';
+            cursor.style.left = clientX + 'px';
+            cursor.style.top = clientY + 'px';
+            cursor.style.width = '20px';
+            cursor.style.height = '20px';
+            cursor.style.border = '3px solid #ff0050';
+            cursor.style.borderRadius = '50%';
+            cursor.style.pointerEvents = 'none';
+            cursor.style.zIndex = '9999';
+            cursor.style.transition = 'all 0.3s ease';
+            cursor.style.transform = 'translate(-50%, -50%)';
+            
+            document.body.appendChild(cursor);
+            
+            // Animate and remove
+            setTimeout(() => {
+                cursor.style.transform = 'translate(-50%, -50%) scale(2)';
+                cursor.style.opacity = '0';
+                setTimeout(() => {
+                    cursor.parentNode.removeChild(cursor);
+                }, 200);
+            }, 400);
         }
         
         function toggleFullscreen() {
             const modal = document.getElementById('remoteModal');
             if (!modal) return;
             
+            const content = modal.querySelector('div');
+            
             if (!document.fullscreenElement) {
-                modal.requestFullscreen().catch(() => {});
+                // Try to fullscreen the whole modal
+                if (modal.requestFullscreen) {
+                    modal.requestFullscreen().catch(() => {
+                        // Fallback: make it bigger manually
+                        modal.style.position = 'fixed';
+                        modal.style.top = '0';
+                        modal.style.left = '0';
+                        modal.style.width = '100vw';
+                        modal.style.height = '100vh';
+                        modal.style.zIndex = '99999';
+                    });
+                }
             } else {
-                document.exitFullscreen();
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
             }
         }
         
