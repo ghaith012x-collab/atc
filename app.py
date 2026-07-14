@@ -4,7 +4,7 @@ from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
     connect_account, start_automation, stop_automation, 
-    delete_account_session, screenshots,
+    delete_account_session, screenshots, browser_sessions,
     click_browser, type_in_browser, press_key,
     login_with_credentials, submit_verification_code
 )
@@ -124,18 +124,23 @@ def api_key(username):
 # ==================== FORM LOGIN ROUTES ====================
 @app.route("/api/login/<path:username>", methods=["POST"])
 def api_login(username):
-    data = request.json
-    email = data.get("email", "")
-    password = data.get("password", "")
-    
-    print(f"API LOGIN: username='{username}', email='{email}', has_password={bool(password)}")
-    print(f"Active browser sessions: {list(browser_sessions.keys())}")
-    
-    if not email or not password:
-        return jsonify({"success": False, "error": "Missing credentials"})
-    
-    success = login_with_credentials(username, email, password)
-    return jsonify({"success": success})
+    try:
+        data = request.json
+        email = data.get("email", "")
+        password = data.get("password", "")
+        
+        print(f"API LOGIN: username='{username}', email='{email}', has_password={bool(password)}")
+        print(f"Active browser sessions: {list(browser_sessions.keys())}")
+        
+        if not email or not password:
+            return jsonify({"success": False, "error": "Missing credentials"})
+        
+        success = login_with_credentials(username, email, password)
+        return jsonify({"success": success})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 200
 
 
 @app.route("/api/verify-code/<path:username>", methods=["POST"])
