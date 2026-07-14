@@ -1210,8 +1210,14 @@ def upload_video_to_tiktok(username, file_path, caption):
             # Clear existing text using keyboard (works on page or frame context)
             try:
                 page.keyboard.press("Control+A")
-            except:
-                upload_context.press("Control+A") if hasattr(upload_context, 'press') else None
+            except Exception:
+                try:
+                    if hasattr(upload_context, "keyboard"):
+                        upload_context.keyboard.press("Control+A")
+                    else:
+                        page.keyboard.press("Control+A")
+                except:
+                    pass
             time.sleep(0.25)
             try:
                 page.keyboard.press("Delete")
@@ -1220,12 +1226,28 @@ def upload_video_to_tiktok(username, file_path, caption):
             time.sleep(0.35)
             
             # Type caption slowly and naturally
+            typed_ok = False
             if editor_element:
-                editor_element.type(caption, delay=random.randint(22, 70))
-            else:
-                upload_context.type(caption, delay=random.randint(22, 70)) if hasattr(upload_context, 'type') else page.keyboard.type(caption)
+                try:
+                    editor_element.type(caption, delay=random.randint(22, 70))
+                    typed_ok = True
+                except:
+                    pass
+            if not typed_ok:
+                try:
+                    if hasattr(upload_context, "type") and upload_context != page:
+                        upload_context.type(caption, delay=random.randint(22, 70))
+                    else:
+                        # Fallback: focus + insert text via keyboard
+                        page.keyboard.insert_text(caption)
+                    typed_ok = True
+                except:
+                    pass
             
-            print(f"[{username}] ✓ Caption typed: {caption[:65]}...")
+            if typed_ok:
+                print(f"[{username}] ✓ Caption typed: {caption[:65]}...")
+            else:
+                print(f"[{username}] ⚠ Caption typing may have failed, continuing")
             time.sleep(1.8)
         except Exception as e:
             print(f"[{username}] Caption typing issue (continuing anyway): {e}")
@@ -1251,41 +1273,170 @@ def upload_video_to_tiktok(username, file_path, caption):
             'button[type="submit"]',
         ]
 
-        for attempt in range(36):  # up to ~3 minutes
-            # Try upload_context first, then page
+        for attempt in range(45):  # up to ~3.75 minutes — more persistent
+            found_btn = None
+            used_sel = None
+
+            # 1. Try all selectors on both contexts
             for ctx in [upload_context, page]:
-                if post_clicked: break
+                if post_clicked or found_btn: break
                 for sel in post_selectors:
                     try:
                         btn = ctx.locator(sel).first
-                        if btn.count() > 0 and btn.is_visible():
-                            # Enable if disabled
+                        if btn.count() > 0:
                             try:
-                                if not btn.is_enabled():
-                                    try:
-                                        upload_context.locator('div[contenteditable="true"]').first.click(timeout=2000)
-                                    except:
-                                        pass
-                                    time.sleep(1.5)
+                                if btn.is_visible(timeout=700):
+                                    found_btn = btn
+                                    used_sel = sel
+                                    break
                             except:
-                                pass
-                            
-                            btn.click(timeout=6500, force=True)
-                            post_clicked = True
-                            print(f"[{username}] ✓ Post button clicked (ctx={'frame' if ctx!=page else 'page'}, sel: {sel})")
-                            break
+                                if btn.count() > 0:
+                                    found_btn = btn
+                                    used_sel = sel
+                                    break
                     except:
                         continue
+                if found_btn:
+                    break
+
+            # 2. Broader text search for exact "Post" button (very common in Web Studio)
+            if not found_btn:
+                try:
+                    all_btns = page.locator('button, [role="button"], div[role="button"]')
+                    for i in range(min(all_btns.count(), 18)):
+                        b = all_btns.nth(i)
+                        try:
+                            if b.is_visible():
+                                txt = (b.inner_text(timeout=500) or "").strip().lower()
+                                if txt == "post" or txt.startswith("post"):
+                                    found_btn = b
+                                    used_sel = "text-exact-post"
+                                    break
+                        except:
+                            pass
+                except:
+                    pass
+
+            if found_btn:
+                try:
+                    # Try to enable the button (click caption area)
+                    try:
+                        if not found_btn.is_enabled():
+                            print(f"[{username}] Post button appears disabled — focusing caption")
+                            try:
+                                upload_context.locator('div[contenteditable="true"]').first.click(timeout=1500)
+                            except:
+                                pass
+                            time.sleep(1.6)
+                    except:
+                        pass
+
+                    # Primary click
+                    found_btn.click(timeout=5500, force=True)
+                    post_clicked = True
+                    print(f"[{username}] ✓ Post button clicked (sel={used_sel})")
+                except Exception as ce:
+                    print(f"[{username}] Direct click failed ({str(ce)[:50]}), using fallbacks...")
+
+                    # Coordinate click on the button itself
+                    try:
+                        box = found_btn.bounding_box(timeout=1500)
+                        if box:
+                            cx = box['x'] + box['width'] * 0.5
+                            cy = box['y'] + box['height'] * 0.5
+                            page.mouse.click(cx, cy)
+                            post_clicked = True
+                            print(f"[{username}] ✓ Coordinate-clicked Post button")
+                    except:
+                        pass
+
+                    # JS click as last resort for this button
+                    if not post_clicked:
+                        try:
+                            page.evaluate('''
+                                const btn = arguments[0];
+                                if (btn) { btn.click(); return true; }
+                            ''', found_btn)
+                            post_clicked = True
+                            print(f"[{username}] ✓ JS-clicked found Post button")
+                        except:
+                            pass
+
+            # 3. Color + position fallback (matches the screenshot: bright red Post button)
+            if not post_clicked:
+                try:
+                    # Find the red/pink action button in the form area
+                    red_btn = page.locator(
+                        'button[style*="fe2c55"], button[style*="ff0050"], '
+                        'button[style*="255, 0, 80"], button[style*="254,44,85"], '
+                        'button[class*="primary"], button[class*="red"]'
+                    ).first
+                    if red_btn.count() > 0 and red_btn.is_visible():
+                        red_btn.click(timeout=4000, force=True)
+                        post_clicked = True
+                        print(f"[{username}] ✓ Clicked red/pink primary Post button")
+                except:
+                    pass
+
+            # 4. Very reliable JS scan for "Post" + red button (screenshot layout)
+            if not post_clicked:
+                try:
+                    js_result = page.evaluate('''
+                        const buttons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"]'));
+                        let postBtn = buttons.find(b => {
+                            const t = (b.innerText || b.textContent || "").trim().toLowerCase();
+                            return t === "post";
+                        });
+                        if (!postBtn) {
+                            postBtn = buttons.find(b => {
+                                const t = (b.innerText || b.textContent || "").trim().toLowerCase();
+                                return t.includes("post") && t.length < 12;
+                            });
+                        }
+                        if (!postBtn) {
+                            postBtn = buttons.find(b => {
+                                const s = (b.getAttribute("style") || "") + " " + (b.className || "");
+                                return s.includes("254,44,85") || s.includes("fe2c55") || s.includes("ff0050") || 
+                                       s.includes("255, 0, 80") || s.includes("background-color: rgb(254");
+                            });
+                        }
+                        if (postBtn) {
+                            postBtn.click();
+                            return "clicked";
+                        }
+                        return "no-post-found";
+                    ''')
+                    if js_result == "clicked":
+                        post_clicked = True
+                        print(f"[{username}] ✓ JS-scanned and clicked Post button")
+                except:
+                    pass
+
+            # 5. Screenshot-based coordinate fallback (Post is lower-right pink button)
+            if not post_clicked:
+                try:
+                    panel = page.locator('div[role="main"], .creator-upload, .upload-container, form, body').first
+                    if panel.count() > 0:
+                        box = panel.bounding_box(timeout=1200)
+                        if box:
+                            x = box['x'] + box['width'] * random.uniform(0.62, 0.78)
+                            y = box['y'] + box['height'] * random.uniform(0.70, 0.88)
+                            page.mouse.click(x, y)
+                            print(f"[{username}] ✓ Coordinate fallback clicked Post area")
+                            post_clicked = True
+                except:
+                    pass
+
             if post_clicked:
                 break
-            
+
             time.sleep(5)
             take_screenshot(username)
-            if attempt % 4 == 0:
-                print(f"[{username}] Still waiting for Post button... (attempt {attempt}/36)")
+            if attempt % 3 == 0:
+                print(f"[{username}] Still waiting for Post button... (attempt {attempt}/45)")
 
         if not post_clicked:
-            print(f"[{username}] ❌ Post button never became clickable/visible")
+            print(f"[{username}] ❌ Post button never became clickable/visible after exhaustive attempts")
             take_screenshot(username)
             return False
 
