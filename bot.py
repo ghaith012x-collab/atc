@@ -71,13 +71,26 @@ def connect_account(username):
         page.goto("https://www.tiktok.com/login", timeout=30000)
         take_screenshot(username)
         
-        # Auto click "Use phone / email / username" if available
+        # Auto click "Use phone / email / username" button
         try:
-            page.wait_for_timeout(1500)
-            phone_email_btn = page.locator('div[data-e2e="channel-item"]:has-text("Use phone")')
-            if phone_email_btn.count() > 0:
-                phone_email_btn.first.click()
-                update_account(username, current_task="Clicked phone/email option")
+            page.wait_for_timeout(2500)
+            
+            # Most reliable selector for TikTok login
+            try:
+                # Click the "Use phone / email / username" option (usually the second one)
+                buttons = page.locator('div[data-e2e="channel-item"]')
+                if buttons.count() > 0:
+                    # The second button is usually "Use phone / email / username"
+                    if buttons.count() >= 2:
+                        buttons.nth(1).click()
+                    else:
+                        buttons.first.click()
+                    
+                    update_account(username, current_task="Clicked phone/email option")
+                    page.wait_for_timeout(1500)
+            except:
+                pass
+                
         except:
             pass
         
