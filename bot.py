@@ -71,32 +71,52 @@ def connect_account(username):
         page.goto("https://www.tiktok.com/login", timeout=30000)
         take_screenshot(username)
         
-        # Auto click "Use phone / email / username" then "Log in with email or username"
+        # Auto click "Use phone / email / username" - VERY RELIABLE VERSION
         try:
-            page.wait_for_timeout(2500)
+            print("Attempting to auto-click login options...")
+            page.wait_for_timeout(3500)
             
-            # Click "Use phone / email / username"
+            # Strategy: Click the second login option (usually "Use phone / email / username")
             try:
-                items = page.locator('div[data-e2e="channel-item"]')
-                if items.count() >= 2:
-                    items.nth(1).click()
+                # Get all channel items
+                channel_items = page.locator('div[data-e2e="channel-item"]')
+                count = channel_items.count()
+                print(f"Found {count} login options")
+                
+                if count >= 2:
+                    # Click the second one (index 1)
+                    channel_items.nth(1).click()
+                    print("✓ Clicked second login option (phone/email)")
                     update_account(username, current_task="Clicked phone/email option")
-                    page.wait_for_timeout(2000)
-            except:
-                pass
-            
-            # Auto click "Log in with email or username"
-            try:
-                email_login = page.get_by_text("Log in with email or username", exact=False)
-                if email_login.is_visible():
-                    email_login.click()
-                    update_account(username, current_task="Ready for login form")
-                    page.wait_for_timeout(1500)
-            except:
-                pass
+                    page.wait_for_timeout(2500)
+                    
+                    # Now try to click "Log in with email or username"
+                    try:
+                        email_login = page.get_by_text("Log in with email or username", exact=False)
+                        if email_login.count() > 0:
+                            email_login.first.click()
+                            print("✓ Clicked 'Log in with email or username'")
+                            update_account(username, current_task="Ready for login form")
+                    except:
+                        pass
+                else:
+                    # Fallback: try clicking by text
+                    try:
+                        phone_text = page.get_by_text("Use phone", exact=False)
+                        if phone_text.count() > 0:
+                            phone_text.first.click()
+                            print("✓ Clicked using 'Use phone' text")
+                            update_account(username, current_task="Clicked phone/email option")
+                    except:
+                        update_account(username, current_task="Click 'Use phone/email' manually")
+                        
+            except Exception as inner_e:
+                print(f"Click strategy failed: {inner_e}")
+                update_account(username, current_task="Click manually")
                 
         except Exception as e:
-            print(f"Auto navigation error: {e}")
+            print(f"Auto-click outer error: {e}")
+            update_account(username, current_task="Auto-click failed")
         
         # Wait for user to login
         try:
