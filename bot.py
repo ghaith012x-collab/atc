@@ -242,13 +242,19 @@ def connect_account(username):
             update_account(username, connected=0, status="Session expired", current_task="Please update session")
             print(f"✗ Session expired or invalid for {username}")
 
-        # Live screenshot loop (0.5 seconds)
-        def screenshot_loop():
-            while username in browser_sessions:
-                take_screenshot(username)
-                time.sleep(0.5)
+        # FIX: We no longer spawn a separate screenshot loop here, nor keep the browser open.
+        # This function is now strictly for verification.
+        
+        # Close the verification browser to free it up for the automation worker
+        try:
+            page.close()
+            context.close()
+            browser.close()
+            pw.stop()
+            del browser_sessions[username]
+        except Exception:
+            pass
 
-        threading.Thread(target=screenshot_loop, daemon=True).start()
         return logged_in
 
     except Exception as e:
@@ -667,6 +673,67 @@ def upload_video_to_tiktok(username, file_path, caption):
 # search -> find viral video -> download (no watermark) -> upload -> caption -> post
 # ---------------------------------------------------------------------------
 
+def _init_worker_browser(username, account):
+    """Initialize a Playwright browser session strictly for the worker thread."""
+    if username in browser_sessions:
+        try:
+            browser_sessions[username]["context"].close()
+            browser_sessions[username]["browser"].close()
+            browser_sessions[username]["pw"].stop()
+        except:
+            pass
+        del browser_sessions[username]
+        
+    try:
+        cookies = json.loads(account["session_data"])
+    except:
+        return False
+
+    pw = sync_playwright().start()
+    browser = pw.chromium.launch(
+        headless=True,
+        args=[
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage"
+        ]
+    )
+    context = browser.new_context(
+        viewport={"width": 1280, "height": 720},
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        locale="en-US",
+    )
+    
+    clean_cookies = []
+    for c in cookies:
+        if not isinstance(c, dict) or "name" not in c or "value" not in c:
+            continue
+        cleaned = {
+            "name": c["name"],
+            "value": c["value"],
+            "domain": c.get("domain", ".tiktok.com"),
+            "path": c.get("path", "/"),
+            "secure": c.get("secure", False),
+            "httpOnly": c.get("httpOnly", False),
+        }
+        if "sameSite" in c and c["sameSite"] in ["Strict", "Lax", "None"]:
+            cleaned["sameSite"] = c["sameSite"]
+        clean_cookies.append(cleaned)
+        
+    context.add_cookies(clean_cookies)
+    page = context.new_page()
+    
+    browser_sessions[username] = {
+        "pw": pw,
+        "browser": browser,
+        "context": context,
+        "page": page
+    }
+    return True
+
 def automation_worker(username):
     log(f"[{username}] === AUTOMATION WORKER STARTED ===")
     posted_video_ids = set()
@@ -685,14 +752,16 @@ def automation_worker(username):
 
         video_file = None
         try:
-            # Open persistent session if needed
+            # Initialize worker's own browser session on this thread
             if username not in browser_sessions:
-                connect_account(username)
-                time.sleep(3)
-                account = get_account(username)
-                if not account["connected"]:
-                    update_account(username, enabled=0)
+                update_account(username, current_task="Starting worker browser...")
+                if not _init_worker_browser(username, account):
+                    log(f"[{username}] Failed to initialize worker browser")
+                    update_account(username, enabled=0, current_task="Browser init failed")
                     break
+                
+            # Take a screenshot to show we're alive
+            take_screenshot(username)
 
             category = account.get("category") or "dance"
 
@@ -784,6 +853,15 @@ def automation_worker(username):
     update_account(username, status="Stopped", current_task="Idle")
     log(f"[{username}] === AUTOMATION WORKER STOPPED ===")
     workers.pop(username, None)
+    
+    if username in browser_sessions:
+        try:
+            browser_sessions[username]["context"].close()
+            browser_sessions[username]["browser"].close()
+            browser_sessions[username]["pw"].stop()
+        except:
+            pass
+        del browser_sessions[username]
 
 
 def start_automation(username):
@@ -801,6 +879,7 @@ def stop_automation(username):
         try:
             browser_sessions[username]["context"].close()
             browser_sessions[username]["browser"].close()
+            browser_sessions[username]["pw"].stop()
             del browser_sessions[username]
         except:
             pass
@@ -811,6 +890,7 @@ def delete_account_session(username):
         try:
             browser_sessions[username]["context"].close()
             browser_sessions[username]["browser"].close()
+            browser_sessions[username]["pw"].stop()
             del browser_sessions[username]
         except:
             pass
