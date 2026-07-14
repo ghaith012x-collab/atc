@@ -1,5 +1,4 @@
 flask
 gunicorn
-playwright
-pillow
-greenlet
+requests
+python-dotenv

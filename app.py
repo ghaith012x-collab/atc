@@ -1,148 +1,152 @@
 import os
-import sqlite3
-import threading
-import time
-import io
-from datetime import datetime
-from flask import Flask, render_template, jsonify, request, Response
-from PIL import Image
-from bot import (
-    start_bot, stop_bot, 
-    connect_account, delete_account,
-    screenshots, get_account_status
-)
+import requests
+from flask import Flask, render_template, redirect, request, jsonify, url_for
+from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
+from bot import start_automation, stop_automation
+import urllib.parse
 
 app = Flask(__name__)
-DATABASE = "accounts.db"
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
 
-def db():
-    return sqlite3.connect(DATABASE)
+# TikTok OAuth Config
+TIKTOK_CLIENT_KEY = os.environ.get("TIKTOK_CLIENT_KEY")
+TIKTOK_CLIENT_SECRET = os.environ.get("TIKTOK_CLIENT_SECRET")
+TIKTOK_REDIRECT_URI = os.environ.get("TIKTOK_REDIRECT_URI", "https://your-app.railway.app/callback/tiktok")
 
-def init_db():
-    conn = db()
-    # Drop and recreate to fix broken state (safe for prototype)
-    conn.execute("DROP TABLE IF EXISTS accounts")
-    conn.execute("DROP TABLE IF EXISTS logs")
-    
-    conn.execute("""
-        CREATE TABLE accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            category TEXT DEFAULT 'dance',
-            connected INTEGER DEFAULT 0,
-            enabled INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'Stopped',
-            task TEXT DEFAULT 'Idle',
-            last_post TEXT,
-            next_post TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT,
-            action TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
-    print("✓ Database initialized")
+TIKTOK_AUTH_URL = "https://open-api.tiktok.com/platform/oauth/connect/"
+TIKTOK_TOKEN_URL = "https://open-api.tiktok.com/oauth/access_token/"
 
-def get_accounts():
-    conn = db()
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM accounts ORDER BY created_at DESC").fetchall()
-    conn.close()
-    return [dict(x) for x in rows]
+init_db()
 
-def update_account(username, **kwargs):
-    conn = db()
-    for key, value in kwargs.items():
-        conn.execute(f"UPDATE accounts SET {key}=? WHERE username=?", (value, username))
-    conn.commit()
-    conn.close()
-
-def log_action(username, action):
-    conn = db()
-    conn.execute("INSERT INTO logs (username, action) VALUES (?, ?)", (username, action))
-    conn.commit()
-    conn.close()
-
-# ==================== ROUTES ====================
 
 @app.route("/")
-def home():
-    return render_template("site.html", accounts=get_accounts())
+def dashboard():
+    accounts = get_all_accounts()
+    return render_template("site.html", accounts=accounts)
+
 
 @app.route("/api/accounts")
 def api_accounts():
-    return jsonify(get_accounts())
+    return jsonify(get_all_accounts())
+
+
+# ==================== OAUTH FLOW ====================
+
+@app.route("/connect/tiktok")
+def connect_tiktok():
+    username = request.args.get("username")
+    if not username:
+        return "Missing username", 400
+
+    params = {
+        "client_key": TIKTOK_CLIENT_KEY,
+        "response_type": "code",
+        "scope": "user.info.basic,video.publish",
+        "redirect_uri": TIKTOK_REDIRECT_URI,
+        "state": username
+    }
+    auth_url = f"{TIKTOK_AUTH_URL}?{urllib.parse.urlencode(params)}"
+    return redirect(auth_url)
+
+
+@app.route("/callback/tiktok")
+def tiktok_callback():
+    code = request.args.get("code")
+    state = request.args.get("state")  # username
+    error = request.args.get("error")
+
+    if error:
+        return f"TikTok authorization failed: {error}"
+
+    if not code or not state:
+        return "Missing code or state", 400
+
+    # Exchange code for token
+    token_data = {
+        "client_key": TIKTOK_CLIENT_KEY,
+        "client_secret": TIKTOK_CLIENT_SECRET,
+        "code": code,
+        "grant_type": "authorization_code",
+        "redirect_uri": TIKTOK_REDIRECT_URI
+    }
+
+    response = requests.post(TIKTOK_TOKEN_URL, data=token_data)
+    token_json = response.json()
+
+    if "access_token" not in token_json:
+        return f"Failed to get token: {token_json}", 400
+
+    access_token = token_json["access_token"]
+    refresh_token = token_json.get("refresh_token")
+    expires_in = token_json.get("expires_in", 86400)
+
+    # Get TikTok username from API
+    user_info = requests.get(
+        "https://open-api.tiktok.com/user/info/",
+        headers={"Authorization": f"Bearer {access_token}"}
+    ).json()
+
+    tiktok_username = user_info.get("data", {}).get("user", {}).get("username", state)
+
+    # Save to database
+    update_account(tiktok_username, 
+                   access_token=access_token,
+                   refresh_token=refresh_token,
+                   expires_at=int(time.time()) + expires_in,
+                   connected=1,
+                   status="Connected")
+
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/disconnect/<username>", methods=["POST"])
+def disconnect(username):
+    update_account(username, 
+                   access_token=None,
+                   refresh_token=None,
+                   connected=0,
+                   status="Disconnected",
+                   enabled=0)
+    stop_automation(username)
+    return jsonify({"success": True})
+
+
+# ==================== AUTOMATION ====================
 
 @app.route("/api/add", methods=["POST"])
-def add_account():
+def add_new_account():
     data = request.json
-    username = data.get("username", "").strip()
+    username = data.get("username")
     category = data.get("category", "dance")
     
-    if not username.startswith("@"):
-        username = "@" + username
-    
-    try:
-        conn = db()
-        conn.execute(
-            "INSERT INTO accounts (username, category) VALUES (?, ?)",
-            (username, category)
-        )
-        conn.commit()
-        conn.close()
-        log_action(username, "Account added")
-        return {"success": True}
-    except sqlite3.IntegrityError:
-        return {"success": False, "error": "Account already exists"}
+    if username and add_account(username, category):
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Account already exists"})
+
+
+@app.route("/api/start/<username>", methods=["POST"])
+def start(username):
+    account = get_account(username)
+    if account and account["connected"]:
+        update_account(username, enabled=1, status="Running")
+        start_automation(username)
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Account not connected"})
+
+
+@app.route("/api/stop/<username>", methods=["POST"])
+def stop(username):
+    update_account(username, enabled=0, status="Stopped")
+    stop_automation(username)
+    return jsonify({"success": True})
+
 
 @app.route("/api/delete/<username>", methods=["POST"])
 def delete(username):
     delete_account(username)
-    return {"success": True}
+    stop_automation(username)
+    return jsonify({"success": True})
 
-@app.route("/connect/tiktok/<username>")
-def connect_tiktok(username):
-    def connect_thread():
-        connect_account(username)
-    
-    thread = threading.Thread(target=connect_thread, daemon=True)
-    thread.start()
-    return jsonify({"success": True, "message": "Connecting..."})
-
-@app.route("/api/start/<username>", methods=["POST"])
-def start(username):
-    update_account(username, enabled=1, status="Starting")
-    start_bot(username)
-    return {"success": True}
-
-@app.route("/api/stop/<username>", methods=["POST"])
-def stop(username):
-    update_account(username, enabled=0)
-    stop_bot(username)
-    return {"success": True}
-
-@app.route("/live/<username>")
-def live(username):
-    if username not in screenshots:
-        img = Image.new("RGB", (800, 450), "#111111")
-        screenshots[username] = img
-    
-    buffer = io.BytesIO()
-    screenshots[username].save(buffer, "JPEG", quality=80)
-    buffer.seek(0)
-    return Response(buffer.getvalue(), mimetype="image/jpeg")
-
-# ==================== START ====================
-
-# Initialize database on every start (including gunicorn)
-init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

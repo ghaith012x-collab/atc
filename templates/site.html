@@ -1,42 +1,30 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>TikTok Auto Poster</title>
+    <title>TikTok Auto Poster • OAuth</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: system-ui; background: #0f0f0f; color: #fff; margin: 0; padding: 20px; }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-        h1 { background: linear-gradient(90deg, #ff0050, #00f2ea); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }
+        body { font-family: system-ui; background:#0f0f0f; color:#fff; margin:0; padding:20px; }
+        .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:30px; }
+        h1 { background:linear-gradient(90deg,#ff0050,#00f2ea); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
         
-        .add-form {
-            background: #1a1a1a; padding: 20px; border-radius: 16px; margin-bottom: 30px; border: 1px solid #333;
-        }
-        .add-form input, .add-form select { padding: 12px; background: #222; border: 1px solid #444; color: white; border-radius: 8px; }
+        .add-form { background:#1a1a1a; padding:20px; border-radius:16px; margin-bottom:30px; border:1px solid #333; }
+        .account-card { background:#1a1a1a; border-radius:16px; padding:24px; margin-bottom:24px; border:1px solid #333; }
         
-        .account-card {
-            background: #1a1a1a; border-radius: 16px; padding: 24px; margin-bottom: 24px; border: 1px solid #333;
-        }
-        .account-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-        .username { font-size: 22px; font-weight: 600; }
+        .info-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin:20px 0; }
+        .info-item { background:#222; padding:12px; border-radius:10px; }
+        .info-label { font-size:11px; color:#888; }
         
-        .live-cam { background: #111; border: 3px solid #333; border-radius: 14px; overflow: hidden; margin-bottom: 20px; position: relative; }
-        .live-cam img { width: 100%; height: 220px; object-fit: cover; display: block; }
-        .live-label { position: absolute; top: 12px; left: 12px; background: #ff0050; color: white; font-size: 10px; padding: 2px 10px; border-radius: 9999px; font-weight: 700; }
+        .status { padding:4px 14px; border-radius:9999px; font-size:13px; font-weight:600; }
+        .connected { background:#00c85320; color:#00c853; border:1px solid #00c853; }
+        .disconnected { background:#ff525220; color:#ff5252; border:1px solid #ff5252; }
         
-        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
-        .info-item { background: #222; padding: 12px; border-radius: 10px; }
-        .info-label { font-size: 11px; color: #888; }
-        
-        .status { padding: 4px 14px; border-radius: 9999px; font-size: 13px; font-weight: 600; }
-        .connected { background: #00c85320; color: #00c853; border: 1px solid #00c853; }
-        .disconnected { background: #ff525220; color: #ff5252; border: 1px solid #ff5252; }
-        
-        .controls { display: flex; gap: 10px; flex-wrap: wrap; }
-        button { padding: 11px 20px; border-radius: 8px; font-weight: 600; border: none; cursor: pointer; font-size: 14px; }
-        .btn-connect { background: #ff0050; color: white; flex: 1; }
-        .btn-start { background: #00c853; color: white; }
-        .btn-stop { background: #ff5252; color: white; }
-        .btn-delete { background: #444; color: #ccc; }
+        button { padding:11px 20px; border-radius:8px; font-weight:600; border:none; cursor:pointer; font-size:14px; }
+        .btn-connect { background:#ff0050; color:white; }
+        .btn-start { background:#00c853; color:white; }
+        .btn-stop { background:#ff5252; color:white; }
+        .btn-delete { background:#444; color:#ccc; }
+        .controls { display:flex; gap:10px; flex-wrap:wrap; margin-top:20px; }
     </style>
 </head>
 <body>
@@ -55,30 +43,24 @@
                 <option value="comedy">Comedy</option>
                 <option value="gaming">Gaming</option>
                 <option value="horror">Horror</option>
-                <option value="fashion">Fashion</option>
+                <option value="story">Story Animation</option>
+                <option value="memes">Memes</option>
+                <option value="facts">Facts</option>
+                <option value="motivation">Motivation</option>
             </select>
             <button onclick="addAccount()" style="background:#ff0050;color:white;">Add Account</button>
         </div>
     </div>
 
-    <!-- Accounts -->
     {% for acc in accounts %}
     <div class="account-card">
-        <div class="account-header">
-            <div class="username">{{ acc.username }}</div>
-            <div>
-                {% if acc.connected %}
-                    <span class="status connected">🟢 Connected</span>
-                {% else %}
-                    <span class="status disconnected">🔴 Not Connected</span>
-                {% endif %}
-            </div>
-        </div>
-
-        <!-- LIVE CAM -->
-        <div class="live-cam">
-            <div class="live-label">LIVE</div>
-            <img id="cam-{{ acc.username }}" src="/live/{{ acc.username }}?t={{ range(10000)|random }}">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="font-size:22px;font-weight:600;">{{ acc.tiktok_username }}</div>
+            {% if acc.connected %}
+                <span class="status connected">🟢 Connected</span>
+            {% else %}
+                <span class="status disconnected">🔴 Disconnected</span>
+            {% endif %}
         </div>
 
         <div class="info-grid">
@@ -92,7 +74,7 @@
             </div>
             <div class="info-item">
                 <div class="info-label">CURRENT TASK</div>
-                <div style="font-weight:600;" id="task-{{ acc.username }}">{{ acc.task }}</div>
+                <div style="font-weight:600;">{{ acc.current_task }}</div>
             </div>
             <div class="info-item">
                 <div class="info-label">NEXT POST</div>
@@ -102,14 +84,15 @@
 
         <div class="controls">
             {% if not acc.connected %}
-            <button onclick="connectAccount('{{ acc.username }}')" class="btn-connect">
-                🔗 Connect TikTok
-            </button>
+                <button onclick="connectAccount('{{ acc.tiktok_username }}')" class="btn-connect">
+                    Connect TikTok (OAuth)
+                </button>
             {% else %}
-            <button onclick="startAutomation('{{ acc.username }}')" class="btn-start">▶ Start</button>
-            <button onclick="stopAutomation('{{ acc.username }}')" class="btn-stop">■ Stop</button>
+                <button onclick="startAutomation('{{ acc.tiktok_username }}')" class="btn-start">▶ Start Automation</button>
+                <button onclick="stopAutomation('{{ acc.tiktok_username }}')" class="btn-stop">■ Stop</button>
+                <button onclick="disconnectAccount('{{ acc.tiktok_username }}')" class="btn-delete">Disconnect</button>
             {% endif %}
-            <button onclick="deleteAccount('{{ acc.username }}')" class="btn-delete">Delete</button>
+            <button onclick="deleteAccount('{{ acc.tiktok_username }}')" class="btn-delete">Delete</button>
         </div>
     </div>
     {% endfor %}
@@ -118,7 +101,7 @@
         function addAccount() {
             const username = document.getElementById('new-username').value.trim();
             const category = document.getElementById('new-category').value;
-            if (!username) return alert('Enter username');
+            if (!username) return alert("Enter username");
             
             fetch('/api/add', {
                 method: 'POST',
@@ -128,54 +111,25 @@
         }
         
         function connectAccount(username) {
-            const btns = document.querySelectorAll(`[onclick*="connectAccount('${username}')"]`);
-            if (btns.length) btns[0].textContent = 'Connecting...';
-            
-            fetch('/connect/tiktok/' + username)
-                .then(r => r.json())
-                .then(() => {
-                    alert('Browser opened. Please login to TikTok.');
-                    setTimeout(() => location.reload(), 3000);
-                });
+            window.location.href = `/connect/tiktok?username=${username}`;
         }
         
         function startAutomation(username) {
-            fetch('/api/start/' + username, {method: 'POST'})
-                .then(() => setTimeout(() => location.reload(), 800));
+            fetch(`/api/start/${username}`, {method: 'POST'}).then(() => location.reload());
         }
         
         function stopAutomation(username) {
-            fetch('/api/stop/' + username, {method: 'POST'})
-                .then(() => setTimeout(() => location.reload(), 800));
+            fetch(`/api/stop/${username}`, {method: 'POST'}).then(() => location.reload());
+        }
+        
+        function disconnectAccount(username) {
+            fetch(`/disconnect/${username}`, {method: 'POST'}).then(() => location.reload());
         }
         
         function deleteAccount(username) {
-            if (!confirm('Delete this account?')) return;
-            fetch('/api/delete/' + username, {method: 'POST'})
-                .then(() => location.reload());
+            if (!confirm("Delete this account?")) return;
+            fetch(`/api/delete/${username}`, {method: 'POST'}).then(() => location.reload());
         }
-        
-        // Live camera refresh
-        function refreshCams() {
-            document.querySelectorAll('[id^="cam-"]').forEach(img => {
-                const username = img.id.replace('cam-', '');
-                img.src = `/live/${username}?t=` + Date.now();
-            });
-        }
-        
-        function updateTasks() {
-            fetch('/api/accounts')
-                .then(r => r.json())
-                .then(data => {
-                    data.forEach(acc => {
-                        const taskEl = document.getElementById('task-' + acc.username);
-                        if (taskEl) taskEl.textContent = acc.task || 'Idle';
-                    });
-                });
-        }
-        
-        setInterval(refreshCams, 1000);
-        setInterval(updateTasks, 4000);
     </script>
 </body>
 </html>
