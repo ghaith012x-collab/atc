@@ -132,20 +132,63 @@ def connect_account(username):
             if clicked_phone_email:
                 update_account(username, current_task="Clicking email/username login...")
                 take_screenshot(username)
+                time.sleep(2)
                 
-                # Now click "Log in with email or username"
+                # Now click "Log in with email or username" link
+                clicked_email_login = False
                 try:
-                    email_btn = page.locator("text=Log in with email or username")
-                    email_btn.click()
-                    
+                    # Method 1: Click the link/anchor with that text
+                    email_link = page.locator("a:has-text('Log in with email or username')")
+                    if email_link.count() > 0 and email_link.first.is_visible():
+                        email_link.first.click()
+                        clicked_email_login = True
+                        print("✓ Clicked email login link (anchor).")
+                except Exception as e:
+                    print(f"Email link method 1 failed: {e}")
+                
+                if not clicked_email_login:
+                    try:
+                        # Method 2: Text locator (broader)
+                        email_btn = page.get_by_text("Log in with email or username", exact=False)
+                        if email_btn.count() > 0 and email_btn.first.is_visible():
+                            email_btn.first.click()
+                            clicked_email_login = True
+                            print("✓ Clicked email login (text locator).")
+                    except Exception as e:
+                        print(f"Email link method 2 failed: {e}")
+                
+                if not clicked_email_login:
+                    try:
+                        # Method 3: JavaScript - find and click any element with that text
+                        page.evaluate("""
+                            () => {
+                                const allEls = document.querySelectorAll('a, div, span, p');
+                                for (let el of allEls) {
+                                    if (el.innerText && el.innerText.trim().toLowerCase().includes('log in with email or username')) {
+                                        el.click();
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }
+                        """)
+                        clicked_email_login = True
+                        print("✓ Clicked email login (JavaScript).")
+                    except Exception as e:
+                        print(f"Email link method 3 failed: {e}")
+                
+                if clicked_email_login:
                     # VERIFY: Wait for the actual login form inputs to appear
-                    page.locator('input[name="username"], input[placeholder*="Email"], input[placeholder*="email"]').first.wait_for(state="visible", timeout=8000)
-                    
-                    update_account(username, current_task="Login form ready - enter credentials")
-                    print("✓ Login form is confirmed visible.")
-                except (TimeoutError, Exception) as e:
-                    print(f"Failed to reach login form: {e}")
+                    try:
+                        page.locator('input[name="username"], input[placeholder*="Email"], input[placeholder*="email"]').first.wait_for(state="visible", timeout=8000)
+                        update_account(username, current_task="Login form ready - enter credentials")
+                        print("✓ Login form is confirmed visible.")
+                    except (TimeoutError, Exception) as e:
+                        print(f"Login form didn't appear: {e}")
+                        update_account(username, current_task="Login form not detected - try manually")
+                else:
                     update_account(username, current_task="Click 'Log in with email or username' manually")
+                    print("✗ Could not click email login link.")
             else:
                 update_account(username, current_task="Click 'Use phone/email' manually")
                 print("✗ Could not auto-click. User must click manually.")
