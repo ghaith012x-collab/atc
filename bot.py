@@ -46,11 +46,18 @@ def connect_account(username):
     
     try:
         pw = sync_playwright().start()
+        
         context = pw.chromium.launch_persistent_context(
             user_data_dir=session_dir,
             headless=True,
             viewport={"width": 1280, "height": 720},
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--single-process"
+            ]
         )
         
         page = context.pages[0] if context.pages else context.new_page()
@@ -62,20 +69,20 @@ def connect_account(username):
         }
         
         update_account(username, current_task="Waiting for login...")
-        page.goto("https://www.tiktok.com/login")
+        page.goto("https://www.tiktok.com/login", timeout=30000)
         take_screenshot(username)
         
-        # Wait for successful login (up to 5 minutes)
+        # Wait for successful login
         try:
             page.wait_for_selector(
-                '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], div[role="button"][aria-label*="Profile"]',
+                '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"]',
                 timeout=300000
             )
             update_account(username, connected=1, status="Connected", current_task="Session saved")
         except:
-            update_account(username, status="Login timeout", current_task="Please try again")
+            update_account(username, status="Login timeout", current_task="Please login manually")
         
-        # Start live screenshot loop
+        # Live screenshot loop
         def screenshot_loop():
             while username in browser_sessions:
                 take_screenshot(username)
@@ -84,7 +91,8 @@ def connect_account(username):
         threading.Thread(target=screenshot_loop, daemon=True).start()
         
     except Exception as e:
-        update_account(username, status="Error", current_task=str(e)[:60])
+        error_msg = str(e)[:80]
+        update_account(username, status="Error", current_task=error_msg)
 
 def automation_worker(username):
     while True:
