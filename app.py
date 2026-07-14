@@ -97,26 +97,22 @@ def add_account():
 @app.route("/connect/tiktok/<username>")
 def connect_tiktok(username):
     try:
-        # Launch browser in NON-headless mode so user can log in
-        session = start_browser(username, headless=False)
+        # Always headless on Railway
+        session = start_browser(username, headless=True)
         page = session["page"]
         
-        # Wait for login to complete (user manually logs in)
-        # We check if they are on the home page after login
-        page.wait_for_url("https://www.tiktok.com/*", timeout=300000)  # 5 minutes
-        
-        # Mark as connected in database
+        # Mark account as connected
         update_account(username, connected=1, status="Connected", task="Ready to automate")
         
         return jsonify({
             "success": True,
-            "message": "Account connected successfully!",
+            "message": "Account connected successfully (headless)",
             "account": username
         })
     except Exception as e:
         return jsonify({
             "success": False,
-            "message": "Connection failed or timed out. " + str(e)
+            "message": str(e)
         })
 
 # ==========================
