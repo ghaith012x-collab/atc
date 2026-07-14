@@ -88,31 +88,16 @@
             </div>
         </div>
 
-        <!-- Login Credentials Form - always visible when not connected -->
-        {% if not acc.connected %}
-        <div style="background:#222; border-radius:12px; padding:16px; margin-bottom:16px; border:1px solid #333;">
-            <h4 style="margin:0 0 12px 0; color:#ff0050;">Login Credentials</h4>
-            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
-                <input type="text" id="email-{{ acc.username }}" placeholder="Email or username" 
-                       style="flex:1; min-width:180px; padding:12px; background:#1a1a1a; border:1px solid #444; color:white; border-radius:8px; font-size:14px;">
-                <input type="password" id="pass-{{ acc.username }}" placeholder="Password" 
-                       style="flex:1; min-width:180px; padding:12px; background:#1a1a1a; border:1px solid #444; color:white; border-radius:8px; font-size:14px;">
-                <button onclick="submitLogin('{{ acc.username }}')" style="background:#00c853; color:white; padding:12px 20px; border-radius:8px; border:none; font-weight:600;">Login</button>
-            </div>
-            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-                <input type="text" id="code-{{ acc.username }}" placeholder="6-digit code (if asked)" maxlength="6"
-                       style="width:200px; padding:12px; background:#1a1a1a; border:1px solid #444; color:white; border-radius:8px; font-size:14px; letter-spacing:4px; text-align:center;">
-                <button onclick="submitCode('{{ acc.username }}')" style="background:#ff0050; color:white; padding:12px 20px; border-radius:8px; border:none; font-weight:600;">Submit Code</button>
-            </div>
-        </div>
-        {% endif %}
-
         <div class="controls">
             <button onclick="openRemoteBrowser('{{ acc.username }}')" class="btn-connect">
                 🖥️ Open Remote Browser
             </button>
             
-            {% if acc.connected %}
+            {% if not acc.connected %}
+                <button onclick="connectAccount('{{ acc.username }}')" class="btn-connect">
+                    Connect TikTok
+                </button>
+            {% else %}
                 <button onclick="startAutomation('{{ acc.username }}')" class="btn-start">▶ Start</button>
                 <button onclick="stopAutomation('{{ acc.username }}')" class="btn-stop">■ Stop</button>
             {% endif %}
@@ -135,23 +120,31 @@
             }).then(() => location.reload());
         }
         
+        function connectAccount(username) {
+            fetch('/connect/' + username)
+                .then(() => {
+                    alert("Browser started. Please login to TikTok.");
+                    setTimeout(() => location.reload(), 4000);
+                });
+        }
+        
         function startAutomation(username) {
-            fetch('/api/start/' + encodeURIComponent(username), {method: 'POST'}).then(() => location.reload());
+            fetch('/api/start/' + username, {method: 'POST'}).then(() => location.reload());
         }
         
         function stopAutomation(username) {
-            fetch('/api/stop/' + encodeURIComponent(username), {method: 'POST'}).then(() => location.reload());
+            fetch('/api/stop/' + username, {method: 'POST'}).then(() => location.reload());
         }
         
         function deleteAccount(username) {
             if (!confirm("Delete this account?")) return;
-            fetch('/api/delete/' + encodeURIComponent(username), {method: 'POST'}).then(() => location.reload());
+            fetch('/api/delete/' + username, {method: 'POST'}).then(() => location.reload());
         }
         
         function refreshCams() {
             document.querySelectorAll('[id^="cam-"]').forEach(img => {
                 const username = img.id.replace('cam-', '');
-                img.src = `/live/${encodeURIComponent(username)}?t=` + Date.now();
+                img.src = `/live/${username}?t=` + Date.now();
             });
         }
         
@@ -166,52 +159,6 @@
                 });
         }
         
-        function submitLogin(username) {
-            const email = document.getElementById('email-' + username).value.trim();
-            const password = document.getElementById('pass-' + username).value;
-            if (!email || !password) return alert("Enter email/username and password");
-            
-            fetch('/api/login/' + encodeURIComponent(username), {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({email: email, password: password})
-            }).then(r => {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            }).then(data => {
-                if (data.success) {
-                    alert("Logging in... Watch the live view. Enter 6-digit code if asked.");
-                } else {
-                    alert("Failed: " + (data.error || "Unknown error"));
-                }
-            }).catch(err => {
-                alert("Request error: " + err.message);
-            });
-        }
-        
-        function submitCode(username) {
-            const code = document.getElementById('code-' + username).value.trim();
-            if (!code || code.length !== 6) return alert("Enter a 6-digit code");
-            
-            fetch('/api/verify-code/' + encodeURIComponent(username), {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({code: code})
-            }).then(r => {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            }).then(data => {
-                if (data.success) {
-                    alert("Code submitted!");
-                    setTimeout(() => location.reload(), 3000);
-                } else {
-                    alert("Failed to submit code.");
-                }
-            }).catch(err => {
-                alert("Request error: " + err.message);
-            });
-        }
-        
         setInterval(refreshCams, 1000);
         setInterval(updateTasks, 4000);
 
@@ -224,16 +171,19 @@
             document.getElementById('remoteModal').style.display = 'block';
             document.getElementById('remoteTitle').innerText = 'Remote Browser - ' + username;
             
+            // Reset click mode
             clickMode = false;
             document.getElementById('clickModeBtn').style.background = '#ff0050';
             document.getElementById('clickModeBtn').innerText = '🖱️ Click Mode';
             
+            // Load live view
             const img = document.getElementById('remoteView');
-            img.src = '/live/' + encodeURIComponent(username) + '?t=' + Date.now();
+            img.src = '/live/' + username + '?t=' + Date.now();
             
+            // Auto refresh
             window.remoteInterval = setInterval(() => {
                 if (currentRemoteUser) {
-                    img.src = '/live/' + encodeURIComponent(currentRemoteUser) + '?t=' + Date.now();
+                    img.src = '/live/' + currentRemoteUser + '?t=' + Date.now();
                 }
             }, 500);
         }
@@ -264,20 +214,25 @@
             const img = event.currentTarget;
             const rect = img.getBoundingClientRect();
             
+            // Get the real size of the image (not the container)
             const naturalWidth = img.naturalWidth || 1280;
             const naturalHeight = img.naturalHeight || 720;
             
+            // Calculate click position based on actual image size
             const x = Math.round((event.clientX - rect.left) * (naturalWidth / rect.width));
             const y = Math.round((event.clientY - rect.top) * (naturalHeight / rect.height));
             
+            // Create visual click cursor
             createClickCursor(event.clientX, event.clientY, rect);
             
-            fetch('/api/click/' + encodeURIComponent(currentRemoteUser), {
+            // Send click to browser
+            fetch('/api/click/' + currentRemoteUser, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({x: x, y: y})
             });
             
+            // Auto turn off click mode after click
             if (clickMode) {
                 clickMode = false;
                 const btn = document.getElementById('clickModeBtn');
@@ -302,6 +257,7 @@
             
             document.body.appendChild(cursor);
             
+            // Animate and remove
             setTimeout(() => {
                 cursor.style.transform = 'translate(-50%, -50%) scale(2)';
                 cursor.style.opacity = '0';
@@ -315,9 +271,13 @@
             const modal = document.getElementById('remoteModal');
             if (!modal) return;
             
+            const content = modal.querySelector('div');
+            
             if (!document.fullscreenElement) {
+                // Try to fullscreen the whole modal
                 if (modal.requestFullscreen) {
                     modal.requestFullscreen().catch(() => {
+                        // Fallback: make it bigger manually
                         modal.style.position = 'fixed';
                         modal.style.top = '0';
                         modal.style.left = '0';
@@ -338,7 +298,7 @@
             const text = document.getElementById('remoteText').value;
             if (!text) return;
             
-            fetch('/api/type/' + encodeURIComponent(currentRemoteUser), {
+            fetch('/api/type/' + currentRemoteUser, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({text: text})
@@ -348,10 +308,73 @@
         
         function sendKey(key) {
             if (!currentRemoteUser) return;
-            fetch('/api/key/' + encodeURIComponent(currentRemoteUser), {
+            fetch('/api/key/' + currentRemoteUser, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({key: key})
+            });
+        }
+        
+        function showLoginForm() {
+            document.getElementById('loginForm').style.display = 'block';
+            document.getElementById('codeForm').style.display = 'none';
+        }
+        
+        function showCodeForm() {
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('codeForm').style.display = 'block';
+        }
+        
+        function submitLogin() {
+            if (!currentRemoteUser) return;
+            
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            
+            if (!email || !password) {
+                alert("Please enter email and password");
+                return;
+            }
+            
+            fetch('/api/login/' + currentRemoteUser, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({email: email, password: password})
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    alert("Credentials sent! Check browser for next step.");
+                    document.getElementById('loginForm').style.display = 'none';
+                } else {
+                    alert("Login failed");
+                }
+            });
+        }
+        
+        function submitCode() {
+            if (!currentRemoteUser) return;
+            
+            const code = document.getElementById('verificationCode').value;
+            
+            if (!code || code.length !== 6) {
+                alert("Please enter 6-digit code");
+                return;
+            }
+            
+            fetch('/api/verify-code/' + currentRemoteUser, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({code: code})
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    alert("Code submitted!");
+                    document.getElementById('codeForm').style.display = 'none';
+                } else {
+                    alert("Code submission failed");
+                }
             });
         }
     </script>
@@ -364,14 +387,48 @@
                 <button onclick="closeRemoteBrowser()" style="background:#ff5252; color:white; padding:8px 16px; border-radius:8px; border:none;">Close</button>
             </div>
             
+            <!-- Remote Browser View -->
             <div style="position: relative; margin-bottom: 12px;">
                 <img id="remoteView" 
                      style="width:100%; max-width:100%; border:3px solid #333; border-radius:12px; cursor:crosshair; display:block;"
                      onclick="handleRemoteClick(event)">
                 
+                <!-- Fullscreen Button -->
                 <button onclick="toggleFullscreen()" 
                         style="position:absolute; top:12px; right:12px; background:#ff0050; color:white; padding:10px 16px; border-radius:8px; border:none; font-size:14px; font-weight:600; z-index:10; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
                     ⛶ Fullscreen
+                </button>
+            </div>
+            
+            <!-- Control Bar -->
+            <!-- Login Form -->
+            <div id="loginForm" style="margin-top:15px; background:#222; padding:15px; border-radius:12px; display:none;">
+                <h4 style="margin:0 0 12px 0; color:#ff0050;">Login with Email / Username</h4>
+                <input type="text" id="loginEmail" placeholder="Email or Username" 
+                       style="width:100%; margin-bottom:8px; padding:12px; background:#111; border:1px solid #444; color:white; border-radius:8px;">
+                <input type="password" id="loginPassword" placeholder="Password" 
+                       style="width:100%; margin-bottom:12px; padding:12px; background:#111; border:1px solid #444; color:white; border-radius:8px;">
+                <button onclick="submitLogin()" style="background:#00c853; color:white; width:100%; padding:14px; border-radius:10px; border:none; font-weight:600;">
+                    Login
+                </button>
+            </div>
+            
+            <!-- Verification Code Form -->
+            <div id="codeForm" style="margin-top:15px; background:#222; padding:15px; border-radius:12px; display:none;">
+                <h4 style="margin:0 0 12px 0; color:#ff0050;">Enter Verification Code</h4>
+                <input type="text" id="verificationCode" placeholder="6-digit code" maxlength="6"
+                       style="width:100%; margin-bottom:12px; padding:12px; background:#111; border:1px solid #444; color:white; border-radius:8px; font-size:18px; text-align:center; letter-spacing:4px;">
+                <button onclick="submitCode()" style="background:#ff0050; color:white; width:100%; padding:14px; border-radius:10px; border:none; font-weight:600;">
+                    Submit Code
+                </button>
+            </div>
+            
+            <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                <button onclick="showLoginForm()" style="background:#ff0050; color:white; padding:10px 16px; border-radius:8px; border:none; font-size:14px;">
+                    Login Form
+                </button>
+                <button onclick="showCodeForm()" style="background:#ff0050; color:white; padding:10px 16px; border-radius:8px; border:none; font-size:14px;">
+                    Enter Code
                 </button>
             </div>
             

@@ -1,9 +1,8 @@
-
 import os
 import time
 import threading
 from datetime import datetime, timedelta
-from playwright.sync_api import sync_playwright, TimeoutError
+from playwright.sync_api import sync_playwright
 from PIL import Image
 import io
 from database import get_account, update_account
@@ -39,63 +38,6 @@ def take_screenshot(username):
     except:
         screenshots[username] = create_placeholder(username, "Screenshot error")
 
-def start_browser_for_login(username):
-    """Start browser and navigate to email login page. Returns True when ready."""
-    try:
-        session_dir = f"sessions/{username}"
-        os.makedirs(session_dir, exist_ok=True)
-        
-        pw = sync_playwright().start()
-        
-        context = pw.chromium.launch_persistent_context(
-            user_data_dir=session_dir,
-            headless=True,
-            viewport={"width": 1280, "height": 720},
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage"
-            ]
-        )
-        
-        page = context.pages[0] if context.pages else context.new_page()
-        
-        browser_sessions[username] = {
-            "pw": pw,
-            "context": context,
-            "page": page
-        }
-        
-        update_account(username, status="Connecting", current_task="Loading login page...")
-        page.goto("https://www.tiktok.com/login/phone-or-email/email", timeout=30000)
-        page.wait_for_load_state("networkidle", timeout=15000)
-        time.sleep(2)
-        take_screenshot(username)
-        
-        # Start screenshot loop
-        def screenshot_loop():
-            while username in browser_sessions:
-                take_screenshot(username)
-                time.sleep(0.5)
-        threading.Thread(target=screenshot_loop, daemon=True).start()
-        
-        # Verify login form is visible
-        try:
-            page.locator('input[name="username"], input[placeholder*="Email or username"]').first.wait_for(state="visible", timeout=10000)
-            update_account(username, current_task="Login form ready")
-            print(f"✓ Browser ready for {username}")
-            return True
-        except (TimeoutError, Exception) as e:
-            print(f"Login page didn't load for {username}: {e}")
-            update_account(username, current_task="Login page failed to load")
-            return True  # Still return True - the session exists, credentials might still work
-    except Exception as e:
-        print(f"start_browser_for_login failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
 def connect_account(username):
     """Start persistent browser and wait for login"""
     update_account(username, status="Connecting", current_task="Starting browser...")
@@ -125,33 +67,121 @@ def connect_account(username):
             "page": page
         }
         
-        update_account(username, current_task="Loading TikTok login...")
-        # Go directly to the email login page - skip all intermediate clicks
-        page.goto("https://www.tiktok.com/login/phone-or-email/email", timeout=30000)
-        page.wait_for_load_state("networkidle", timeout=15000)
-        time.sleep(2)
+        update_account(username, current_task="Waiting for login...")
+        page.goto("https://www.tiktok.com/login", timeout=30000)
         take_screenshot(username)
         
-        # Verify we're on the email login form
+        # Auto click "Use phone / email / username" - CLEAN & RELIABLE VERSION
         try:
-            print("Navigated directly to email login page...")
-            page.locator('input[name="username"], input[placeholder*="Email or username"]').first.wait_for(state="visible", timeout=10000)
-            update_account(username, current_task="Login form ready - enter credentials")
-            print("✓ Login form confirmed visible.")
-            take_screenshot(username)
-        except (TimeoutError, Exception) as e:
-            print(f"Email login page didn't load properly: {e}")
-            update_account(username, current_task="Login page failed to load - retrying...")
-            # Fallback: try the main login page and click through
+            print("Attempting to auto-click login options...")
+            page.wait_for_timeout(4500)
+            
+            # Click the second login option (Use phone / email / username)
+            success = False
+            
+            # Try clicking the second channel item
             try:
-                page.goto("https://www.tiktok.com/login", timeout=30000)
-                page.wait_for_load_state("networkidle", timeout=15000)
-                time.sleep(3)
-                take_screenshot(username)
-                update_account(username, current_task="On login page - click 'Use phone/email' then 'email or username'")
-            except Exception as e2:
-                print(f"Fallback also failed: {e2}")
-                update_account(username, current_task="Login page error - check logs")
+                channel_items = page.locator('div[data-e2e="channel-item"]')
+                if channel_items.count() >= 2:
+                    channel_items.nth(1).click(force=True)
+                    page.wait_for_timeout(2500)
+                    success = True
+                    print("✓ Clicked second channel item (phone/email)")
+            except Exception as e:
+                print(f"Channel click failed: {e}")
+            
+            # If failed, try by text
+            if not success:
+                try:
+                    btn = page.get_by_text("Use phone / email / username", exact=False)
+                    if btn.count() > 0:
+                        btn.first.click(force=True)
+                        page.wait_for_timeout(2500)
+                        success = True
+                        print("✓ Clicked by text")
+                except Exception as e:
+                    print(f"Text click failed: {e}")
+            
+            # Update status
+            if success:
+                update_account(username, current_task="Clicked phone/email option")
+                print("✓ SUCCESS: Clicked phone/email option")
+                
+                # Try to click "Log in with email or username"
+                try:
+                    page.wait_for_timeout(2500)
+                    email_login = page.get_by_text("Log in with email or username", exact=False)
+                    if email_login.count() > 0:
+                        email_login.first.click(force=True)
+                        print("✓ Clicked 'Log in with email or username'")
+                        update_account(username, current_task="Ready for login form")
+                except:
+                    pass
+            else:
+                update_account(username, current_task="Click 'Use phone/email' manually")
+                print("✗ FAILED: Could not auto-click")
+                
+        except Exception as e:
+            print(f"Auto-click error: {e}")
+            update_account(username, current_task="Click 'Use phone/email' manually")
+            try:
+                items = page.locator('div[data-e2e="channel-item"]')
+                if items.count() >= 2:
+                    second_item = items.nth(1)
+                    second_item.click(force=True)
+                    page.wait_for_timeout(2000)
+                    clicked = True
+                    print("✓ REAL CLICK: Clicked second channel item")
+            except Exception as e:
+                print(f"Method 1 failed: {e}")
+            
+            # === METHOD 2: Click by exact text ===
+            if not clicked:
+                try:
+                    btn = page.get_by_text("Use phone / email / username", exact=False)
+                    if btn.count() > 0:
+                        btn.first.click(force=True)
+                        page.wait_for_timeout(2000)
+                        clicked = True
+                        print("✓ REAL CLICK: Clicked by text")
+                except Exception as e:
+                    print(f"Method 2 failed: {e}")
+            
+            # === METHOD 3: Click any element containing "phone" ===
+            if not clicked:
+                try:
+                    phone_btn = page.locator('div:has-text("phone"), div:has-text("email")').first
+                    if phone_btn.is_visible():
+                        phone_btn.click(force=True)
+                        page.wait_for_timeout(2000)
+                        clicked = True
+                        print("✓ REAL CLICK: Clicked phone/email element")
+                except Exception as e:
+                    print(f"Method 3 failed: {e}")
+            
+            # === ONLY UPDATE STATUS IF CLICK WAS SUCCESSFUL ===
+            if clicked:
+                update_account(username, current_task="Clicked phone/email option")
+                print("✓ STATUS UPDATED: Clicked phone/email option")
+                
+                # Try to click "Log in with email or username"
+                try:
+                    page.wait_for_timeout(2000)
+                    email_login = page.get_by_text("Log in with email or username", exact=False)
+                    if email_login.count() > 0:
+                        email_login.first.click(force=True)
+                        print("✓ Clicked 'Log in with email or username'")
+                        update_account(username, current_task="Ready for login form")
+                except:
+                    pass
+            else:
+                # BE HONEST - Do not lie
+                update_account(username, current_task="Click 'Use phone/email' manually")
+                print("✗ FAILED: Could not click - user must click manually")
+                
+        except Exception as e:
+            print(f"Auto-click error: {e}")
+            update_account(username, current_task="Click 'Use phone/email' manually")
         
         # Wait for user to login
         try:
@@ -160,7 +190,7 @@ def connect_account(username):
                 timeout=300000
             )
             update_account(username, connected=1, status="Connected", current_task="Session saved")
-        except TimeoutError:
+        except:
             update_account(username, status="Login timeout", current_task="Please login")
         
         # Live screenshot loop (0.5 seconds)
@@ -282,60 +312,73 @@ def click_browser(username, x, y):
 
 # ==================== FORM-BASED LOGIN ====================
 def login_with_credentials(username, email_or_username, password):
-    """Fill login form with credentials"""
+    """Fill login form with credentials - IMPROVED"""
     if username not in browser_sessions:
-        print(f"login_with_credentials: No browser session for {username}")
-        print(f"Active sessions: {list(browser_sessions.keys())}")
+        print(f"No browser session for {username}")
         return False
     
     try:
         page = browser_sessions[username]["page"]
-        print(f"login_with_credentials: Page URL = {page.url}")
+        print(f"Attempting login for {username}")
         
-        # Fill email/username - TikTok uses name="username" and placeholder="Email or username"
-        email_input = page.locator('input[name="username"], input[placeholder*="Email or username"], input[placeholder*="email"], input[placeholder*="username"]')
-        print(f"Email input count: {email_input.count()}")
-        if email_input.count() > 0:
-            email_input.first.click()
-            email_input.first.fill(email_or_username)
-            print(f"Filled email: {email_or_username}")
-        else:
-            print("ERROR: No email input found!")
-            return False
+        # Wait for login form to be ready
+        page.wait_for_timeout(1500)
         
-        time.sleep(0.5)
+        # Fill email/username - try multiple selectors
+        email_filled = False
+        email_selectors = [
+            'input[name="email"]',
+            'input[placeholder*="email"]',
+            'input[placeholder*="username"]',
+            'input[type="text"]'
+        ]
+        
+        for selector in email_selectors:
+            try:
+                inputs = page.locator(selector)
+                if inputs.count() > 0:
+                    inputs.first.fill(email_or_username)
+                    email_filled = True
+                    print(f"Filled email using: {selector}")
+                    break
+            except:
+                continue
         
         # Fill password
-        password_input = page.locator('input[type="password"], input[placeholder*="Password"]')
-        print(f"Password input count: {password_input.count()}")
-        if password_input.count() > 0:
-            password_input.first.click()
-            password_input.first.fill(password)
-            print("Filled password")
-        else:
-            print("ERROR: No password input found!")
+        password_filled = False
+        password_selectors = [
+            'input[type="password"]',
+            'input[name="password"]',
+            'input[placeholder*="password"]'
+        ]
+        
+        for selector in password_selectors:
+            try:
+                inputs = page.locator(selector)
+                if inputs.count() > 0:
+                    inputs.first.fill(password)
+                    password_filled = True
+                    print(f"Filled password using: {selector}")
+                    break
+            except:
+                continue
+        
+        if not email_filled or not password_filled:
+            print("Could not find email or password fields")
             return False
         
-        time.sleep(0.5)
-        
         # Click login button
-        login_btn = page.locator('button[data-e2e="login-button"], button:has-text("Log in"), button[type="submit"]')
-        print(f"Login button count: {login_btn.count()}")
+        page.wait_for_timeout(500)
+        login_btn = page.locator('button:has-text("Log in"), button[type="submit"], button:has-text("Login")')
         if login_btn.count() > 0:
             login_btn.first.click()
             print("Clicked login button")
-        else:
-            print("WARNING: No login button found, pressing Enter instead")
-            page.keyboard.press("Enter")
         
-        time.sleep(3)
-        take_screenshot(username)
-        update_account(username, current_task="Credentials submitted - waiting...")
+        update_account(username, current_task="Credentials submitted")
         return True
+        
     except Exception as e:
-        print(f"Login with credentials failed: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Login error: {e}")
         return False
 
 def submit_verification_code(username, code):
@@ -383,4 +426,3 @@ def press_key(username, key):
         except:
             return False
     return False
-
