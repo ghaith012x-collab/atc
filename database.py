@@ -13,12 +13,10 @@ def init_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tiktok_username TEXT UNIQUE,
-            access_token TEXT,
-            refresh_token TEXT,
-            expires_at INTEGER,
-            connected INTEGER DEFAULT 0,
+            username TEXT UNIQUE,
             category TEXT DEFAULT 'dance',
+            session_path TEXT,
+            connected INTEGER DEFAULT 0,
             enabled INTEGER DEFAULT 0,
             status TEXT DEFAULT 'Disconnected',
             current_task TEXT DEFAULT 'Idle',
@@ -38,14 +36,14 @@ def get_all_accounts():
 
 def get_account(username):
     conn = get_db()
-    row = conn.execute("SELECT * FROM accounts WHERE tiktok_username = ?", (username,)).fetchone()
+    row = conn.execute("SELECT * FROM accounts WHERE username = ?", (username,)).fetchone()
     conn.close()
     return dict(row) if row else None
 
 def update_account(username, **kwargs):
     conn = get_db()
     for key, value in kwargs.items():
-        conn.execute(f"UPDATE accounts SET {key} = ? WHERE tiktok_username = ?", (value, username))
+        conn.execute(f"UPDATE accounts SET {key} = ? WHERE username = ?", (value, username))
     conn.commit()
     conn.close()
 
@@ -53,8 +51,8 @@ def add_account(username, category="dance"):
     conn = get_db()
     try:
         conn.execute(
-            "INSERT INTO accounts (tiktok_username, category) VALUES (?, ?)",
-            (username, category)
+            "INSERT INTO accounts (username, category, session_path) VALUES (?, ?, ?)",
+            (username, category, f"sessions/{username}")
         )
         conn.commit()
         return True
@@ -65,6 +63,6 @@ def add_account(username, category="dance"):
 
 def delete_account(username):
     conn = get_db()
-    conn.execute("DELETE FROM accounts WHERE tiktok_username = ?", (username,))
+    conn.execute("DELETE FROM accounts WHERE username = ?", (username,))
     conn.commit()
     conn.close()
