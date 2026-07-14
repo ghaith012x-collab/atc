@@ -25,6 +25,22 @@ def dashboard():
     return render_template("site.html", accounts=accounts)
 
 
+# TikTok Verification Route (Very Reliable)
+@app.route("/tiktok-verify")
+def tiktok_verify():
+    return '''<!DOCTYPE html>
+<html>
+<head>
+    <meta name="tiktok-developers-site-verification" content="9zDEz8Tl3nAHkVKtlV1PzqUKojknYUbF">
+    <title>TikTok Verification</title>
+</head>
+<body>
+    <h1>TikTok Developer Verification</h1>
+    <p>Verification tag is present.</p>
+</body>
+</html>''', 200, {'Content-Type': 'text/html'}
+
+
 @app.route("/api/accounts")
 def api_accounts():
     return jsonify(get_all_accounts())
