@@ -33,7 +33,6 @@ def take_screenshot(username):
         page = browser_sessions[username]["page"]
         screenshot_bytes = page.screenshot()
         img = Image.open(io.BytesIO(screenshot_bytes))
-        img = img.resize((1280, 720))
         screenshots[username] = img
     except:
         screenshots[username] = create_placeholder(username, "Screenshot error")
@@ -139,34 +138,24 @@ def connect_account(username):
                 pass
         
         if logged_in:
-            # Try to get the TikTok username
+            # Get the TikTok username by navigating to profile page
             try:
-                # Navigate to profile to get username
-                profile_link = page.locator('a[href*="/@"]').first
-                if profile_link.count() > 0:
-                    href = profile_link.get_attribute("href")
-                    if href and "/@" in href:
-                        tiktok_username = href.split("/@")[-1].split("?")[0].split("/")[0]
+                page.goto("https://www.tiktok.com/profile", timeout=15000)
+                page.wait_for_load_state("networkidle", timeout=10000)
+                time.sleep(2)
+                
+                # The profile page URL redirects to /@username
+                current_url = page.url
+                if "/@" in current_url:
+                    tiktok_username = current_url.split("/@")[-1].split("?")[0].split("/")[0]
+                
+                # Fallback: read from page content
+                if not tiktok_username:
+                    title_el = page.locator('h1[data-e2e="user-title"], h2[data-e2e="user-subtitle"], [data-e2e="user-title"]').first
+                    if title_el.count() > 0:
+                        tiktok_username = title_el.text_content().strip().lstrip("@")
             except:
                 pass
-            
-            if not tiktok_username:
-                # Try clicking profile icon and reading from profile page
-                try:
-                    page.goto("https://www.tiktok.com/profile", timeout=15000)
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                    time.sleep(2)
-                    # Get username from the profile page URL or h1/h2
-                    current_url = page.url
-                    if "/@" in current_url:
-                        tiktok_username = current_url.split("/@")[-1].split("?")[0].split("/")[0]
-                    else:
-                        # Try to get from page content
-                        title_el = page.locator('h1[data-e2e="user-title"], h2[data-e2e="user-subtitle"]').first
-                        if title_el.count() > 0:
-                            tiktok_username = title_el.text_content().strip().lstrip("@")
-                except:
-                    pass
             
             task_msg = f"Session verified - @{tiktok_username}" if tiktok_username else "Session verified"
             update_account(username, connected=1, status="Connected", current_task=task_msg)
