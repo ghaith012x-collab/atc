@@ -71,22 +71,21 @@ def connect_account(username):
         page.goto("https://www.tiktok.com/login", timeout=30000)
         take_screenshot(username)
         
-        # Auto click "Use phone / email / username" - VERY AGGRESSIVE + RELIABLE
+        # Auto click "Use phone / email / username" - MAXIMUM AGGRESSIVE VERSION
         try:
             print("Attempting to auto-click login options...")
-            page.wait_for_timeout(4500)
+            page.wait_for_timeout(5000)
             
             clicked = False
             
-            # Method 1: Click the second channel item (most common)
+            # Method 1: Click second channel item
             try:
                 items = page.locator('div[data-e2e="channel-item"]')
                 if items.count() >= 2:
-                    item = items.nth(1)
-                    item.click(force=True)
-                    page.wait_for_timeout(2500)
+                    items.nth(1).click(force=True)
+                    page.wait_for_timeout(3000)
                     clicked = True
-                    print("✓ SUCCESS: Clicked second channel item")
+                    print("✓ Clicked using nth(1)")
             except Exception as e:
                 print(f"Method 1 failed: {e}")
             
@@ -96,35 +95,70 @@ def connect_account(username):
                     btn = page.get_by_text("Use phone / email / username", exact=False)
                     if btn.count() > 0:
                         btn.first.click(force=True)
-                        page.wait_for_timeout(2500)
+                        page.wait_for_timeout(3000)
                         clicked = True
-                        print("✓ SUCCESS: Clicked by text")
+                        print("✓ Clicked by text")
                 except Exception as e:
                     print(f"Method 2 failed: {e}")
             
-            # Method 3: Click any element containing "phone" or "email"
+            # Method 3: Click any element with "phone" or "email"
             if not clicked:
                 try:
                     element = page.locator('div:has-text("phone"), div:has-text("email")').first
                     if element.is_visible():
                         element.click(force=True)
-                        page.wait_for_timeout(2500)
+                        page.wait_for_timeout(3000)
                         clicked = True
-                        print("✓ SUCCESS: Clicked phone/email element")
+                        print("✓ Clicked phone/email element")
                 except Exception as e:
                     print(f"Method 3 failed: {e}")
             
-            # ONLY update status if we actually clicked
+            # Method 4: JavaScript click
+            if not clicked:
+                try:
+                    page.evaluate("""
+                        () => {
+                            const items = document.querySelectorAll('div[data-e2e="channel-item"]');
+                            if (items.length >= 2) items[1].click();
+                        }
+                    """)
+                    page.wait_for_timeout(3000)
+                    clicked = True
+                    print("✓ Clicked using JavaScript")
+                except Exception as e:
+                    print(f"Method 4 failed: {e}")
+            
+            # Method 5: Click all possible buttons
+            if not clicked:
+                try:
+                    page.evaluate("""
+                        () => {
+                            const allDivs = document.querySelectorAll('div');
+                            for (let div of allDivs) {
+                                if (div.innerText && (div.innerText.includes('phone') || div.innerText.includes('email'))) {
+                                    div.click();
+                                    break;
+                                }
+                            }
+                        }
+                    """)
+                    page.wait_for_timeout(3000)
+                    clicked = True
+                    print("✓ Clicked using broad JavaScript")
+                except Exception as e:
+                    print(f"Method 5 failed: {e}")
+            
+            # Update status ONLY if click was successful
             if clicked:
                 update_account(username, current_task="Clicked phone/email option")
-                print("✓ STATUS UPDATED: Clicked phone/email option")
+                print("✓ SUCCESS: Clicked phone/email option")
                 
                 # Try to click "Log in with email or username"
                 try:
-                    page.wait_for_timeout(2500)
-                    email_login = page.get_by_text("Log in with email or username", exact=False)
-                    if email_login.count() > 0:
-                        email_login.first.click(force=True)
+                    page.wait_for_timeout(3000)
+                    email_btn = page.get_by_text("Log in with email or username", exact=False)
+                    if email_btn.count() > 0:
+                        email_btn.first.click(force=True)
                         print("✓ Clicked 'Log in with email or username'")
                         update_account(username, current_task="Ready for login form")
                 except:
