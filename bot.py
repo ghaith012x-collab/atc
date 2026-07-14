@@ -168,3 +168,38 @@ def delete_account_session(username):
     session_path = f"sessions/{username}"
     if os.path.exists(session_path):
         shutil.rmtree(session_path, ignore_errors=True)
+
+
+# ==================== REMOTE CONTROL ====================
+def click_browser(username, x, y):
+    """Click at specific coordinates in the browser"""
+    if username in browser_sessions:
+        try:
+            page = browser_sessions[username]["page"]
+            page.mouse.click(x, y)
+            return True
+        except:
+            return False
+    return False
+
+def type_in_browser(username, text):
+    """Type text in the browser"""
+    if username in browser_sessions:
+        try:
+            page = browser_sessions[username]["page"]
+            page.keyboard.type(text)
+            return True
+        except:
+            return False
+    return False
+
+def press_key(username, key):
+    """Press a key (Enter, Backspace, etc.)"""
+    if username in browser_sessions:
+        try:
+            page = browser_sessions[username]["page"]
+            page.keyboard.press(key)
+            return True
+        except:
+            return False
+    return False

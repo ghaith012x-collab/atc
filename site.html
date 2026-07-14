@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TikTok Auto Poster</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: system-ui; background:#0f0f0f; color:#fff; margin:0; padding:20px; }
+        .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:30px; }
+        h1 { background:linear-gradient(90deg,#ff0050,#00f2ea); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+        
+        .add-form { background:#1a1a1a; padding:20px; border-radius:16px; margin-bottom:30px; border:1px solid #333; }
+        .account-card { background:#1a1a1a; border-radius:16px; padding:24px; margin-bottom:24px; border:1px solid #333; }
+        
+        .live-cam { background:#111; border:3px solid #333; border-radius:14px; overflow:hidden; margin-bottom:20px; position:relative; }
+        .live-cam img { width:100%; height:220px; object-fit:cover; display:block; }
+        .live-label { position:absolute; top:12px; left:12px; background:#ff0050; color:white; font-size:10px; padding:2px 10px; border-radius:9999px; font-weight:700; }
+        
+        .info-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:20px; }
+        .info-item { background:#222; padding:12px; border-radius:10px; }
+        .info-label { font-size:11px; color:#888; }
+        
+        .status { padding:4px 14px; border-radius:9999px; font-size:13px; font-weight:600; }
+        .connected { background:#00c85320; color:#00c853; border:1px solid #00c853; }
+        .disconnected { background:#ff525220; color:#ff5252; border:1px solid #ff5252; }
+        
+        button { padding:11px 20px; border-radius:8px; font-weight:600; border:none; cursor:pointer; font-size:14px; }
+        .btn-connect { background:#ff0050; color:white; flex:1; }
+        .btn-start { background:#00c853; color:white; }
+        .btn-stop { background:#ff5252; color:white; }
+        .btn-delete { background:#444; color:#ccc; }
+        .controls { display:flex; gap:10px; flex-wrap:wrap; margin-top:20px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>TikTok Auto Poster</h1>
+        <div>{{ accounts|length }} Accounts</div>
+    </div>
+
+    <div class="add-form">
+        <h3 style="margin:0 0 15px 0;">Add New Account</h3>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <input type="text" id="new-username" placeholder="@username">
+            <select id="new-category">
+                <option value="dance">Dance</option>
+                <option value="comedy">Comedy</option>
+                <option value="gaming">Gaming</option>
+                <option value="horror">Horror</option>
+                <option value="story">Story Animation</option>
+                <option value="memes">Memes</option>
+            </select>
+            <button onclick="addAccount()" style="background:#ff0050;color:white;">Add Account</button>
+        </div>
+    </div>
+
+    {% for acc in accounts %}
+    <div class="account-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="font-size:22px;font-weight:600;">{{ acc.username }}</div>
+            {% if acc.connected %}
+                <span class="status connected">🟢 Connected</span>
+            {% else %}
+                <span class="status disconnected">🔴 Not Connected</span>
+            {% endif %}
+        </div>
+
+        <div class="live-cam">
+            <div class="live-label">LIVE</div>
+            <img id="cam-{{ acc.username }}" src="/live/{{ acc.username }}?t={{ range(10000)|random }}">
+        </div>
+
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="info-label">CATEGORY</div>
+                <div style="font-weight:600;">{{ acc.category }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">STATUS</div>
+                <div style="font-weight:600;">{{ acc.status }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">CURRENT TASK</div>
+                <div style="font-weight:600;" id="task-{{ acc.username }}">{{ acc.current_task }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">NEXT POST</div>
+                <div style="font-weight:600;">{{ acc.next_post or '—' }}</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            {% if not acc.connected %}
+                <button onclick="connectAccount('{{ acc.username }}')" class="btn-connect">
+                    Connect TikTok
+                </button>
+            {% else %}
+                <button onclick="openRemoteBrowser('{{ acc.username }}')" class="btn-connect">
+                    🖥️ Open Remote Browser
+                </button>
+                <button onclick="startAutomation('{{ acc.username }}')" class="btn-start">▶ Start</button>
+                <button onclick="stopAutomation('{{ acc.username }}')" class="btn-stop">■ Stop</button>
+            {% endif %}
+            <button onclick="deleteAccount('{{ acc.username }}')" class="btn-delete">Delete</button>
+        </div>
+    </div>
+    {% endfor %}
+
+    <script>
+        function addAccount() {
+            const username = document.getElementById('new-username').value.trim();
+            const category = document.getElementById('new-category').value;
+            if (!username) return alert("Enter username");
+            
+            fetch('/api/add', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, category})
+            }).then(() => location.reload());
+        }
+        
+        function connectAccount(username) {
+            fetch('/connect/' + username)
+                .then(() => {
+                    alert("Browser started. Please login to TikTok.");
+                    setTimeout(() => location.reload(), 4000);
+                });
+        }
+        
+        function startAutomation(username) {
+            fetch('/api/start/' + username, {method: 'POST'}).then(() => location.reload());
+        }
+        
+        function stopAutomation(username) {
+            fetch('/api/stop/' + username, {method: 'POST'}).then(() => location.reload());
+        }
+        
+        function deleteAccount(username) {
+            if (!confirm("Delete this account?")) return;
+            fetch('/api/delete/' + username, {method: 'POST'}).then(() => location.reload());
+        }
+        
+        function refreshCams() {
+            document.querySelectorAll('[id^="cam-"]').forEach(img => {
+                const username = img.id.replace('cam-', '');
+                img.src = `/live/${username}?t=` + Date.now();
+            });
+        }
+        
+        function updateTasks() {
+            fetch('/api/accounts')
+                .then(r => r.json())
+                .then(data => {
+                    data.forEach(acc => {
+                        const el = document.getElementById('task-' + acc.username);
+                        if (el) el.textContent = acc.current_task || 'Idle';
+                    });
+                });
+        }
+        
+        setInterval(refreshCams, 1000);
+        setInterval(updateTasks, 4000);
+
+        // ==================== REMOTE BROWSER ====================
+        let currentRemoteUser = null;
+        
+        function openRemoteBrowser(username) {
+            currentRemoteUser = username;
+            document.getElementById('remoteModal').style.display = 'block';
+            document.getElementById('remoteTitle').innerText = 'Remote Browser - ' + username;
+            
+            // Load live view
+            const img = document.getElementById('remoteView');
+            img.src = '/live/' + username + '?t=' + Date.now();
+            
+            // Auto refresh
+            window.remoteInterval = setInterval(() => {
+                if (currentRemoteUser) {
+                    img.src = '/live/' + currentRemoteUser + '?t=' + Date.now();
+                }
+            }, 1000);
+        }
+        
+        function closeRemoteBrowser() {
+            document.getElementById('remoteModal').style.display = 'none';
+            clearInterval(window.remoteInterval);
+            currentRemoteUser = null;
+        }
+        
+        // Click on remote browser image
+        function setupRemoteClick() {
+            const img = document.getElementById('remoteView');
+            img.onclick = function(e) {
+                if (!currentRemoteUser) return;
+                
+                const rect = img.getBoundingClientRect();
+                const x = Math.round((e.clientX - rect.left) * (1280 / rect.width));
+                const y = Math.round((e.clientY - rect.top) * (720 / rect.height));
+                
+                fetch('/api/click/' + currentRemoteUser, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({x: x, y: y})
+                });
+            };
+        }
+        
+        function sendText() {
+            if (!currentRemoteUser) return;
+            const text = document.getElementById('remoteText').value;
+            if (!text) return;
+            
+            fetch('/api/type/' + currentRemoteUser, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text})
+            });
+            document.getElementById('remoteText').value = '';
+        }
+        
+        function sendKey(key) {
+            if (!currentRemoteUser) return;
+            fetch('/api/key/' + currentRemoteUser, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({key: key})
+            });
+        }
+        
+        // Setup when page loads
+        window.onload = function() {
+            setupRemoteClick();
+        };
+    </script>
+    
+    <!-- Remote Browser Modal -->
+    <div id="remoteModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:1000;">
+        <div style="max-width:860px; margin:20px auto; background:#1a1a1a; border-radius:16px; padding:20px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h3 id="remoteTitle" style="margin:0;">Remote Browser</h3>
+                <button onclick="closeRemoteBrowser()" style="background:#ff5252; color:white; padding:8px 16px; border-radius:8px; border:none;">Close</button>
+            </div>
+            
+            <img id="remoteView" style="width:100%; max-width:800px; border:3px solid #333; border-radius:12px; cursor:crosshair;">
+            
+            <div style="margin-top:15px; display:flex; gap:10px; flex-wrap:wrap;">
+                <input type="text" id="remoteText" placeholder="Type here..." 
+                       style="flex:1; padding:12px; background:#222; border:1px solid #444; color:white; border-radius:8px;"
+                       onkeypress="if(event.key==='Enter') sendText()">
+                <button onclick="sendText()" style="background:#00c853; color:white; padding:12px 20px; border-radius:8px; border:none;">Send Text</button>
+                <button onclick="sendKey('Enter')" style="background:#444; color:white; padding:12px 16px; border-radius:8px; border:none;">Enter</button>
+                <button onclick="sendKey('Backspace')" style="background:#444; color:white; padding:12px 16px; border-radius:8px; border:none;">⌫</button>
+            </div>
+            
+            <p style="color:#888; font-size:13px; margin-top:10px;">
+                Click on the browser image above to interact. Type in the box and press Send.
+            </p>
+        </div>
+    </div>
+</body>
+</html>

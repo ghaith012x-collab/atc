@@ -4,7 +4,8 @@ from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
     connect_account, start_automation, stop_automation, 
-    delete_account_session, screenshots
+    delete_account_session, screenshots,
+    click_browser, type_in_browser, press_key
 )
 
 app = Flask(__name__)
@@ -91,6 +92,32 @@ def live(username):
     screenshots[username].save(buffer, "JPEG", quality=80)
     buffer.seek(0)
     return Response(buffer.getvalue(), mimetype="image/jpeg")
+
+
+# ==================== REMOTE CONTROL ROUTES ====================
+@app.route("/api/click/<username>", methods=["POST"])
+def api_click(username):
+    data = request.json
+    x = data.get("x", 0)
+    y = data.get("y", 0)
+    success = click_browser(username, x, y)
+    return jsonify({"success": success})
+
+
+@app.route("/api/type/<username>", methods=["POST"])
+def api_type(username):
+    data = request.json
+    text = data.get("text", "")
+    success = type_in_browser(username, text)
+    return jsonify({"success": success})
+
+
+@app.route("/api/key/<username>", methods=["POST"])
+def api_key(username):
+    data = request.json
+    key = data.get("key", "Enter")
+    success = press_key(username, key)
+    return jsonify({"success": success})
 
 
 if __name__ == "__main__":
