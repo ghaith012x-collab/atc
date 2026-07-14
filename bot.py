@@ -1037,10 +1037,12 @@ def automation_worker(username):
             # --- Step 1: search TikTok in the browser ---
             log(f"[{username}] Step 1: Searching '{category}'")
             update_account(username, current_task=f"Step 1: Searching '{category}'...")
-            
+
             # CAPTCHA CHECK during search flow (isolated)
-            handle_captcha_if_present(page, username)
-            
+            page = _get_page(username)
+            if page:
+                handle_captcha_if_present(page, username)
+
             search_ok = search_on_tiktok(username, category)
             if not search_ok:
                 log(f"[{username}] search step failed, using API fallback")
