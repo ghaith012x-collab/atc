@@ -88,9 +88,10 @@ def connect_account(username):
         
         threading.Thread(target=screenshot_loop, daemon=True).start()
         
-    except Exception as e:
-        error_msg = str(e)[:80]
-        update_account(username, status="Error", current_task=error_msg)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        update_account(username, status="Error", current_task="See Railway logs")
 
 def automation_worker(username):
     while True:
