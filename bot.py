@@ -79,119 +79,120 @@ def connect_account(username):
             print("Attempting to auto-click 'Use phone / email / username'...")
             update_account(username, current_task="Looking for login options...")
             
-            clicked_phone_email = False
-            
-            # Attempt 1: Text-based locator (most reliable)
+            # Step 1: Click "Use phone / email / username"
+            clicked_step1 = False
             try:
                 phone_btn = page.locator("text=Use phone / email / username")
                 phone_btn.wait_for(state="visible", timeout=10000)
                 phone_btn.click()
-                # VERIFY: Wait for the next screen to actually appear
-                page.locator("text=Log in with email or username").wait_for(state="visible", timeout=8000)
-                clicked_phone_email = True
-                print("✓ Clicked 'Use phone / email / username' - next screen confirmed.")
+                time.sleep(3)
+                clicked_step1 = True
+                print("✓ Clicked 'Use phone / email / username'.")
             except (TimeoutError, Exception) as e:
-                print(f"Attempt 1 failed: {e}")
+                print(f"Step 1 text locator failed: {e}")
             
-            # Attempt 2: data-e2e channel-item (TikTok's own attribute)
-            if not clicked_phone_email:
+            if not clicked_step1:
                 try:
                     items = page.locator('div[data-e2e="channel-item"]')
                     items.first.wait_for(state="visible", timeout=5000)
-                    count = items.count()
-                    # "Use phone / email / username" is typically the 2nd item (index 1)
-                    if count >= 2:
+                    if items.count() >= 2:
                         items.nth(1).click()
-                        page.locator("text=Log in with email or username").wait_for(state="visible", timeout=8000)
-                        clicked_phone_email = True
-                        print("✓ Clicked channel-item nth(1) - next screen confirmed.")
+                        time.sleep(3)
+                        clicked_step1 = True
+                        print("✓ Clicked channel-item nth(1).")
                 except (TimeoutError, Exception) as e:
-                    print(f"Attempt 2 failed: {e}")
+                    print(f"Step 1 channel-item failed: {e}")
             
-            # Attempt 3: JavaScript click with verification
-            if not clicked_phone_email:
-                try:
-                    page.evaluate("""
-                        () => {
-                            const items = document.querySelectorAll('div[data-e2e="channel-item"]');
-                            for (let item of items) {
-                                if (item.innerText.toLowerCase().includes('phone') || item.innerText.toLowerCase().includes('email')) {
-                                    item.click();
-                                    return true;
-                                }
-                            }
-                            return false;
-                        }
-                    """)
-                    page.locator("text=Log in with email or username").wait_for(state="visible", timeout=8000)
-                    clicked_phone_email = True
-                    print("✓ Clicked via JavaScript - next screen confirmed.")
-                except (TimeoutError, Exception) as e:
-                    print(f"Attempt 3 failed: {e}")
-            
-            if clicked_phone_email:
+            if not clicked_step1:
+                update_account(username, current_task="Click 'Use phone/email' manually")
+                print("✗ Could not click step 1.")
+            else:
                 update_account(username, current_task="Clicking email/username login...")
                 take_screenshot(username)
-                time.sleep(2)
                 
-                # Now click "Log in with email or username" link
-                clicked_email_login = False
+                # Step 2: Click "Log in with email or username" link
+                # This is an <a> tag on the phone number page
+                clicked_step2 = False
+                
+                # Method 1: Direct anchor click
                 try:
-                    # Method 1: Click the link/anchor with that text
-                    email_link = page.locator("a:has-text('Log in with email or username')")
-                    if email_link.count() > 0 and email_link.first.is_visible():
-                        email_link.first.click()
-                        clicked_email_login = True
-                        print("✓ Clicked email login link (anchor).")
-                except Exception as e:
-                    print(f"Email link method 1 failed: {e}")
+                    email_link = page.locator("a").filter(has_text="Log in with email or username")
+                    email_link.wait_for(state="visible", timeout=5000)
+                    email_link.click()
+                    time.sleep(2)
+                    clicked_step2 = True
+                    print("✓ Clicked 'Log in with email or username' (anchor filter).")
+                except (TimeoutError, Exception) as e:
+                    print(f"Step 2 method 1 failed: {e}")
                 
-                if not clicked_email_login:
+                # Method 2: get_by_role link
+                if not clicked_step2:
                     try:
-                        # Method 2: Text locator (broader)
-                        email_btn = page.get_by_text("Log in with email or username", exact=False)
-                        if email_btn.count() > 0 and email_btn.first.is_visible():
-                            email_btn.first.click()
-                            clicked_email_login = True
-                            print("✓ Clicked email login (text locator).")
-                    except Exception as e:
-                        print(f"Email link method 2 failed: {e}")
+                        email_link = page.get_by_role("link", name="Log in with email or username")
+                        email_link.click()
+                        time.sleep(2)
+                        clicked_step2 = True
+                        print("✓ Clicked 'Log in with email or username' (role link).")
+                    except (TimeoutError, Exception) as e:
+                        print(f"Step 2 method 2 failed: {e}")
                 
-                if not clicked_email_login:
+                # Method 3: XPath for anchor containing text
+                if not clicked_step2:
                     try:
-                        # Method 3: JavaScript - find and click any element with that text
-                        page.evaluate("""
+                        email_link = page.locator("xpath=//a[contains(text(), 'email or username')]")
+                        if email_link.count() > 0:
+                            email_link.first.click()
+                            time.sleep(2)
+                            clicked_step2 = True
+                            print("✓ Clicked 'Log in with email or username' (XPath).")
+                    except (TimeoutError, Exception) as e:
+                        print(f"Step 2 method 3 failed: {e}")
+                
+                # Method 4: JavaScript click on the specific anchor
+                if not clicked_step2:
+                    try:
+                        result = page.evaluate("""
                             () => {
-                                const allEls = document.querySelectorAll('a, div, span, p');
-                                for (let el of allEls) {
-                                    if (el.innerText && el.innerText.trim().toLowerCase().includes('log in with email or username')) {
-                                        el.click();
+                                const links = document.querySelectorAll('a');
+                                for (let link of links) {
+                                    if (link.textContent.toLowerCase().includes('email or username')) {
+                                        link.click();
                                         return true;
                                     }
                                 }
                                 return false;
                             }
                         """)
-                        clicked_email_login = True
-                        print("✓ Clicked email login (JavaScript).")
+                        if result:
+                            time.sleep(2)
+                            clicked_step2 = True
+                            print("✓ Clicked 'Log in with email or username' (JavaScript).")
                     except Exception as e:
-                        print(f"Email link method 3 failed: {e}")
+                        print(f"Step 2 method 4 failed: {e}")
                 
-                if clicked_email_login:
-                    # VERIFY: Wait for the actual login form inputs to appear
+                # Method 5: Direct navigation to email login URL
+                if not clicked_step2:
                     try:
-                        page.locator('input[name="username"], input[placeholder*="Email"], input[placeholder*="email"]').first.wait_for(state="visible", timeout=8000)
+                        page.goto("https://www.tiktok.com/login/phone-or-email/email", timeout=15000)
+                        time.sleep(2)
+                        clicked_step2 = True
+                        print("✓ Navigated directly to email login page.")
+                    except Exception as e:
+                        print(f"Step 2 method 5 (direct nav) failed: {e}")
+                
+                # VERIFY: Check if the email/username input field is now visible
+                if clicked_step2:
+                    try:
+                        page.locator('input[name="username"], input[placeholder*="Email or username"]').first.wait_for(state="visible", timeout=8000)
                         update_account(username, current_task="Login form ready - enter credentials")
-                        print("✓ Login form is confirmed visible.")
-                    except (TimeoutError, Exception) as e:
-                        print(f"Login form didn't appear: {e}")
-                        update_account(username, current_task="Login form not detected - try manually")
+                        print("✓ Login form confirmed visible.")
+                    except (TimeoutError, Exception):
+                        # The click said it worked but form didn't appear
+                        update_account(username, current_task="Stuck on phone page - click email link manually")
+                        print("✗ Login form NOT visible despite click. Stuck on phone page.")
                 else:
                     update_account(username, current_task="Click 'Log in with email or username' manually")
                     print("✗ Could not click email login link.")
-            else:
-                update_account(username, current_task="Click 'Use phone/email' manually")
-                print("✗ Could not auto-click. User must click manually.")
                 
         except Exception as e:
             print(f"Auto-click error: {e}")
