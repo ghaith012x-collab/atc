@@ -71,14 +71,71 @@ def connect_account(username):
         page.goto("https://www.tiktok.com/login", timeout=30000)
         take_screenshot(username)
         
-        # Auto click "Use phone / email / username" - REAL CLICKING VERSION
+        # Auto click "Use phone / email / username" - VERY AGGRESSIVE + RELIABLE
         try:
             print("Attempting to auto-click login options...")
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(4500)
             
             clicked = False
             
-            # === METHOD 1: Click the second channel item (most reliable) ===
+            # Method 1: Click the second channel item (most common)
+            try:
+                items = page.locator('div[data-e2e="channel-item"]')
+                if items.count() >= 2:
+                    item = items.nth(1)
+                    item.click(force=True)
+                    page.wait_for_timeout(2500)
+                    clicked = True
+                    print("✓ SUCCESS: Clicked second channel item")
+            except Exception as e:
+                print(f"Method 1 failed: {e}")
+            
+            # Method 2: Click by text
+            if not clicked:
+                try:
+                    btn = page.get_by_text("Use phone / email / username", exact=False)
+                    if btn.count() > 0:
+                        btn.first.click(force=True)
+                        page.wait_for_timeout(2500)
+                        clicked = True
+                        print("✓ SUCCESS: Clicked by text")
+                except Exception as e:
+                    print(f"Method 2 failed: {e}")
+            
+            # Method 3: Click any element containing "phone" or "email"
+            if not clicked:
+                try:
+                    element = page.locator('div:has-text("phone"), div:has-text("email")').first
+                    if element.is_visible():
+                        element.click(force=True)
+                        page.wait_for_timeout(2500)
+                        clicked = True
+                        print("✓ SUCCESS: Clicked phone/email element")
+                except Exception as e:
+                    print(f"Method 3 failed: {e}")
+            
+            # ONLY update status if we actually clicked
+            if clicked:
+                update_account(username, current_task="Clicked phone/email option")
+                print("✓ STATUS UPDATED: Clicked phone/email option")
+                
+                # Try to click "Log in with email or username"
+                try:
+                    page.wait_for_timeout(2500)
+                    email_login = page.get_by_text("Log in with email or username", exact=False)
+                    if email_login.count() > 0:
+                        email_login.first.click(force=True)
+                        print("✓ Clicked 'Log in with email or username'")
+                        update_account(username, current_task="Ready for login form")
+                except:
+                    pass
+            else:
+                update_account(username, current_task="Click 'Use phone/email' manually")
+                print("✗ FAILED: Could not auto-click")
+                
+        except Exception as e:
+            print(f"Auto-click error: {e}")
+            update_account(username, current_task="Click 'Use phone/email' manually")
             try:
                 items = page.locator('div[data-e2e="channel-item"]')
                 if items.count() >= 2:
