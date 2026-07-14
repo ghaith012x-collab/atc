@@ -123,6 +123,28 @@
             {{ accounts|length }} Accounts
         </div>
     </div>
+
+    <!-- ADD ACCOUNT FORM -->
+    <div style="background:#1a1a1a; padding:20px; border-radius:16px; margin-bottom:30px; border:1px solid #333;">
+        <h3 style="margin:0 0 15px 0;">Add New Account</h3>
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+            <input type="text" id="new-username" placeholder="@username" 
+                   style="flex:1; min-width:200px; padding:12px; background:#222; border:1px solid #444; border-radius:8px; color:white;">
+            <select id="new-category" style="padding:12px; background:#222; border:1px solid #444; border-radius:8px; color:white;">
+                <option value="dance">Dance</option>
+                <option value="comedy">Comedy</option>
+                <option value="gaming">Gaming</option>
+                <option value="food">Food</option>
+                <option value="fashion">Fashion</option>
+                <option value="tech">Tech</option>
+                <option value="horror">Horror</option>
+            </select>
+            <button onclick="addAccount()" 
+                    style="background:#ff0050; color:white; padding:12px 28px; border-radius:8px; border:none; font-weight:600;">
+                Add Account
+            </button>
+        </div>
+    </div>
     
     <div id="accounts-container">
         {% for acc in accounts %}
@@ -146,7 +168,7 @@
             <div class="info-grid">
                 <div class="info-item">
                     <div class="info-label">CURRENT TASK</div>
-                    <div class="info-value" id="task-{{ username }}">{{ acc.current_task }}</div>
+                    <div class="info-value" id="task-{{ username }}">{{ acc.task or 'Idle' }}</div>
                 </div>
                 <div class="info-item">
                     <div class="info-label">LAST POST</div>
@@ -189,19 +211,24 @@
                         statusEl.textContent = acc.status;
                         statusEl.className = 'status ' + (acc.status === 'Running' ? 'status-running' : 'status-stopped');
                         
-                        document.getElementById('task-' + username).textContent = acc.task || 'Idle';
-                        document.getElementById('last-' + username).textContent = acc.last_post || 'Never';
-                        document.getElementById('next-' + username).textContent = acc.next_post || '-';
+                        const taskEl = document.getElementById('task-' + username);
+                        if (taskEl) taskEl.textContent = acc.task || 'Idle';
+                        
+                        const lastEl = document.getElementById('last-' + username);
+                        if (lastEl) lastEl.textContent = acc.last_post || 'Never';
+                        
+                        const nextEl = document.getElementById('next-' + username);
+                        if (nextEl) nextEl.textContent = acc.next_post || '-';
                         
                         const startBtn = document.getElementById('start-btn-' + username);
                         const stopBtn = document.getElementById('stop-btn-' + username);
                         
                         if (acc.enabled) {
-                            startBtn.style.display = 'none';
-                            stopBtn.style.display = 'inline-block';
+                            if (startBtn) startBtn.style.display = 'none';
+                            if (stopBtn) stopBtn.style.display = 'inline-block';
                         } else {
-                            startBtn.style.display = 'inline-block';
-                            stopBtn.style.display = 'none';
+                            if (startBtn) startBtn.style.display = 'inline-block';
+                            if (stopBtn) stopBtn.style.display = 'none';
                         }
                     }
                 });
@@ -223,6 +250,32 @@
         function stopAutomation(username) {
             fetch('/api/stop/' + username, { method: 'POST' })
                 .then(() => setTimeout(updateDashboard, 600));
+        }
+        
+        function addAccount() {
+            const username = document.getElementById('new-username').value.trim();
+            const category = document.getElementById('new-category').value;
+            
+            if (!username) {
+                alert('Please enter a username');
+                return;
+            }
+            
+            fetch('/api/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username, category: category })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Account added successfully!');
+                    document.getElementById('new-username').value = '';
+                    location.reload(); // Refresh to show new account
+                } else {
+                    alert('Failed to add account');
+                }
+            });
         }
         
         function connectToTikTok(username) {
