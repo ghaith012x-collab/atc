@@ -1,47 +1,46 @@
 import os
 import sqlite3
 import threading
+import time
 import io
-from flask import (
-    Flask,
-    render_template,
-    jsonify,
-    request,
-    Response
-)
+from datetime import datetime
+from flask import Flask, render_template, jsonify, request, Response
 from PIL import Image
 from bot import (
-    start_bot,
-    stop_bot,
-    screenshots,
-    start_browser,
-    browser_sessions
+    start_bot, stop_bot, 
+    connect_account, delete_account,
+    screenshots, get_account_status
 )
-from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 DATABASE = "accounts.db"
 
-# ==========================
-# DATABASE
-# ==========================
 def db():
     return sqlite3.connect(DATABASE)
 
 def init_db():
     conn = db()
     conn.execute("""
-    CREATE TABLE IF NOT EXISTS accounts(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        category TEXT,
-        enabled INTEGER DEFAULT 0,
-        connected INTEGER DEFAULT 0,
-        status TEXT DEFAULT 'Stopped',
-        task TEXT DEFAULT 'Idle',
-        last_post TEXT,
-        next_post TEXT
-    )
+        CREATE TABLE IF NOT EXISTS accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            category TEXT DEFAULT 'dance',
+            connected INTEGER DEFAULT 0,
+            enabled INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'Stopped',
+            task TEXT DEFAULT 'Idle',
+            last_post TEXT,
+            next_post TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            action TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
     """)
     conn.commit()
     conn.close()
@@ -49,23 +48,25 @@ def init_db():
 def get_accounts():
     conn = db()
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM accounts").fetchall()
+    rows = conn.execute("SELECT * FROM accounts ORDER BY created_at DESC").fetchall()
     conn.close()
     return [dict(x) for x in rows]
 
 def update_account(username, **kwargs):
     conn = db()
     for key, value in kwargs.items():
-        conn.execute(
-            f"UPDATE accounts SET {key}=? WHERE username=?",
-            (value, username)
-        )
+        conn.execute(f"UPDATE accounts SET {key}=? WHERE username=?", (value, username))
     conn.commit()
     conn.close()
 
-# ==========================
-# DASHBOARD
-# ==========================
+def log_action(username, action):
+    conn = db()
+    conn.execute("INSERT INTO logs (username, action) VALUES (?, ?)", (username, action))
+    conn.commit()
+    conn.close()
+
+# ==================== ROUTES ====================
+
 @app.route("/")
 def home():
     return render_template("site.html", accounts=get_accounts())
@@ -74,50 +75,42 @@ def home():
 def api_accounts():
     return jsonify(get_accounts())
 
-# ==========================
-# ADD ACCOUNT
-# ==========================
 @app.route("/api/add", methods=["POST"])
 def add_account():
     data = request.json
-    username = data["username"]
-    category = data.get("category", "horror")
-    conn = db()
-    conn.execute(
-        "INSERT INTO accounts (username, category, connected) VALUES (?,?,0)",
-        (username, category)
-    )
-    conn.commit()
-    conn.close()
+    username = data.get("username", "").strip()
+    category = data.get("category", "dance")
+    
+    if not username.startswith("@"):
+        username = "@" + username
+    
+    try:
+        conn = db()
+        conn.execute(
+            "INSERT INTO accounts (username, category) VALUES (?, ?)",
+            (username, category)
+        )
+        conn.commit()
+        conn.close()
+        log_action(username, "Account added")
+        return {"success": True}
+    except sqlite3.IntegrityError:
+        return {"success": False, "error": "Account already exists"}
+
+@app.route("/api/delete/<username>", methods=["POST"])
+def delete(username):
+    delete_account(username)
     return {"success": True}
 
-# ==========================
-# CONNECT TIKTOK (with Playwright)
-# ==========================
 @app.route("/connect/tiktok/<username>")
 def connect_tiktok(username):
-    try:
-        # Always headless on Railway
-        session = start_browser(username, headless=True)
-        page = session["page"]
-        
-        # Mark account as connected
-        update_account(username, connected=1, status="Connected", task="Ready to automate")
-        
-        return jsonify({
-            "success": True,
-            "message": "Account connected successfully (headless)",
-            "account": username
-        })
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": str(e)
-        })
+    def connect_thread():
+        connect_account(username)
+    
+    thread = threading.Thread(target=connect_thread, daemon=True)
+    thread.start()
+    return jsonify({"success": True, "message": "Connecting..."})
 
-# ==========================
-# START / STOP BOT
-# ==========================
 @app.route("/api/start/<username>", methods=["POST"])
 def start(username):
     update_account(username, enabled=1, status="Starting")
@@ -126,45 +119,24 @@ def start(username):
 
 @app.route("/api/stop/<username>", methods=["POST"])
 def stop(username):
-    update_account(username, enabled=0, status="Stopping")
+    update_account(username, enabled=0)
     stop_bot(username)
     return {"success": True}
 
-# ==========================
-# LIVE SCREEN
-# ==========================
 @app.route("/live/<username>")
 def live(username):
     if username not in screenshots:
-        img = Image.new("RGB", (800, 450), "#111")
+        img = Image.new("RGB", (800, 450), "#111111")
         screenshots[username] = img
     
     buffer = io.BytesIO()
-    screenshots[username].save(buffer, "JPEG", quality=85)
+    screenshots[username].save(buffer, "JPEG", quality=80)
     buffer.seek(0)
     return Response(buffer.getvalue(), mimetype="image/jpeg")
 
-# ==========================
-# INSTALL PLAYWRIGHT BROWSERS (runs on every start)
-# ==========================
-def install_browser():
-    try:
-        import subprocess
-        subprocess.run(
-            ["playwright", "install", "--with-deps", "chromium"],
-            check=True,
-            capture_output=True
-        )
-        print("✓ Chromium browser installed successfully")
-    except Exception as e:
-        print(f"Browser install warning: {e}")
+# ==================== START ====================
 
-install_browser()
-init_db()
-
-# ==========================
-# START SERVER
-# ==========================
 if __name__ == "__main__":
+    init_db()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
