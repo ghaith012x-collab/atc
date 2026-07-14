@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import time
 import json
@@ -12,6 +13,14 @@ from playwright.sync_api import sync_playwright, TimeoutError
 from PIL import Image
 import io
 from database import get_account, update_account
+
+# Force unbuffered output so Railway logs show prints immediately
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+def log(msg):
+    """Print with flush for Railway logs"""
+    print(msg, flush=True)
 
 workers = {}
 browser_sessions = {}
@@ -659,11 +668,14 @@ def upload_video_to_tiktok(username, file_path, caption):
 # ---------------------------------------------------------------------------
 
 def automation_worker(username):
+    log(f"[{username}] === AUTOMATION WORKER STARTED ===")
     posted_video_ids = set()
 
-    while True:
+    try:
+      while True:
         account = get_account(username)
         if not account or not account["enabled"]:
+            log(f"[{username}] Worker stopping: enabled={account.get('enabled') if account else 'no account'}")
             break
 
         if not account["connected"]:
@@ -685,12 +697,14 @@ def automation_worker(username):
             category = account.get("category") or "dance"
 
             # --- Step 1: search TikTok in the browser ---
+            log(f"[{username}] Step 1: Searching '{category}'")
             update_account(username, current_task=f"Step 1: Searching '{category}'...")
             search_ok = search_on_tiktok(username, category)
             if not search_ok:
-                print(f"[{username}] search step failed, using API fallback")
+                log(f"[{username}] search step failed, using API fallback")
 
             # --- Step 2: find a viral video in the results ---
+            log(f"[{username}] Step 2: Finding viral video...")
             update_account(username, current_task="Step 2: Finding viral video...")
             video_info = find_viral_video(username, category)
             if not video_info:
@@ -705,6 +719,7 @@ def automation_worker(username):
                 continue
 
             # --- Step 3: download without watermark (tikwm.com API) ---
+            log(f"[{username}] Step 3: Downloading video (no watermark)...")
             update_account(username, current_task="Step 3: Downloading video (no watermark)...")
             video_file = download_video_no_watermark(username, video_info)
             if not video_file:
@@ -718,8 +733,10 @@ def automation_worker(username):
             print(f"[{username}] caption: {caption}")
 
             # --- Steps 4-6: upload, add caption, click Post ---
+            log(f"[{username}] Step 5: Uploading to TikTok...")
             update_account(username, current_task="Step 5: Uploading to TikTok...")
             success = upload_video_to_tiktok(username, video_file, caption)
+            log(f"[{username}] Upload result: {success}")
 
             if success:
                 posted_video_ids.add(video_info.get("video_id"))
@@ -740,12 +757,14 @@ def automation_worker(username):
                     time.sleep(10)
                     waited += 10
             else:
+                log(f"[{username}] Post failed, retrying in 3 min")
                 update_account(username, current_task="Post failed, retrying in 3 min")
                 time.sleep(180)
 
         except Exception as e:
             import traceback
             traceback.print_exc()
+            log(f"[{username}] Step error: {e}")
             update_account(username, current_task=f"Error: {str(e)[:50]}")
             time.sleep(30)
         finally:
@@ -756,7 +775,14 @@ def automation_worker(username):
                 except Exception:
                     pass
 
+    except Exception as fatal:
+      import traceback
+      traceback.print_exc()
+      log(f"[{username}] FATAL ERROR in automation worker: {fatal}")
+      update_account(username, current_task=f"Fatal error: {str(fatal)[:50]}")
+
     update_account(username, status="Stopped", current_task="Idle")
+    log(f"[{username}] === AUTOMATION WORKER STOPPED ===")
     workers.pop(username, None)
 
 
