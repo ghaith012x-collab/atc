@@ -214,8 +214,13 @@
             const img = event.currentTarget;
             const rect = img.getBoundingClientRect();
             
-            const x = Math.round((event.clientX - rect.left) * (1280 / rect.width));
-            const y = Math.round((event.clientY - rect.top) * (720 / rect.height));
+            // Get the real size of the image (not the container)
+            const naturalWidth = img.naturalWidth || 1280;
+            const naturalHeight = img.naturalHeight || 720;
+            
+            // Calculate click position based on actual image size
+            const x = Math.round((event.clientX - rect.left) * (naturalWidth / rect.width));
+            const y = Math.round((event.clientY - rect.top) * (naturalHeight / rect.height));
             
             // Create visual click cursor
             createClickCursor(event.clientX, event.clientY, rect);

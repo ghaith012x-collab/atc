@@ -32,7 +32,8 @@ def take_screenshot(username):
         page = browser_sessions[username]["page"]
         screenshot_bytes = page.screenshot()
         img = Image.open(io.BytesIO(screenshot_bytes))
-        img = img.resize((800, 450))
+        # Always keep 1280x720 for accurate clicking
+        img = img.resize((1280, 720))
         screenshots[username] = img
     except:
         screenshots[username] = create_placeholder(username, "Screenshot error")
