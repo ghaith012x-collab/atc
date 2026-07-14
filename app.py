@@ -95,7 +95,7 @@ def live(username):
 
 
 # ==================== REMOTE CONTROL ROUTES ====================
-@app.route("/api/click/<username>", methods=["POST"])
+@app.route("/api/click/<path:username>", methods=["POST"])
 def api_click(username):
     data = request.json
     x = data.get("x", 0)
