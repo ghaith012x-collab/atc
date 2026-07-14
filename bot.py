@@ -49,15 +49,13 @@ def connect_account(username):
         
         context = pw.chromium.launch_persistent_context(
             user_data_dir=session_dir,
-            headless=False,                    # ← Visible browser
+            headless=True,
             viewport={"width": 1280, "height": 720},
             args=[
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--single-process",
-                "--start-maximized"
+                "--disable-gpu"
             ]
         )
         
@@ -70,10 +68,16 @@ def connect_account(username):
         }
         
         update_account(username, current_task="Waiting for login...")
-        page.goto("https://www.tiktok.com/login", timeout=30000)
-        take_screenshot(username)
         
-        # Wait for successful login
+        # Try to go to TikTok
+        try:
+            page.goto("https://www.tiktok.com/login", timeout=45000)
+            take_screenshot(username)
+        except Exception as nav_error:
+            update_account(username, status="Error", current_task="Navigation failed")
+            return
+        
+        # Wait for login (user does this manually)
         try:
             page.wait_for_selector(
                 '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"]',
@@ -81,7 +85,7 @@ def connect_account(username):
             )
             update_account(username, connected=1, status="Connected", current_task="Session saved")
         except:
-            update_account(username, status="Login timeout", current_task="Please login manually")
+            update_account(username, status="Login timeout", current_task="Login manually")
         
         # Live screenshot loop
         def screenshot_loop():
@@ -92,7 +96,7 @@ def connect_account(username):
         threading.Thread(target=screenshot_loop, daemon=True).start()
         
     except Exception as e:
-        error_msg = str(e)[:80]
+        error_msg = str(e)[:90]
         update_account(username, status="Error", current_task=error_msg)
 
 def automation_worker(username):

@@ -9,6 +9,16 @@ from bot import (
 
 app = Flask(__name__)
 
+# Auto install Chromium on Railway
+def install_browser():
+    try:
+        import subprocess
+        subprocess.run(["playwright", "install", "chromium"], check=True, capture_output=True)
+        print("✓ Chromium installed")
+    except Exception as e:
+        print(f"Browser install note: {e}")
+
+install_browser()
 init_db()
 
 
