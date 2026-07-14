@@ -1,8 +1,9 @@
+
 import os
 import time
 import threading
 from datetime import datetime, timedelta
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError
 from PIL import Image
 import io
 from database import get_account, update_account
@@ -71,159 +72,65 @@ def connect_account(username):
         page.goto("https://www.tiktok.com/login", timeout=30000)
         take_screenshot(username)
         
-        # Auto click "Use phone / email / username" - MAXIMUM AGGRESSIVE VERSION
+        clicked_phone_email_option = False
         try:
-            print("Attempting to auto-click login options...")
-            page.wait_for_timeout(5000)
+            print("Attempting to auto-click 'Use phone / email / username'...")
+            # Wait for the login options to appear, using a more generic selector or text-based approach
+            # Prioritize text-based locator as it's more robust to DOM changes
             
-            clicked = False
-            
-            # Method 1: Click second channel item
+            # Attempt 1: Find by text 'Use phone / email / username'
             try:
-                items = page.locator('div[data-e2e="channel-item"]')
-                if items.count() >= 2:
-                    items.nth(1).click(force=True)
-                    page.wait_for_timeout(3000)
-                    clicked = True
-                    print("✓ Clicked using nth(1)")
-            except Exception as e:
-                print(f"Method 1 failed: {e}")
+                phone_email_btn = page.locator("text=Use phone / email / username")
+                phone_email_btn.wait_for(state="visible", timeout=10000)
+                phone_email_btn.click()
+                clicked_phone_email_option = True
+                print("✓ Clicked 'Use phone / email / username' using text locator.")
+            except TimeoutError:
+                print("Attempt 1 failed: 'Use phone / email / username' text not found or not visible.")
             
-            # Method 2: Click by text
-            if not clicked:
+            # Attempt 2: If not clicked, try a more generic button/div that might contain the text
+            if not clicked_phone_email_option:
                 try:
-                    btn = page.get_by_text("Use phone / email / username", exact=False)
-                    if btn.count() > 0:
-                        btn.first.click(force=True)
-                        page.wait_for_timeout(3000)
-                        clicked = True
-                        print("✓ Clicked by text")
-                except Exception as e:
-                    print(f"Method 2 failed: {e}")
+                    # This XPath looks for a div or button that contains the text, case-insensitive
+                    phone_email_btn_xpath = page.locator("xpath=//div[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'use phone / email / username')] | //button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'use phone / email / username')]")
+                    phone_email_btn_xpath.wait_for(state="visible", timeout=10000)
+                    phone_email_btn_xpath.click()
+                    clicked_phone_email_option = True
+                    print("✓ Clicked 'Use phone / email / username' using XPath.")
+                except TimeoutError:
+                    print("Attempt 2 failed: 'Use phone / email / username' XPath not found or not visible.")
             
-            # Method 3: Click any element with "phone" or "email"
-            if not clicked:
+            # Attempt 3: Fallback to a more general approach if previous attempts fail
+            if not clicked_phone_email_option:
                 try:
-                    element = page.locator('div:has-text("phone"), div:has-text("email")').first
-                    if element.is_visible():
-                        element.click(force=True)
-                        page.wait_for_timeout(3000)
-                        clicked = True
-                        print("✓ Clicked phone/email element")
-                except Exception as e:
-                    print(f"Method 3 failed: {e}")
-            
-            # Method 4: JavaScript click
-            if not clicked:
-                try:
-                    page.evaluate("""
-                        () => {
-                            const items = document.querySelectorAll('div[data-e2e="channel-item"]');
-                            if (items.length >= 2) items[1].click();
-                        }
-                    """)
-                    page.wait_for_timeout(3000)
-                    clicked = True
-                    print("✓ Clicked using JavaScript")
-                except Exception as e:
-                    print(f"Method 4 failed: {e}")
-            
-            # Method 5: Click all possible buttons
-            if not clicked:
-                try:
-                    page.evaluate("""
-                        () => {
-                            const allDivs = document.querySelectorAll('div');
-                            for (let div of allDivs) {
-                                if (div.innerText && (div.innerText.includes('phone') || div.innerText.includes('email'))) {
-                                    div.click();
-                                    break;
-                                }
-                            }
-                        }
-                    """)
-                    page.wait_for_timeout(3000)
-                    clicked = True
-                    print("✓ Clicked using broad JavaScript")
-                except Exception as e:
-                    print(f"Method 5 failed: {e}")
-            
-            # Update status ONLY if click was successful
-            if clicked:
+                    # Look for a button or div that is likely a login option, and click the second one (common pattern)
+                    # This is a less specific but sometimes effective fallback
+                    generic_login_option = page.locator("div[role='button'], button[role='button']").nth(1)
+                    generic_login_option.wait_for(state="visible", timeout=5000)
+                    generic_login_option.click()
+                    clicked_phone_email_option = True
+                    print("✓ Clicked a generic login option as fallback.")
+                except TimeoutError:
+                    print("Attempt 3 failed: Generic login option not found or not visible.")
+
+            if clicked_phone_email_option:
                 update_account(username, current_task="Clicked phone/email option")
-                print("✓ SUCCESS: Clicked phone/email option")
+                print("✓ SUCCESS: Clicked phone/email option.")
                 
-                # Try to click "Log in with email or username"
+                # Now, wait and try to click "Log in with email or username"
                 try:
-                    page.wait_for_timeout(3000)
-                    email_btn = page.get_by_text("Log in with email or username", exact=False)
-                    if email_btn.count() > 0:
-                        email_btn.first.click(force=True)
-                        print("✓ Clicked 'Log in with email or username'")
-                        update_account(username, current_task="Ready for login form")
-                except:
-                    pass
+                    print("Attempting to click 'Log in with email or username'...")
+                    email_login_btn = page.locator("text=Log in with email or username")
+                    email_login_btn.wait_for(state="visible", timeout=10000)
+                    email_login_btn.click()
+                    print("✓ Clicked 'Log in with email or username'.")
+                    update_account(username, current_task="Ready for login form")
+                except TimeoutError:
+                    print("✗ FAILED: Could not click 'Log in with email or username'.")
+                    update_account(username, current_task="Click 'Log in with email or username' manually")
             else:
                 update_account(username, current_task="Click 'Use phone/email' manually")
-                print("✗ FAILED: Could not auto-click")
-                
-        except Exception as e:
-            print(f"Auto-click error: {e}")
-            update_account(username, current_task="Click 'Use phone/email' manually")
-            try:
-                items = page.locator('div[data-e2e="channel-item"]')
-                if items.count() >= 2:
-                    second_item = items.nth(1)
-                    second_item.click(force=True)
-                    page.wait_for_timeout(2000)
-                    clicked = True
-                    print("✓ REAL CLICK: Clicked second channel item")
-            except Exception as e:
-                print(f"Method 1 failed: {e}")
-            
-            # === METHOD 2: Click by exact text ===
-            if not clicked:
-                try:
-                    btn = page.get_by_text("Use phone / email / username", exact=False)
-                    if btn.count() > 0:
-                        btn.first.click(force=True)
-                        page.wait_for_timeout(2000)
-                        clicked = True
-                        print("✓ REAL CLICK: Clicked by text")
-                except Exception as e:
-                    print(f"Method 2 failed: {e}")
-            
-            # === METHOD 3: Click any element containing "phone" ===
-            if not clicked:
-                try:
-                    phone_btn = page.locator('div:has-text("phone"), div:has-text("email")').first
-                    if phone_btn.is_visible():
-                        phone_btn.click(force=True)
-                        page.wait_for_timeout(2000)
-                        clicked = True
-                        print("✓ REAL CLICK: Clicked phone/email element")
-                except Exception as e:
-                    print(f"Method 3 failed: {e}")
-            
-            # === ONLY UPDATE STATUS IF CLICK WAS SUCCESSFUL ===
-            if clicked:
-                update_account(username, current_task="Clicked phone/email option")
-                print("✓ STATUS UPDATED: Clicked phone/email option")
-                
-                # Try to click "Log in with email or username"
-                try:
-                    page.wait_for_timeout(2000)
-                    email_login = page.get_by_text("Log in with email or username", exact=False)
-                    if email_login.count() > 0:
-                        email_login.first.click(force=True)
-                        print("✓ Clicked 'Log in with email or username'")
-                        update_account(username, current_task="Ready for login form")
-                except:
-                    pass
-            else:
-                # BE HONEST - Do not lie
-                update_account(username, current_task="Click 'Use phone/email' manually")
-                print("✗ FAILED: Could not click - user must click manually")
+                print("✗ FAILED: Could not auto-click 'Use phone / email / username'. User must click manually.")
                 
         except Exception as e:
             print(f"Auto-click error: {e}")
@@ -236,7 +143,7 @@ def connect_account(username):
                 timeout=300000
             )
             update_account(username, connected=1, status="Connected", current_task="Session saved")
-        except:
+        except TimeoutError:
             update_account(username, status="Login timeout", current_task="Please login")
         
         # Live screenshot loop (0.5 seconds)
@@ -383,7 +290,7 @@ def login_with_credentials(username, email_or_username, password):
         update_account(username, current_task="Credentials submitted")
         return True
     except Exception as e:
-        print(f"Login error: {e}")
+        print(f"Login with credentials failed: {e}")
         return False
 
 def submit_verification_code(username, code):
@@ -431,3 +338,4 @@ def press_key(username, key):
         except:
             return False
     return False
+
