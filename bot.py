@@ -12,7 +12,271 @@ import requests
 from playwright.sync_api import sync_playwright, TimeoutError
 from PIL import Image
 import io
+import math
 from database import get_account, update_account
+
+# === CAPTCHA SOLVER (isolated addition) ===
+try:
+    from captcha_solver import solve_rotate_captcha, solve_rotate_captcha_robust
+    CAPTCHA_SOLVER_AVAILABLE = True
+except Exception:
+    CAPTCHA_SOLVER_AVAILABLE = False
+    print("[captcha] Offline solver module not available (optional)")
+
+# ------------------------------------------------------------
+# TikTok Captcha Detection + Solver (isolated, non-breaking)
+# ------------------------------------------------------------
+
+def _detect_tiktok_captcha(page) -> Optional[str]:
+    """Returns 'rotate', 'slide', or None if no captcha detected."""
+    try:
+        # Common TikTok captcha indicators (rotate/whirl is our target)
+        rotate_indicators = [
+            'text:has-text("Rotate")',
+            '[data-e2e*="rotate"]',
+            '.captcha-rotate',
+            'canvas[style*="transform"]',
+            'img[src*="rotate"]',
+            'div[role="dialog"] img',
+            'text:has-text("whirl")',
+            'text:has-text("Turn")',
+        ]
+        
+        for sel in rotate_indicators:
+            try:
+                if page.locator(sel).count() > 0:
+                    # Further confirm it's rotate type
+                    if any(x in sel.lower() for x in ['rotate', 'whirl', 'turn']):
+                        return "rotate"
+                    # Check text content
+                    txt = page.locator(sel).first.inner_text(timeout=800) or ""
+                    if any(kw in txt.lower() for kw in ["rotate", "turn", "whirl", "align"]):
+                        return "rotate"
+            except:
+                continue
+        
+        # Generic dialog check (fallback)
+        dialogs = page.locator('div[role="dialog"], .verify-container, [class*="captcha"]')
+        if dialogs.count() > 0:
+            try:
+                content = dialogs.first.inner_text(timeout=1200) or ""
+                if any(k in content.lower() for k in ["rotate", "turn the", "align the", "whirl"]):
+                    return "rotate"
+            except:
+                pass
+        
+        return None
+    except Exception:
+        return None
+
+
+def _extract_rotate_images(page) -> Tuple[Optional[bytes], Optional[bytes]]:
+    """
+    Tries to extract outer and inner images from a TikTok rotate captcha.
+    Returns (outer_bytes, inner_bytes)
+    """
+    try:
+        # Strategy 1: Screenshot the entire captcha container
+        captcha_box = page.locator(
+            'div[role="dialog"], .verify-container, [class*="captcha"], [data-e2e*="verify"]'
+        ).first
+        
+        if captcha_box.count() == 0:
+            captcha_box = page.locator('body')
+        
+        full_bytes = captcha_box.screenshot(timeout=8000)
+        
+        # Strategy 2: Try to find and screenshot specific elements
+        outer = None
+        inner = None
+        
+        # Look for multiple canvas/img inside captcha area
+        canvases = page.locator('canvas')
+        imgs = page.locator('img')
+        
+        elements = []
+        for i in range(min(canvases.count(), 4)):
+            try:
+                elements.append(canvases.nth(i))
+            except: pass
+        for i in range(min(imgs.count(), 4)):
+            try:
+                elements.append(imgs.nth(i))
+            except: pass
+        
+        if len(elements) >= 2:
+            try:
+                outer = elements[0].screenshot(timeout=6000)
+                inner = elements[-1].screenshot(timeout=6000)
+            except:
+                pass
+        
+        # Fallback: use full screenshot for both (the solver is robust)
+        if not outer:
+            outer = full_bytes
+        if not inner:
+            inner = full_bytes
+        
+        return outer, inner
+        
+    except Exception as e:
+        print(f"[captcha] Image extraction error: {str(e)[:80]}")
+        return None, None
+
+
+def solve_tiktok_rotate_captcha(page, username: str = "") -> bool:
+    """
+    Detects and solves TikTok rotate/whirl captcha using our offline OpenCV solver.
+    Returns True if solved (or no captcha was present).
+    """
+    if not CAPTCHA_SOLVER_AVAILABLE:
+        print("[captcha] Solver not loaded — skipping")
+        return False
+    
+    try:
+        captcha_type = _detect_tiktok_captcha(page)
+        if not captcha_type:
+            return True  # no captcha
+        
+        print(f"[{username}] CAPTCHA DETECTED: {captcha_type}")
+        update_account(username, current_task="Solving captcha...")
+        
+        if captcha_type == "rotate":
+            outer, inner = _extract_rotate_images(page)
+            
+            if not outer or not inner:
+                print(f"[{username}] Failed to extract captcha images")
+                return False
+            
+            # Use the robust version (edge continuity + feature matching)
+            angle, conf = solve_rotate_captcha_robust(outer, inner, debug=True)
+            
+            if abs(angle) < 2:
+                print(f"[{username}] Very small angle ({angle}°), might already be aligned")
+            
+            print(f"[{username}] Solved angle: {angle}° (confidence: {conf}%)")
+            
+            # === Simulate the rotation on TikTok ===
+            # TikTok rotate captchas usually have a circular handle or slider
+            try:
+                # Find the slider / drag handle
+                slider = page.locator(
+                    '[data-e2e*="slider"], .slider, input[type=range], '
+                    'div[role="slider"], .captcha-slider, button[aria-label*="slide"]'
+                ).first
+                
+                if slider.count() == 0:
+                    # Fallback: look for the round draggable element
+                    slider = page.locator('div[style*="cursor"], circle, [class*="handle"]').first
+                
+                if slider.count() > 0:
+                    box = slider.bounding_box(timeout=5000)
+                    if box:
+                        # TikTok: drag distance ≈ (angle / 360) * slider_width
+                        slider_width = box['width'] or 280
+                        drag_distance = (angle / 360.0) * slider_width * 1.05
+                        
+                        # Start from left side of slider
+                        start_x = box['x'] + 15
+                        start_y = box['y'] + box['height'] / 2
+                        
+                        # Perform human-like drag
+                        page.mouse.move(start_x, start_y)
+                        page.mouse.down()
+                        time.sleep(0.12)
+                        
+                        # Smooth drag
+                        steps = max(8, int(abs(drag_distance) / 18))
+                        for i in range(steps):
+                            progress = (i + 1) / steps
+                            curr_x = start_x + (drag_distance * progress)
+                            page.mouse.move(curr_x, start_y, steps=1)
+                            time.sleep(0.018)
+                        
+                        page.mouse.up()
+                        time.sleep(1.2)
+                        
+                        print(f"[{username}] Dragged slider by ~{drag_distance:.0f}px for {angle}°")
+                    else:
+                        print(f"[{username}] Could not get slider box")
+                else:
+                    # Alternative: try to rotate by clicking/dragging directly on the circle
+                    print(f"[{username}] No slider found — trying direct circle drag")
+                    circle = page.locator('canvas, .captcha-circle, [class*="rotate-container"]').first
+                    if circle.count() > 0:
+                        cbox = circle.bounding_box()
+                        if cbox:
+                            cx = cbox['x'] + cbox['width']/2
+                            cy = cbox['y'] + cbox['height']/2
+                            page.mouse.move(cx, cy)
+                            page.mouse.down()
+                            # drag in arc
+                            for i in range(12):
+                                rad = math.radians(angle * (i/12))
+                                nx = cx + math.cos(rad) * 80
+                                ny = cy + math.sin(rad) * 80
+                                page.mouse.move(nx, ny)
+                                time.sleep(0.04)
+                            page.mouse.up()
+                            time.sleep(0.8)
+                
+                # Verify / submit
+                time.sleep(2)
+                take_screenshot(username)
+                
+                # Click verify / submit if button appears
+                for btn_text in ["Verify", "Submit", "Confirm", "Done"]:
+                    try:
+                        btn = page.locator(f'button:has-text("{btn_text}"), [data-e2e*="{btn_text.lower()}"]').first
+                        if btn.count() > 0 and btn.is_visible():
+                            btn.click(timeout=4000)
+                            time.sleep(1.5)
+                            break
+                    except:
+                        continue
+                
+                print(f"[{username}] Rotate captcha solution submitted")
+                time.sleep(2.5)
+                return True
+                
+            except Exception as drag_err:
+                print(f"[{username}] Drag simulation error: {str(drag_err)[:70]}")
+                return False
+        
+        return False  # unsupported captcha type for now
+        
+    except Exception as e:
+        print(f"[{username}] Captcha solver error: {str(e)[:90]}")
+        return False
+
+
+def handle_captcha_if_present(page, username: str) -> bool:
+    """Safe wrapper. Returns True if no captcha or captcha was handled."""
+    try:
+        # Quick check
+        captcha_type = _detect_tiktok_captcha(page)
+        if not captcha_type:
+            return True
+        
+        print(f"[{username}] Captcha detected — attempting to solve...")
+        
+        solved = solve_tiktok_rotate_captcha(page, username)
+        
+        if solved:
+            # Give TikTok time to process
+            time.sleep(3)
+            # Check if captcha is gone
+            if _detect_tiktok_captcha(page) is None:
+                print(f"[{username}] ✓ Captcha solved successfully")
+                update_account(username, current_task="Captcha solved")
+                return True
+            else:
+                print(f"[{username}] Captcha still present after solve attempt")
+                return False
+        return False
+    except Exception as e:
+        print(f"[{username}] handle_captcha error: {e}")
+        return False
 
 # Force unbuffered output so Railway logs show prints immediately
 sys.stdout.reconfigure(line_buffering=True)
@@ -175,6 +439,7 @@ def connect_account(username):
         except TimeoutError:
             pass
         time.sleep(3)
+        handle_captcha_if_present(page, username)  # <--- CAPTCHA SOLVER (isolated)
         take_screenshot(username)
 
         # Verify login by checking for profile icon or logged-in indicators
@@ -500,6 +765,9 @@ def upload_video_to_tiktok(username, file_path, caption):
     try:
         update_account(username, current_task="Opening TikTok upload page...")
         
+        # CAPTCHA CHECK (isolated)
+        handle_captcha_if_present(page, username)
+        
         # Try multiple upload URLs (TikTok changes these)
         upload_urls = [
             "https://www.tiktok.com/creator#/upload/upload",
@@ -768,6 +1036,10 @@ def automation_worker(username):
             # --- Step 1: search TikTok in the browser ---
             log(f"[{username}] Step 1: Searching '{category}'")
             update_account(username, current_task=f"Step 1: Searching '{category}'...")
+            
+            # CAPTCHA CHECK during search flow (isolated)
+            handle_captcha_if_present(page, username)
+            
             search_ok = search_on_tiktok(username, category)
             if not search_ok:
                 log(f"[{username}] search step failed, using API fallback")
