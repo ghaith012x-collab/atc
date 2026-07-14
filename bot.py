@@ -227,30 +227,58 @@ def click_browser(username, x, y):
 def login_with_credentials(username, email_or_username, password):
     """Fill login form with credentials"""
     if username not in browser_sessions:
+        print(f"login_with_credentials: No browser session for {username}")
+        print(f"Active sessions: {list(browser_sessions.keys())}")
         return False
     
     try:
         page = browser_sessions[username]["page"]
+        print(f"login_with_credentials: Page URL = {page.url}")
         
-        # Fill email/username
-        email_input = page.locator('input[name="email"], input[placeholder*="email"], input[placeholder*="username"]')
+        # Fill email/username - TikTok uses name="username" and placeholder="Email or username"
+        email_input = page.locator('input[name="username"], input[placeholder*="Email or username"], input[placeholder*="email"], input[placeholder*="username"]')
+        print(f"Email input count: {email_input.count()}")
         if email_input.count() > 0:
+            email_input.first.click()
             email_input.first.fill(email_or_username)
+            print(f"Filled email: {email_or_username}")
+        else:
+            print("ERROR: No email input found!")
+            return False
+        
+        time.sleep(0.5)
         
         # Fill password
-        password_input = page.locator('input[type="password"], input[name="password"]')
+        password_input = page.locator('input[type="password"], input[placeholder*="Password"]')
+        print(f"Password input count: {password_input.count()}")
         if password_input.count() > 0:
+            password_input.first.click()
             password_input.first.fill(password)
+            print("Filled password")
+        else:
+            print("ERROR: No password input found!")
+            return False
+        
+        time.sleep(0.5)
         
         # Click login button
-        login_btn = page.locator('button:has-text("Log in"), button[type="submit"]')
+        login_btn = page.locator('button[data-e2e="login-button"], button:has-text("Log in"), button[type="submit"]')
+        print(f"Login button count: {login_btn.count()}")
         if login_btn.count() > 0:
             login_btn.first.click()
+            print("Clicked login button")
+        else:
+            print("WARNING: No login button found, pressing Enter instead")
+            page.keyboard.press("Enter")
         
-        update_account(username, current_task="Credentials submitted")
+        time.sleep(3)
+        take_screenshot(username)
+        update_account(username, current_task="Credentials submitted - waiting...")
         return True
     except Exception as e:
         print(f"Login with credentials failed: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def submit_verification_code(username, code):
