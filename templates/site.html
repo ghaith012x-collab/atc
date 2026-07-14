@@ -94,6 +94,9 @@
                     Connect TikTok
                 </button>
             {% else %}
+                <button onclick="openRemoteBrowser('{{ acc.username }}')" class="btn-connect">
+                    🖥️ Open Remote Browser
+                </button>
                 <button onclick="startAutomation('{{ acc.username }}')" class="btn-start">▶ Start</button>
                 <button onclick="stopAutomation('{{ acc.username }}')" class="btn-stop">■ Stop</button>
             {% endif %}
@@ -156,6 +159,151 @@
         
         setInterval(refreshCams, 1000);
         setInterval(updateTasks, 4000);
+
+        // ==================== REMOTE BROWSER ====================
+        let currentRemoteUser = null;
+        let clickMode = false;
+        
+        function openRemoteBrowser(username) {
+            currentRemoteUser = username;
+            document.getElementById('remoteModal').style.display = 'block';
+            document.getElementById('remoteTitle').innerText = 'Remote Browser - ' + username;
+            
+            // Reset click mode
+            clickMode = false;
+            document.getElementById('clickModeBtn').style.background = '#ff0050';
+            document.getElementById('clickModeBtn').innerText = '🖱️ Click Mode';
+            
+            // Load live view
+            const img = document.getElementById('remoteView');
+            img.src = '/live/' + username + '?t=' + Date.now();
+            
+            // Auto refresh
+            window.remoteInterval = setInterval(() => {
+                if (currentRemoteUser) {
+                    img.src = '/live/' + currentRemoteUser + '?t=' + Date.now();
+                }
+            }, 1000);
+        }
+        
+        function closeRemoteBrowser() {
+            document.getElementById('remoteModal').style.display = 'none';
+            clearInterval(window.remoteInterval);
+            currentRemoteUser = null;
+            clickMode = false;
+        }
+        
+        function toggleClickMode() {
+            clickMode = !clickMode;
+            const btn = document.getElementById('clickModeBtn');
+            
+            if (clickMode) {
+                btn.style.background = '#00c853';
+                btn.innerText = '✅ Click Mode ON';
+            } else {
+                btn.style.background = '#ff0050';
+                btn.innerText = '🖱️ Click Mode';
+            }
+        }
+        
+        function handleRemoteClick(event) {
+            if (!currentRemoteUser || !clickMode) return;
+            
+            const img = event.currentTarget;
+            const rect = img.getBoundingClientRect();
+            
+            const x = Math.round((event.clientX - rect.left) * (1280 / rect.width));
+            const y = Math.round((event.clientY - rect.top) * (720 / rect.height));
+            
+            // Send click
+            fetch('/api/click/' + currentRemoteUser, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({x: x, y: y})
+            });
+            
+            // Turn off click mode after one click
+            clickMode = false;
+            const btn = document.getElementById('clickModeBtn');
+            btn.style.background = '#ff0050';
+            btn.innerText = '🖱️ Click Mode';
+        }
+        
+        function toggleFullscreen() {
+            const modal = document.getElementById('remoteModal');
+            if (!modal) return;
+            
+            if (!document.fullscreenElement) {
+                modal.requestFullscreen().catch(() => {});
+            } else {
+                document.exitFullscreen();
+            }
+        }
+        
+        function sendText() {
+            if (!currentRemoteUser) return;
+            const text = document.getElementById('remoteText').value;
+            if (!text) return;
+            
+            fetch('/api/type/' + currentRemoteUser, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text})
+            });
+            document.getElementById('remoteText').value = '';
+        }
+        
+        function sendKey(key) {
+            if (!currentRemoteUser) return;
+            fetch('/api/key/' + currentRemoteUser, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({key: key})
+            });
+        }
     </script>
+    
+    <!-- Remote Browser Modal -->
+    <div id="remoteModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:1000;">
+        <div style="max-width:860px; margin:20px auto; background:#1a1a1a; border-radius:16px; padding:20px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h3 id="remoteTitle" style="margin:0;">Remote Browser</h3>
+                <button onclick="closeRemoteBrowser()" style="background:#ff5252; color:white; padding:8px 16px; border-radius:8px; border:none;">Close</button>
+            </div>
+            
+            <!-- Remote Browser View -->
+            <div style="position: relative;">
+                <img id="remoteView" 
+                     style="width:100%; max-width:100%; border:3px solid #333; border-radius:12px; cursor:crosshair; display:block;"
+                     onclick="handleRemoteClick(event)">
+                
+                <!-- Fullscreen Button -->
+                <button onclick="toggleFullscreen()" 
+                        style="position:absolute; top:12px; right:12px; background:#ff0050; color:white; padding:8px 14px; border-radius:8px; border:none; font-size:13px; z-index:10;">
+                    Fullscreen
+                </button>
+            </div>
+            
+            <!-- Control Bar -->
+            <div style="margin-top:15px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                <button id="clickModeBtn" onclick="toggleClickMode()" 
+                        style="background:#ff0050; color:white; padding:12px 20px; border-radius:8px; border:none; font-weight:600;">
+                    🖱️ Click Mode
+                </button>
+                
+                <input type="text" id="remoteText" placeholder="Type here..." 
+                       style="flex:1; min-width:180px; padding:12px; background:#222; border:1px solid #444; color:white; border-radius:8px;"
+                       onkeypress="if(event.key==='Enter') sendText()">
+                
+                <button onclick="sendText()" style="background:#00c853; color:white; padding:12px 18px; border-radius:8px; border:none;">Send</button>
+                <button onclick="sendKey('Enter')" style="background:#444; color:white; padding:12px 16px; border-radius:8px; border:none;">↵</button>
+                <button onclick="sendKey('Backspace')" style="background:#444; color:white; padding:12px 16px; border-radius:8px; border:none;">⌫</button>
+            </div>
+            
+            <p style="color:#888; font-size:13px; margin-top:10px;">
+                Click on the browser image above to interact. Type in the box and press Send.
+            </p>
+        </div>
+    </div>
 </body>
 </html>
