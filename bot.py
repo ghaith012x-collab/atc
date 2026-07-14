@@ -354,67 +354,96 @@ def handle_captcha_if_present(page, username: str) -> bool:
 # NEW: Auto "Turn on" for TikTok automatic content checks dialog
 # -----------------------------------------------------------------
 def handle_content_check_dialog(page, username: str = "") -> bool:
-    """Automatically clicks 'Turn on' when TikTok shows the
-    'Turn on automatic content checks?' dialog.
-    
-    This appears after posting on some accounts.
+    """Extremely persistent 'Turn on' button clicker.
+    Keeps trying until it succeeds or times out.
     """
     if page is None:
         return False
+
     try:
-        # Look for the specific dialog
-        dialog = page.locator(
-            'div[role="dialog"]:has-text("automatic content checks"), '
-            'div[role="dialog"]:has-text("Turn on automatic")'
-        ).first
+        print(f"[{username}] Looking for 'Turn on automatic content checks?' dialog...")
 
-        if dialog.count() == 0:
-            # Broader fallback
-            dialog = page.locator('text="Turn on automatic content checks?"').first
-            if dialog.count() == 0:
-                return False
-
-        if not dialog.is_visible():
+        # Give the dialog time to appear after posting
+        for _ in range(6):
+            try:
+                dialogs = page.locator('div[role="dialog"]')
+                for i in range(min(dialogs.count(), 5)):
+                    d = dialogs.nth(i)
+                    if d.count() > 0 and d.is_visible():
+                        txt = (d.inner_text(timeout=700) or "").lower()
+                        if "turn on" in txt and ("content" in txt or "automatic" in txt or "check" in txt):
+                            print(f"[{username}] Found the content check dialog")
+                            dialog = d
+                            break
+                else:
+                    continue
+                break
+            except:
+                time.sleep(0.7)
+            time.sleep(0.8)
+        else:
             return False
 
-        print(f"[{username}] Detected 'Turn on automatic content checks' dialog")
+        print(f"[{username}] Dialog visible — hammering the 'Turn on' button...")
 
-        # Find and click the "Turn on" button (usually the red one)
-        turn_on_selectors = [
-            'button:has-text("Turn on")',
-            'button:has-text("Turn on") >> nth=0',
-            '[data-e2e*="turn-on"]',
-            'button.red',
-            'button[style*="background-color: rgb(255, 0, 80)"]',  # TikTok red
-            'div[role="dialog"] button:has-text("Turn")',
-        ]
+        # Try very hard for ~15 seconds
+        end = time.time() + 15
 
-        for sel in turn_on_selectors:
+        while time.time() < end:
             try:
-                btn = page.locator(sel).first
+                # 1. Direct "Turn on" text button
+                btn = page.locator('button:has-text("Turn on")').first
                 if btn.count() > 0 and btn.is_visible():
-                    btn.click(timeout=5000)
-                    print(f"[{username}] ✓ Auto-turned on content checks")
-                    time.sleep(1.5)
+                    btn.click(timeout=2500, force=True, no_wait_after=True)
+                    print(f"[{username}] ✓ Clicked 'Turn on' button")
+                    time.sleep(1.3)
                     return True
+
+                # 2. Any button containing "Turn"
+                btn2 = page.locator('button:has-text("Turn")').first
+                if btn2.count() > 0 and btn2.is_visible():
+                    btn2.click(timeout=2500, force=True, no_wait_after=True)
+                    print(f"[{username}] ✓ Clicked button with 'Turn'")
+                    time.sleep(1.3)
+                    return True
+
+                # 3. Red/pink buttons (TikTok style)
+                red = page.locator('button[style*="255, 0, 80"], button[style*="ff0050"]').first
+                if red.count() > 0 and red.is_visible():
+                    red.click(timeout=2500, force=True)
+                    print(f"[{username}] ✓ Clicked red button")
+                    time.sleep(1.3)
+                    return True
+
+                # 4. Last button in the dialog (very common)
+                buttons = page.locator('div[role="dialog"] button')
+                if buttons.count() > 0:
+                    last_btn = buttons.nth(buttons.count() - 1)
+                    if last_btn.is_visible():
+                        last_btn.click(timeout=2500, force=True)
+                        print(f"[{username}] ✓ Clicked last button in dialog")
+                        time.sleep(1.3)
+                        return True
+
+                # 5. Click the lower-right area of the dialog
+                try:
+                    box = page.locator('div[role="dialog"]').first.bounding_box(timeout=1500)
+                    if box:
+                        x = box['x'] + box['width'] * 0.78
+                        y = box['y'] + box['height'] * 0.75
+                        page.mouse.click(x, y)
+                        print(f"[{username}] ✓ Clicked lower-right area")
+                        time.sleep(1.2)
+                        return True
+                except:
+                    pass
+
             except:
-                continue
+                pass
 
-        # Fallback: click the rightmost prominent button in the dialog
-        try:
-            buttons = page.locator('div[role="dialog"] button')
-            if buttons.count() >= 2:
-                # Usually the last button is "Turn on"
-                last_btn = buttons.nth(buttons.count() - 1)
-                if last_btn.is_visible():
-                    last_btn.click(timeout=4000)
-                    print(f"[{username}] ✓ Clicked rightmost button (Turn on)")
-                    time.sleep(1.5)
-                    return True
-        except:
-            pass
+            time.sleep(random.uniform(0.35, 0.7))
 
-        print(f"[{username}] Could not find 'Turn on' button")
+        print(f"[{username}] Gave up trying to click 'Turn on'")
         return False
 
     except Exception as e:
@@ -874,28 +903,51 @@ def download_video_no_watermark(username, video_info):
 
 
 def generate_caption(video_info, category):
-    """Step 5 helper: build a caption similar to the original with hashtags."""
+    """Generate category-aware captions that actually match the content."""
     original = (video_info.get("title") or "").strip()
-
-    # Strip hashtags from the original title to get the plain text part
     plain = re.sub(r"#\w+", "", original).strip()
     plain = re.sub(r"\s{2,}", " ", plain)
-    if len(plain) > 100:
-        plain = plain[:100].rsplit(" ", 1)[0] + "..."
+    if len(plain) > 90:
+        plain = plain[:90].rsplit(" ", 1)[0]
 
-    # Collect hashtags: reuse a few from the original + the category pool
-    original_tags = re.findall(r"#\w+", original)
-    fallback_tag = "#" + re.sub(r"[^a-z0-9]", "", category.lower())
-    pool = CATEGORY_HASHTAGS.get(category.lower(), [fallback_tag, "#fyp", "#viral", "#trending"])
-    tags = []
-    for t in original_tags[:4] + pool:
-        if t.lower() not in [x.lower() for x in tags]:
-            tags.append(t)
-        if len(tags) >= 7:
-            break
+    cat = (category or "dance").lower()
 
-    caption = (plain + " " if plain else "") + " ".join(tags)
-    return caption.strip()[:150]  # keep well under TikTok's caption limit
+    # Category-specific caption templates (makes it feel real)
+    templates = {
+        "horror": [
+            "This actually gave me chills 😱",
+            "Would you survive this? 😭",
+            "Nightmare fuel fr",
+            "I can't unsee this...",
+            "This is actually terrifying",
+            "POV: you shouldn't have watched this at night",
+            plain or "This horror hit different",
+        ],
+        "dance": [
+            "The moves 🔥",
+            "This choreography is insane",
+            "Trying this rn",
+            "Dance of the day",
+            "The energy is unmatched",
+            plain or "This dance is too good",
+        ],
+        "comedy": [
+            "I can't stop laughing 😂",
+            "This is too real",
+            "The accuracy 💀",
+            plain or "This had me dying",
+        ],
+    }
+
+    base = random.choice(templates.get(cat, templates["dance"]))
+
+    # Add relevant hashtags
+    pool = CATEGORY_HASHTAGS.get(cat, ["#fyp", "#viral", "#trending"])
+    extra = ["#fyp", "#foryou", "#viral"]
+    all_tags = list(set(pool + extra))[:6]
+
+    caption = f"{base} {' '.join(all_tags)}"
+    return caption.strip()[:150]
 
 
 def upload_video_to_tiktok(username, file_path, caption):
@@ -1186,10 +1238,10 @@ def automation_worker(username):
             log(f"[{username}] Step 1: Searching '{category}'")
             update_account(username, current_task=f"Step 1: Searching '{category}'...")
 
-            # CAPTCHA CHECK during search flow (isolated)
             page = _get_page(username)
             if page:
                 handle_captcha_if_present(page, username)
+                handle_content_check_dialog(page, username)
 
             search_ok = search_on_tiktok(username, category)
             if not search_ok:
@@ -1204,13 +1256,12 @@ def automation_worker(username):
                 time.sleep(120)
                 continue
 
-            # Skip videos already reposted during this session
             if video_info.get("video_id") in posted_video_ids:
                 update_account(username, current_task="Already posted that one, searching again...")
                 time.sleep(30)
                 continue
 
-            # --- Step 3: download without watermark (tikwm.com API) ---
+            # --- Step 3: download without watermark ---
             log(f"[{username}] Step 3: Downloading video (no watermark)...")
             update_account(username, current_task="Step 3: Downloading video (no watermark)...")
             video_file = download_video_no_watermark(username, video_info)
@@ -1219,12 +1270,12 @@ def automation_worker(username):
                 time.sleep(120)
                 continue
 
-            # --- Step 5 prep: generate a caption with hashtags ---
+            # --- Step 4: generate category-matched caption ---
             update_account(username, current_task="Step 4: Generating caption...")
             caption = generate_caption(video_info, category)
             print(f"[{username}] caption: {caption}")
 
-            # --- Steps 4-6: upload, add caption, click Post ---
+            # --- Steps 5-6: upload & post ---
             log(f"[{username}] Step 5: Uploading to TikTok...")
             update_account(username, current_task="Step 5: Uploading to TikTok...")
             success = upload_video_to_tiktok(username, video_file, caption)
@@ -1238,9 +1289,63 @@ def automation_worker(username):
                     username,
                     last_post=now.strftime("%Y-%m-%d %H:%M"),
                     next_post=next_time,
-                    current_task=f"Posted! Next post at {next_time}"
+                    current_task=f"Posted! Going to For You Page..."
                 )
-                # Keep the 25-minute cycle, but check the enabled flag every 10s
+
+                # ======================================================
+                # NEW: After posting → go to For You, heart & scroll
+                # ======================================================
+                try:
+                    page = _get_page(username)
+                    if page:
+                        # Go to For You page
+                        log(f"[{username}] Going to For You page to humanize...")
+                        update_account(username, current_task="Browsing For You Page...")
+                        
+                        page.goto("https://www.tiktok.com", timeout=25000)
+                        time.sleep(random.uniform(2.5, 4.5))
+
+                        # Scroll + heart for ~3-7 minutes (human-like behavior)
+                        hearts = 0
+                        start = time.time()
+                        duration = random.randint(180, 420)  # 3 to 7 minutes
+
+                        while time.time() - start < duration:
+                            try:
+                                # Scroll down a bit
+                                scroll_amount = random.randint(350, 720)
+                                page.mouse.wheel(0, scroll_amount)
+                                time.sleep(random.uniform(1.2, 3.8))
+
+                                # Occasionally like a video
+                                if random.random() < 0.65:  # 65% chance
+                                    try:
+                                        like_btn = page.locator('button[aria-label*="Like"], [data-e2e="like-btn"]').first
+                                        if like_btn.count() > 0 and like_btn.is_visible():
+                                            like_btn.click(timeout=1500)
+                                            hearts += 1
+                                            time.sleep(random.uniform(0.6, 1.8))
+                                    except:
+                                        pass
+
+                                # Every now and then pause to "watch"
+                                if random.random() < 0.25:
+                                    time.sleep(random.uniform(3.5, 8.0))
+
+                                # Take screenshot every ~25 seconds
+                                if random.random() < 0.18:
+                                    take_screenshot(username)
+
+                            except Exception:
+                                time.sleep(2)
+
+                        log(f"[{username}] Humanized on FYP for {int((time.time()-start)/60)}min — liked {hearts} videos")
+                        update_account(username, current_task=f"Liked {hearts} videos on FYP")
+
+                except Exception as e:
+                    log(f"[{username}] FYP humanize error: {e}")
+
+                # Wait until next post time (while checking enabled)
                 waited = 0
                 while waited < 1500:
                     account = get_account(username)
@@ -1260,7 +1365,6 @@ def automation_worker(username):
             update_account(username, current_task=f"Error: {str(e)[:50]}")
             time.sleep(30)
         finally:
-            # Clean up the downloaded file to save disk space on Railway
             if video_file and os.path.exists(video_file):
                 try:
                     os.remove(video_file)
