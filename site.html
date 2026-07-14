@@ -131,6 +131,7 @@
             <div class="info-item">
                 <div class="info-label">NEXT POST</div>
                 <div class="info-value" id="next-{{ acc.username }}">{{ acc.next_post or '—' }}</div>
+                <div style="font-size:11px;color:#888;margin-top:1px;" id="countdown-{{ acc.username }}">—</div>
             </div>
         </div>
 
@@ -296,6 +297,44 @@
             });
         }
 
+        // Live countdown targets: username -> target Date
+        const countdownTargets = {};
+
+        function parseNextPostTime(nextStr) {
+            if (!nextStr || nextStr === '—') return null;
+            const match = nextStr.match(/(\d{1,2}):(\d{2})/);
+            if (!match) return null;
+            const h = parseInt(match[1], 10);
+            const m = parseInt(match[2], 10);
+            const now = new Date();
+            let target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+            if (target <= now) {
+                // next day
+                target.setDate(target.getDate() + 1);
+            }
+            return target;
+        }
+
+        function updateCountdowns() {
+            Object.keys(countdownTargets).forEach(username => {
+                const target = countdownTargets[username];
+                const cdEl = document.getElementById('countdown-' + username);
+                if (!cdEl || !target) return;
+
+                const now = new Date();
+                let diff = Math.max(0, Math.floor((target - now) / 1000));
+
+                if (diff <= 0) {
+                    cdEl.textContent = 'posting soon';
+                    return;
+                }
+
+                const mins = Math.floor(diff / 60);
+                const secs = diff % 60;
+                cdEl.textContent = `in ${mins}m ${secs}s`;
+            });
+        }
+
         function updateInfo() {
             fetch('/api/accounts')
             .then(r => r.json())
@@ -305,14 +344,21 @@
                     if (taskEl) taskEl.textContent = acc.current_task || 'Idle';
                     const statusEl = document.getElementById('status-' + acc.username);
                     if (statusEl) statusEl.textContent = acc.status || '';
+                    
                     const nextEl = document.getElementById('next-' + acc.username);
                     if (nextEl) nextEl.textContent = acc.next_post || '—';
-                    
-                    // Auto-reload page if account became connected but buttons aren't showing
-                    const startBtn = document.querySelector('.btn-start');
+
+                    // Update live countdown target
+                    if (acc.next_post && acc.next_post !== '—') {
+                        const newTarget = parseNextPostTime(acc.next_post);
+                        if (newTarget) {
+                            countdownTargets[acc.username] = newTarget;
+                        }
+                    }
+
+                    // Auto-reload if needed
                     const sessionPanel = document.getElementById('session-panel-' + acc.username);
                     if (acc.connected && sessionPanel) {
-                        // Page still shows disconnected panel but account is connected - reload
                         location.reload();
                     }
                 });
@@ -321,6 +367,7 @@
 
         setInterval(refreshCams, 1000);
         setInterval(updateInfo, 4000);
+        setInterval(updateCountdowns, 1000);  // live every second
     </script>
 </body>
 </html>

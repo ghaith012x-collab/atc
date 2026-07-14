@@ -1254,18 +1254,12 @@ def upload_video_to_tiktok(username, file_path, caption):
 
         take_screenshot(username)
 
-        # === Click Post ===
-        print(f"[{username}] Looking for Post / Publish button...")
-        update_account(username, current_task="Posting video...")
-
-        post_clicked = False
-        # === AGGRESSIVE Post button clicker (targeting the exact pink button from screenshot) ===
-        print(f"[{username}] Looking for Post / Publish button (pink button target)...")
+        # === Click Post — exactly 6 attempts, 10 seconds apart ===
+        print(f"[{username}] Posting video... (will click Post up to 6 times, 10s apart)")
         update_account(username, current_task="Posting video...")
 
         post_clicked = False
 
-        # Expanded selectors — includes color + modern Web Studio classes
         post_selectors = [
             'button[data-e2e="post-button"]',
             'button[data-e2e="post_video_button"]',
@@ -1273,174 +1267,144 @@ def upload_video_to_tiktok(username, file_path, caption):
             'button:has-text("Post")',
             'button:has-text("Publish")',
             'button[aria-label*="Post"]',
-            'button[aria-label*="Publish"]',
             'div[role="button"]:has-text("Post")',
-            '[class*="post"] button',
-            'button[type="submit"]',
-            # Screenshot-specific (big pink button)
             'button.TUXButton',
             'button[style*="254,44,85"]',
             'button[style*="fe2c55"]',
             'button[style*="ff0050"]',
             'button[style*="255, 0, 80"]',
             'button[style*="background-color: rgb(254"]',
-            'button[style*="background: rgb(254"]',
             'button[class*="primary"]',
-            'button[class*="red"]',
-            'button[style*="background-color:#fe2c55"]',
+            'button[type="submit"]',
         ]
 
-        for attempt in range(48):
+        for click_attempt in range(1, 7):  # exactly 6 times
             found_btn = None
-            used_sel = None
+            used = None
 
-            # Tier 1: Direct selectors (both contexts)
+            # Try selectors
             for ctx in [upload_context, page]:
                 if found_btn: break
                 for sel in post_selectors:
                     try:
-                        btn = ctx.locator(sel).first
-                        if btn.count() > 0:
-                            vis = False
+                        b = ctx.locator(sel).first
+                        if b.count() > 0:
                             try:
-                                vis = btn.is_visible(timeout=600)
+                                if b.is_visible(timeout=500):
+                                    found_btn = b
+                                    used = sel
+                                    break
                             except:
-                                vis = True
-                            if vis:
-                                found_btn = btn
-                                used_sel = sel
-                                break
+                                if b.count() > 0:
+                                    found_btn = b
+                                    used = sel
+                                    break
                     except:
                         continue
 
-            # Tier 2: Exact text "Post" (most reliable for this UI)
+            # Exact "Post" text
             if not found_btn:
                 try:
-                    candidates = page.locator('button, [role="button"], div[role="button"]')
-                    for k in range(min(candidates.count(), 20)):
-                        b = candidates.nth(k)
+                    cands = page.locator('button, [role="button"], div[role="button"]')
+                    for k in range(min(cands.count(), 20)):
+                        b = cands.nth(k)
                         if b.count() > 0 and b.is_visible():
-                            txt = (b.inner_text(timeout=500) or "").strip().lower()
-                            if txt == "post":
+                            if (b.inner_text(timeout=400) or "").strip().lower() == "post":
                                 found_btn = b
-                                used_sel = "text-exact-Post"
+                                used = "exact-Post"
                                 break
                 except:
                     pass
 
+            clicked = False
             if found_btn:
                 try:
-                    # Make sure button is enabled (click inside caption area)
+                    # Enable if needed
                     try:
                         if not found_btn.is_enabled():
                             try:
-                                (upload_context if upload_context != page else page).locator('div[contenteditable="true"]').first.click(timeout=1200)
+                                upload_context.locator('div[contenteditable="true"]').first.click(timeout=800)
                             except:
                                 pass
-                            time.sleep(1.4)
+                            time.sleep(0.6)
                     except:
                         pass
 
-                    found_btn.click(timeout=5000, force=True)
-                    post_clicked = True
-                    print(f"[{username}] ✓ Post button clicked via selector: {used_sel}")
-                except Exception as e1:
-                    print(f"[{username}] Selector click failed, using fallbacks: {str(e1)[:40]}")
-
-                    # Coordinate click on the found element
+                    found_btn.click(timeout=4500, force=True)
+                    clicked = True
+                    print(f"[{username}] ✓ Clicked Post (attempt {click_attempt}/6)")
+                except:
                     try:
-                        bb = found_btn.bounding_box(timeout=1200)
+                        bb = found_btn.bounding_box(timeout=700)
                         if bb:
                             page.mouse.click(bb['x'] + bb['width']/2, bb['y'] + bb['height']/2)
-                            post_clicked = True
-                            print(f"[{username}] ✓ Coordinate clicked the found Post button")
+                            clicked = True
+                            print(f"[{username}] ✓ Coord-clicked Post (attempt {click_attempt})")
                     except:
                         pass
 
-                    if not post_clicked:
+                    if not clicked:
                         try:
                             page.evaluate("(el) => el && el.click()", found_btn)
-                            post_clicked = True
-                            print(f"[{username}] ✓ JS-clicked Post button")
+                            clicked = True
+                            print(f"[{username}] ✓ JS-clicked Post (attempt {click_attempt})")
                         except:
                             pass
 
-            # Tier 3: Pink/red primary button (matches screenshot exactly)
-            if not post_clicked:
+            # Pink primary (screenshot match)
+            if not clicked:
                 try:
-                    pink = page.locator(
-                        'button[style*="254,44,85"], button[style*="fe2c55"], '
-                        'button[style*="ff0050"], button[style*="255, 0, 80"], '
-                        'button[style*="background-color: rgb(254"], button[class*="primary"]'
-                    ).first
+                    pink = page.locator('button[style*="254,44,85"], button[style*="fe2c55"], button[style*="ff0050"], button[class*="primary"]').first
                     if pink.count() > 0 and pink.is_visible():
-                        pink.click(timeout=4000, force=True)
-                        post_clicked = True
-                        print(f"[{username}] ✓ Clicked pink/red primary Post button (screenshot color)")
+                        pink.click(timeout=3000, force=True)
+                        clicked = True
+                        print(f"[{username}] ✓ Pink Post (attempt {click_attempt})")
                 except:
                     pass
 
-            # Tier 4: Full JS DOM scan for the pink "Post" button
-            if not post_clicked:
+            # JS full scan
+            if not clicked:
                 try:
-                    result = page.evaluate('''
-                        const els = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"]'));
-                        let target = els.find(el => {
-                            const t = (el.innerText || el.textContent || "").trim().toLowerCase();
-                            return t === "post";
-                        });
-                        if (!target) {
-                            target = els.find(el => {
-                                const t = (el.innerText || el.textContent || "").trim().toLowerCase();
-                                return t.includes("post") && t.length < 15;
-                            });
-                        }
-                        if (!target) {
-                            target = els.find(el => {
-                                const s = (el.getAttribute("style") || "") + " " + (el.className || "");
-                                return s.includes("254,44,85") || s.includes("fe2c55") || s.includes("ff0050") || 
-                                       s.includes("255, 0, 80") || s.includes("254, 44, 85");
-                            });
-                        }
-                        if (target) {
-                            target.click();
-                            return "clicked-pink-post";
-                        }
-                        return "no-match";
-                    ''')
-                    if result == "clicked-pink-post":
-                        post_clicked = True
-                        print(f"[{username}] ✓ JS full-scan clicked the pink Post button")
+                    if page.evaluate('''
+                        const els = Array.from(document.querySelectorAll('button,[role="button"],div[role="button"]'));
+                        let t = els.find(e => (e.innerText||"").trim().toLowerCase()==="post");
+                        if(!t) t = els.find(e => { const tt=(e.innerText||"").trim().toLowerCase(); return tt.includes("post") && tt.length<12; });
+                        if(!t) t = els.find(e => { const s=(e.getAttribute("style")||"")+(e.className||""); return s.includes("254,44,85")||s.includes("fe2c55")||s.includes("ff0050"); });
+                        if(t){ t.click(); return true; } return false;
+                    '''):
+                        clicked = True
+                        print(f"[{username}] ✓ JS-scan clicked Post (attempt {click_attempt})")
                 except:
                     pass
 
-            # Tier 5: Screenshot-accurate coordinate hammer (big pink button is lower-right of the upload form)
-            if not post_clicked:
+            # Coordinate hammer (lower right of form)
+            if not clicked:
                 try:
-                    # Target the main upload panel (where the Post button lives)
-                    panel = page.locator('div[role="main"], form, .upload-form, .creator-upload, body').first
-                    if panel.count() > 0:
-                        bb = panel.bounding_box(timeout=1000)
+                    p = page.locator('div[role="main"],form,.upload-form,body').first
+                    if p.count() > 0:
+                        bb = p.bounding_box(timeout=600)
                         if bb:
-                            # From screenshot: pink "Post" is ~65-78% horizontal, ~72-88% vertical
-                            x = bb['x'] + bb['width'] * random.uniform(0.64, 0.79)
-                            y = bb['y'] + bb['height'] * random.uniform(0.71, 0.89)
+                            x = bb['x'] + bb['width'] * 0.70
+                            y = bb['y'] + bb['height'] * 0.80
                             page.mouse.click(x, y)
-                            print(f"[{username}] ✓ Coordinate-hammer clicked pink Post area")
-                            post_clicked = True
+                            clicked = True
+                            print(f"[{username}] ✓ Coord-hammer Post (attempt {click_attempt})")
                 except:
                     pass
+
+            if clicked:
+                post_clicked = True
 
             if post_clicked:
                 break
 
-            time.sleep(5)
+            # Wait exactly 10 seconds before the next click attempt
+            print(f"[{username}] Post attempt {click_attempt}/6 — waiting 10s...")
+            time.sleep(10)
             take_screenshot(username)
-            if attempt % 4 == 0:
-                print(f"[{username}] Still searching for Post button... (attempt {attempt}/48)")
 
         if not post_clicked:
-            print(f"[{username}] ❌ Post button never clicked after 48 attempts + all fallbacks")
+            print(f"[{username}] ❌ Failed to click Post after 6 attempts")
             take_screenshot(username)
             return False
 
@@ -1652,7 +1616,7 @@ def automation_worker(username):
             if success:
                 posted_video_ids.add(video_info.get("video_id"))
                 now = datetime.now()
-                next_time = (now + timedelta(minutes=25)).strftime("%H:%M")
+                next_time = (now + timedelta(minutes=10)).strftime("%H:%M")
                 update_account(
                     username,
                     last_post=now.strftime("%Y-%m-%d %H:%M"),
