@@ -5,7 +5,8 @@ from database import init_db, get_all_accounts, get_account, update_account, add
 from bot import (
     connect_account, start_automation, stop_automation, 
     delete_account_session, screenshots,
-    click_browser, type_in_browser, press_key
+    click_browser, type_in_browser, press_key,
+    login_with_credentials, submit_verification_code
 )
 
 app = Flask(__name__)
@@ -117,6 +118,26 @@ def api_key(username):
     data = request.json
     key = data.get("key", "Enter")
     success = press_key(username, key)
+    return jsonify({"success": success})
+
+
+# ==================== FORM LOGIN ROUTES ====================
+@app.route("/api/login/<username>", methods=["POST"])
+def api_login(username):
+    data = request.json
+    email = data.get("email", "")
+    password = data.get("password", "")
+    
+    success = login_with_credentials(username, email, password)
+    return jsonify({"success": success})
+
+
+@app.route("/api/verify-code/<username>", methods=["POST"])
+def api_verify_code(username):
+    data = request.json
+    code = data.get("code", "")
+    
+    success = submit_verification_code(username, code)
     return jsonify({"success": success})
 
 

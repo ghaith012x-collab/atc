@@ -71,45 +71,32 @@ def connect_account(username):
         page.goto("https://www.tiktok.com/login", timeout=30000)
         take_screenshot(username)
         
-        # Auto click "Use phone / email / username" - more reliable version
+        # Auto click "Use phone / email / username" then "Log in with email or username"
         try:
-            # Wait longer for page to fully load
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(2500)
             
-            # Try to find and click the phone/email option
-            clicked = False
-            
-            # Method 1: Look for text containing "phone" or "email"
+            # Click "Use phone / email / username"
             try:
-                phone_option = page.get_by_text("Use phone / email / username", exact=False)
-                if phone_option.is_visible():
-                    phone_option.click()
-                    clicked = True
-                    print("Clicked using text selector")
+                items = page.locator('div[data-e2e="channel-item"]')
+                if items.count() >= 2:
+                    items.nth(1).click()
+                    update_account(username, current_task="Clicked phone/email option")
+                    page.wait_for_timeout(2000)
             except:
                 pass
             
-            # Method 2: Click the second channel item (most reliable)
-            if not clicked:
-                try:
-                    items = page.locator('div[data-e2e="channel-item"]')
-                    if items.count() >= 2:
-                        items.nth(1).click()
-                        clicked = True
-                        print("Clicked using nth(1)")
-                except:
-                    pass
-            
-            if clicked:
-                update_account(username, current_task="Clicked phone/email option")
-                page.wait_for_timeout(2000)
-                take_screenshot(username)
-            else:
-                update_account(username, current_task="Auto-click failed - click manually")
+            # Auto click "Log in with email or username"
+            try:
+                email_login = page.get_by_text("Log in with email or username", exact=False)
+                if email_login.is_visible():
+                    email_login.click()
+                    update_account(username, current_task="Ready for login form")
+                    page.wait_for_timeout(1500)
+            except:
+                pass
                 
         except Exception as e:
-            print(f"Auto-click error: {e}")
-            update_account(username, current_task="Auto-click error")
+            print(f"Auto navigation error: {e}")
         
         # Wait for user to login
         try:
@@ -235,6 +222,61 @@ def click_browser(username, x, y):
         return True
     except Exception as e:
         print(f"→ Click FAILED: {str(e)}")
+        return False
+
+
+# ==================== FORM-BASED LOGIN ====================
+def login_with_credentials(username, email_or_username, password):
+    """Fill login form with credentials"""
+    if username not in browser_sessions:
+        return False
+    
+    try:
+        page = browser_sessions[username]["page"]
+        
+        # Fill email/username
+        email_input = page.locator('input[name="email"], input[placeholder*="email"], input[placeholder*="username"]')
+        if email_input.count() > 0:
+            email_input.first.fill(email_or_username)
+        
+        # Fill password
+        password_input = page.locator('input[type="password"], input[name="password"]')
+        if password_input.count() > 0:
+            password_input.first.fill(password)
+        
+        # Click login button
+        login_btn = page.locator('button:has-text("Log in"), button[type="submit"]')
+        if login_btn.count() > 0:
+            login_btn.first.click()
+        
+        update_account(username, current_task="Credentials submitted")
+        return True
+    except Exception as e:
+        print(f"Login error: {e}")
+        return False
+
+def submit_verification_code(username, code):
+    """Submit 6-digit verification code"""
+    if username not in browser_sessions:
+        return False
+    
+    try:
+        page = browser_sessions[username]["page"]
+        
+        # Find code input
+        code_input = page.locator('input[maxlength="6"], input[placeholder*="code"], input[name*="code"]')
+        if code_input.count() > 0:
+            code_input.first.fill(code)
+        
+        # Submit
+        submit_btn = page.locator('button:has-text("Verify"), button:has-text("Submit"), button[type="submit"]')
+        if submit_btn.count() > 0:
+            submit_btn.first.click()
+        
+        update_account(username, current_task="Code submitted")
+        return True
+    except Exception as e:
+        print(f"Code submission error: {e}")
         return False
 
 def type_in_browser(username, text):
