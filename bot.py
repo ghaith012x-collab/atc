@@ -56,10 +56,10 @@ def connect_account(username):
     try:
         pw = sync_playwright().start()
         
-        context = pw.chromium.launch_persistent_context(
-            user_data_dir=f"sessions/{username}",
+        # Use browser.new_context() NOT persistent_context
+        # This ensures cookies are loaded BEFORE any page navigation
+        browser = pw.chromium.launch(
             headless=True,
-            viewport={"width": 1280, "height": 720},
             args=[
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
@@ -67,71 +67,45 @@ def connect_account(username):
             ]
         )
         
-        # Sanitize cookies for Playwright - it requires name, value, and domain/url
-        sanitized_cookies = []
-        for cookie in cookies:
-            if not isinstance(cookie, dict):
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 720}
+        )
+        
+        # Clean cookies - remove metadata fields Cookie Editor adds
+        clean_cookies = []
+        for c in cookies:
+            if not isinstance(c, dict):
                 continue
-            if "name" not in cookie or "value" not in cookie:
+            if "name" not in c or "value" not in c:
                 continue
             
-            clean = {
-                "name": str(cookie["name"]),
-                "value": str(cookie["value"]),
+            cleaned = {
+                "name": c["name"],
+                "value": c["value"],
+                "domain": c.get("domain", ".tiktok.com"),
+                "path": c.get("path", "/"),
+                "secure": c.get("secure", False),
+                "httpOnly": c.get("httpOnly", False),
             }
             
-            # Must have domain or url
-            if "domain" in cookie:
-                clean["domain"] = str(cookie["domain"])
-            elif "url" in cookie:
-                clean["url"] = str(cookie["url"])
-            else:
-                clean["domain"] = ".tiktok.com"
+            # Only add sameSite if valid
+            if "sameSite" in c and c["sameSite"] in ["Strict", "Lax", "None"]:
+                cleaned["sameSite"] = c["sameSite"]
             
-            # Optional fields
-            if "path" in cookie:
-                clean["path"] = str(cookie["path"])
-            else:
-                clean["path"] = "/"
-            
-            if "secure" in cookie:
-                clean["secure"] = bool(cookie["secure"])
-            
-            if "httpOnly" in cookie:
-                clean["httpOnly"] = bool(cookie["httpOnly"])
-            
-            if "sameSite" in cookie:
-                ss = str(cookie["sameSite"])
-                if ss in ["Strict", "Lax", "None"]:
-                    clean["sameSite"] = ss
-            
-            # Handle expiry - Playwright uses 'expires' as a Unix timestamp float
-            if "expirationDate" in cookie:
-                try:
-                    clean["expires"] = float(cookie["expirationDate"])
-                except (ValueError, TypeError):
-                    pass
-            elif "expires" in cookie:
-                try:
-                    exp = float(cookie["expires"])
-                    if exp > 0:
-                        clean["expires"] = exp
-                except (ValueError, TypeError):
-                    pass
-            
-            sanitized_cookies.append(clean)
+            clean_cookies.append(cleaned)
         
-        if not sanitized_cookies:
+        if not clean_cookies:
             update_account(username, status="Invalid Session", current_task="No valid cookies found")
             return False
         
-        # Load cookies into context
-        context.add_cookies(sanitized_cookies)
+        # CORRECT ORDER: add cookies BEFORE creating page and navigating
+        context.add_cookies(clean_cookies)
         
-        page = context.pages[0] if context.pages else context.new_page()
+        page = context.new_page()
         
         browser_sessions[username] = {
             "pw": pw,
+            "browser": browser,
             "context": context,
             "page": page
         }
@@ -142,15 +116,63 @@ def connect_account(username):
         time.sleep(3)
         take_screenshot(username)
         
-        # Verify login by checking for profile icon or other logged-in indicators
+        # Verify login by checking for profile icon or logged-in indicators
+        logged_in = False
+        tiktok_username = ""
+        
         try:
             page.wait_for_selector(
-                '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"]',
+                '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]',
                 timeout=10000
             )
-            update_account(username, connected=1, status="Connected", current_task="Session verified")
-            print(f"✓ Session verified for {username}")
+            logged_in = True
         except TimeoutError:
+            pass
+        
+        # Also check if login button is NOT present (another way to confirm logged in)
+        if not logged_in:
+            try:
+                login_btn = page.locator('[data-e2e="top-login-button"], a[href*="/login"]')
+                if login_btn.count() == 0:
+                    logged_in = True
+            except:
+                pass
+        
+        if logged_in:
+            # Try to get the TikTok username
+            try:
+                # Navigate to profile to get username
+                profile_link = page.locator('a[href*="/@"]').first
+                if profile_link.count() > 0:
+                    href = profile_link.get_attribute("href")
+                    if href and "/@" in href:
+                        tiktok_username = href.split("/@")[-1].split("?")[0].split("/")[0]
+            except:
+                pass
+            
+            if not tiktok_username:
+                # Try clicking profile icon and reading from profile page
+                try:
+                    page.goto("https://www.tiktok.com/profile", timeout=15000)
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                    time.sleep(2)
+                    # Get username from the profile page URL or h1/h2
+                    current_url = page.url
+                    if "/@" in current_url:
+                        tiktok_username = current_url.split("/@")[-1].split("?")[0].split("/")[0]
+                    else:
+                        # Try to get from page content
+                        title_el = page.locator('h1[data-e2e="user-title"], h2[data-e2e="user-subtitle"]').first
+                        if title_el.count() > 0:
+                            tiktok_username = title_el.text_content().strip().lstrip("@")
+                except:
+                    pass
+            
+            task_msg = f"Session verified - @{tiktok_username}" if tiktok_username else "Session verified"
+            update_account(username, connected=1, status="Connected", current_task=task_msg)
+            print(f"✓ Session verified for {username}" + (f" (TikTok: @{tiktok_username})" if tiktok_username else ""))
+            take_screenshot(username)
+        else:
             update_account(username, connected=0, status="Session expired", current_task="Please update session")
             print(f"✗ Session expired or invalid for {username}")
         
@@ -161,12 +183,12 @@ def connect_account(username):
                 time.sleep(0.5)
         
         threading.Thread(target=screenshot_loop, daemon=True).start()
-        return True
+        return logged_in
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        update_account(username, status="Error", current_task=f"Error: {str(e)[:20]}")
+        update_account(username, status="Error", current_task=f"Error: {str(e)[:50]}")
         return False
 
 def automation_worker(username):
@@ -230,6 +252,7 @@ def stop_automation(username):
     if username in browser_sessions:
         try:
             browser_sessions[username]["context"].close()
+            browser_sessions[username]["browser"].close()
             del browser_sessions[username]
         except:
             pass
@@ -238,6 +261,7 @@ def delete_account_session(username):
     if username in browser_sessions:
         try:
             browser_sessions[username]["context"].close()
+            browser_sessions[username]["browser"].close()
             del browser_sessions[username]
         except:
             pass
