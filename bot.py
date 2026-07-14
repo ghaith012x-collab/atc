@@ -374,7 +374,7 @@ def login_with_credentials(username, email_or_username, password):
             login_btn.first.click()
             print("Clicked login button")
         
-        update_account(username, current_task="Credentials submitted")
+        update_account(username, current_task="Credentials submitted - working")
         return True
         
     except Exception as e:
