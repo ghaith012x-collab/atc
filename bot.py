@@ -1871,7 +1871,7 @@ def automation_worker(username):
                     if page:
                         log(f"[{username}] Going to For You page to humanize...")
                         update_account(username, current_task="Browsing For You Page...")
-                        page.goto("https://www.tiktok.com", timeout=25000)
+        page.goto("https://www.tiktok.com/login", timeout=25000)
                         time.sleep(random.uniform(2.5, 4.5))
 
                         hearts = 0
