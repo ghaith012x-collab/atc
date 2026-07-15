@@ -1296,6 +1296,14 @@ def upload_video_to_tiktok(username, file_path, caption):
         #   ...
         #   <div class="Button__content Button__content--loading-false">Publiser</div>
         # </button>
+        # === EXACT BUTTON FROM THE HTML YOU GAVE ===
+        # <button role="button" type="button"
+        #   class="Button__root Button__root--shape-default Button__root--size-large Button__root--type-primary"
+        #   aria-disabled="false" data-icon-only="false" data-size="large"
+        #   data-loading="false" data-disabled="false"
+        #   data-e2e="post_video_button" style="width: 200px;">
+        #   <div class="Button__content Button__content--loading-false">Publiser</div>
+        # </button>
         primary_post_selector = 'button[data-e2e="post_video_button"][class*="Button__root--type-primary"]'
 
         def _debug_post_dom(page, note=""):
