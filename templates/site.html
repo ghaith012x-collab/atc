@@ -311,8 +311,38 @@
             .then(() => { showToast('Logged out', 'success'); setTimeout(() => location.reload(), 800); });
         }
 
-        // Cache of absolute next-post timestamps (epoch seconds) keyed by username
-        const nextTs = {};
+        function saveGmail(username) {
+            const gmail = document.getElementById('gmail-' + username).value.trim();
+            if (!gmail) { showToast('Enter a Gmail address', 'error'); return; }
+            fetch('/api/gmail/' + username, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({gmail})
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { showToast('Gmail saved', 'success'); }
+                else { showToast(d.error || 'Failed to save Gmail', 'error'); }
+            });
+        }
+
+        function loginGoogle(username) {
+            fetch('/api/login_google/' + username, {method: 'POST'})
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { showToast('Google login started...', 'success'); }
+                else { showToast(d.error || 'Failed to start Google login', 'error'); }
+            });
+        }
+
+        function confirmTrust(username) {
+            fetch('/api/confirm_trust/' + username, {method: 'POST'})
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { showToast('Trust confirmed — waiting for flow to finish...', 'success'); }
+                else { showToast('Failed to confirm trust', 'error'); }
+            });
+        }
 
         // ==================== LIVE REFRESH ====================
         function refreshCams() {
@@ -336,6 +366,12 @@
 
                     // Cache the absolute next-post timestamp for the live countdown
                     nextTs[acc.username] = acc.next_post_ts || 0;
+
+                    // Show "Confirm trust" button when waiting for trust
+                    const trustBtn = document.getElementById('trust-' + acc.username);
+                    if (trustBtn) {
+                        trustBtn.style.display = (acc.status === 'Waiting for trust') ? 'inline-block' : 'none';
+                    }
 
                     // Auto-reload page if account became connected but buttons aren't showing
                     const startBtn = document.querySelector('.btn-start');
