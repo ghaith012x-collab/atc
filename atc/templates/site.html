@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TikTok Auto Poster</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f0f; color: #fff; margin: 0; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        h1 { background: linear-gradient(90deg, #ff0050, #00f2ea); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }
+
+        .add-form { background: #1a1a1a; padding: 20px; border-radius: 16px; margin-bottom: 30px; border: 1px solid #333; }
+        .add-form h3 { margin: 0 0 15px 0; }
+        .add-form .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+        .add-form input, .add-form select { background: #222; border: 1px solid #444; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
+        .add-form input:focus, .add-form select:focus { outline: none; border-color: #ff0050; }
+
+        .account-card { background: #1a1a1a; border-radius: 16px; padding: 24px; margin-bottom: 24px; border: 1px solid #333; }
+
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+        .card-username { font-size: 22px; font-weight: 600; }
+
+        .live-cam { background: #111; border: 3px solid #333; border-radius: 14px; overflow: hidden; margin-bottom: 20px; position: relative; }
+        .live-cam img { width: 100%; height: auto; max-height: 400px; object-fit: contain; display: block; }
+        .live-label { position: absolute; top: 12px; left: 12px; background: #ff0050; color: white; font-size: 10px; padding: 2px 10px; border-radius: 9999px; font-weight: 700; }
+
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .info-item { background: #222; padding: 12px; border-radius: 10px; }
+        .info-label { font-size: 11px; color: #888; margin-bottom: 4px; }
+        .info-value { font-weight: 600; }
+
+        .status-badge { padding: 4px 14px; border-radius: 9999px; font-size: 13px; font-weight: 600; }
+        .status-connected { background: #00c85320; color: #00c853; border: 1px solid #00c853; }
+        .status-disconnected { background: #ff525220; color: #ff5252; border: 1px solid #ff5252; }
+        .status-pending { background: #ffa72620; color: #ffa726; border: 1px solid #ffa726; }
+
+        button { padding: 11px 20px; border-radius: 8px; font-weight: 600; border: none; cursor: pointer; font-size: 14px; transition: opacity .15s; }
+        button:hover { opacity: .85; }
+        .btn-primary { background: #ff0050; color: white; }
+        .btn-start { background: #00c853; color: white; }
+        .btn-stop { background: #ff5252; color: white; }
+        .btn-delete { background: #444; color: #ccc; }
+        .btn-delete-session { background: #2a1a1a; color: #ff5252; border: 1px solid #ff5252; }
+        .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
+
+        /* Session paste panel */
+        .session-panel { background: #111; border: 1px solid #333; border-radius: 12px; padding: 18px; margin-top: 16px; }
+        .session-panel h4 { margin: 0 0 10px 0; color: #ffa726; font-size: 14px; }
+        .session-panel textarea {
+            width: 100%; height: 120px; background: #1a1a1a; border: 1px solid #444;
+            color: #ccc; border-radius: 8px; padding: 10px; font-size: 12px;
+            font-family: monospace; resize: vertical;
+        }
+        .session-panel textarea:focus { outline: none; border-color: #ff0050; }
+        .session-panel .hint { font-size: 11px; color: #666; margin-top: 6px; }
+        .session-panel .btn-row { display: flex; gap: 10px; margin-top: 10px; }
+        .session-verified { background: #00c85310; border: 1px solid #00c85350; border-radius: 10px; padding: 10px 14px; font-size: 13px; color: #00c853; margin-top: 10px; }
+
+        .toast {
+            position: fixed; bottom: 24px; right: 24px; background: #222; color: #fff;
+            padding: 14px 22px; border-radius: 10px; font-size: 14px; z-index: 9999;
+            border-left: 4px solid #ff0050; opacity: 0; transition: opacity .3s;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+        .toast.success { border-left-color: #00c853; }
+        .toast.error { border-left-color: #ff5252; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>TikTok Auto Poster</h1>
+        <div style="color:#888;">{{ accounts|length }} Account{{ 's' if accounts|length != 1 else '' }}</div>
+    </div>
+
+    <!-- Add Account Form -->
+    <div class="add-form">
+        <h3>Add New Account</h3>
+        <div class="row">
+            <input type="text" id="new-username" placeholder="@username" style="flex:1;min-width:160px;">
+            <select id="new-category">
+                <option value="dance">Dance</option>
+                <option value="comedy">Comedy</option>
+                <option value="gaming">Gaming</option>
+                <option value="horror">Horror</option>
+                <option value="story">Story Animation</option>
+                <option value="memes">Memes</option>
+            </select>
+            <button class="btn-primary" onclick="addAccount()">Add Account</button>
+        </div>
+    </div>
+
+    <!-- Account Cards -->
+    {% for acc in accounts %}
+    <div class="account-card" id="card-{{ acc.username }}">
+        <div class="card-header">
+            <div class="card-username">{{ acc.username }}</div>
+            {% if acc.connected %}
+                <span class="status-badge status-connected">Connected</span>
+            {% elif acc.status in ['Session saved', 'Connecting', 'Verifying session...'] %}
+                <span class="status-badge status-pending">{{ acc.status }}</span>
+            {% else %}
+                <span class="status-badge status-disconnected">{{ acc.status or 'Disconnected' }}</span>
+            {% endif %}
+        </div>
+
+        <!-- Live Screenshot -->
+        <div class="live-cam">
+            <div class="live-label">LIVE</div>
+            <img id="cam-{{ acc.username }}" src="/live/{{ acc.username }}?t={{ range(10000)|random }}" alt="Live view">
+        </div>
+
+        <!-- Info Grid -->
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="info-label">CATEGORY</div>
+                <div class="info-value">{{ acc.category }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">STATUS</div>
+                <div class="info-value" id="status-{{ acc.username }}">{{ acc.status }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">CURRENT TASK</div>
+                <div class="info-value" id="task-{{ acc.username }}">{{ acc.current_task }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">LAST POST</div>
+                <div class="info-value">{{ acc.last_post or '—' }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">NEXT POST</div>
+                <div class="info-value" id="next-{{ acc.username }}">{{ acc.next_post or '—' }}</div>
+            </div>
+        </div>
+
+        <!-- Session Panel (disconnected) -->
+        {% if not acc.connected %}
+        <div class="session-panel" id="session-panel-{{ acc.username }}">
+            <h4>Paste TikTok Session</h4>
+            <textarea
+                id="session-input-{{ acc.username }}"
+                placeholder='[{"name":"sessionid","value":"...","domain":".tiktok.com"},...]'
+            ></textarea>
+            <div class="hint">Export cookies from your browser using an extension like "EditThisCookie" or "Cookie-Editor" on tiktok.com, then paste the JSON here.</div>
+            <div class="btn-row">
+                <button class="btn-primary" onclick="saveSession('{{ acc.username }}')">Save Session</button>
+            </div>
+        </div>
+        {% else %}
+        <!-- Connected panel -->
+        <div class="session-verified">
+            Session verified &mdash; account is connected and ready.
+        </div>
+        {% endif %}
+
+        <!-- Controls -->
+        <div class="controls">
+            {% if acc.connected %}
+                <button class="btn-start" onclick="startAutomation('{{ acc.username }}')">&#9654; Start Automation</button>
+                <button class="btn-stop" onclick="stopAutomation('{{ acc.username }}')">&#9632; Stop</button>
+                <button class="btn-delete-session" onclick="deleteSession('{{ acc.username }}')">Delete Session</button>
+            {% endif %}
+            <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
+        </div>
+    </div>
+    {% endfor %}
+
+    {% if not accounts %}
+    <div style="text-align:center;padding:60px 20px;color:#555;">
+        <div style="font-size:48px;margin-bottom:16px;">&#128247;</div>
+        <div style="font-size:18px;">No accounts yet. Add one above to get started.</div>
+    </div>
+    {% endif %}
+
+    <!-- Toast notification -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ==================== TOAST ====================
+        function showToast(msg, type) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast show ' + (type || '');
+            setTimeout(() => { t.className = 'toast'; }, 3000);
+        }
+
+        // ==================== ADD ACCOUNT ====================
+        function addAccount() {
+            const username = document.getElementById('new-username').value.trim();
+            const category = document.getElementById('new-category').value;
+            if (!username) { showToast('Enter a username', 'error'); return; }
+            fetch('/api/add', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, category})
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { location.reload(); }
+                else { showToast(d.error || 'Failed to add account', 'error'); }
+            });
+        }
+
+        // ==================== SAVE SESSION ====================
+        function saveSession(username) {
+            const raw = document.getElementById('session-input-' + username).value.trim();
+            if (!raw) { showToast('Paste your session cookies first', 'error'); return; }
+
+            // Client-side JSON validation
+            let parsed;
+            try { parsed = JSON.parse(raw); } catch(e) {
+                showToast('Invalid JSON — check your cookie format', 'error');
+                return;
+            }
+            if (!Array.isArray(parsed) || parsed.length === 0) {
+                showToast('Expected a JSON array of cookies', 'error');
+                return;
+            }
+
+            showToast('Saving and verifying session...', '');
+            fetch('/api/session/' + username, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({session: raw})
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) {
+                    showToast('Session saved — verifying login...', 'success');
+                    // Poll for connected status
+                    pollConnected(username, 0);
+                } else {
+                    showToast(d.error || 'Failed to save session', 'error');
+                }
+            });
+        }
+
+        function pollConnected(username, attempts) {
+            if (attempts > 40) {
+                showToast('Verification timed out — check session', 'error');
+                return;
+            }
+            setTimeout(() => {
+                fetch('/api/accounts')
+                .then(r => r.json())
+                .then(data => {
+                    const acc = data.find(a => a.username === username);
+                    if (!acc) return;
+                    if (acc.connected) {
+                        showToast('Connected! Session verified.', 'success');
+                        setTimeout(() => location.reload(), 1200);
+                    } else if (acc.status === 'Session expired') {
+                        showToast('Session expired — please paste a fresh session', 'error');
+                    } else {
+                        pollConnected(username, attempts + 1);
+                    }
+                });
+            }, 1500);
+        }
+
+        // ==================== AUTOMATION ====================
+        function startAutomation(username) {
+            fetch('/api/start/' + username, {method: 'POST'})
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { showToast('Automation started', 'success'); }
+                else { showToast(d.error || 'Failed to start', 'error'); }
+            });
+        }
+
+        function stopAutomation(username) {
+            fetch('/api/stop/' + username, {method: 'POST'})
+            .then(r => r.json())
+            .then(() => { showToast('Automation stopped', ''); });
+        }
+
+        // ==================== DELETE ====================
+        function deleteSession(username) {
+            if (!confirm('Delete saved session for ' + username + '? The account will be disconnected.')) return;
+            fetch('/api/delete_session/' + username, {method: 'POST'})
+            .then(() => { showToast('Session deleted', ''); setTimeout(() => location.reload(), 800); });
+        }
+
+        function deleteAccount(username) {
+            if (!confirm('Permanently delete account ' + username + '?')) return;
+            fetch('/api/delete/' + username, {method: 'POST'})
+            .then(() => location.reload());
+        }
+
+        // ==================== LIVE REFRESH ====================
+        function refreshCams() {
+            document.querySelectorAll('[id^="cam-"]').forEach(img => {
+                const username = img.id.replace('cam-', '');
+                img.src = '/live/' + username + '?t=' + Date.now();
+            });
+        }
+
+        function updateInfo() {
+            fetch('/api/accounts')
+            .then(r => r.json())
+            .then(data => {
+                data.forEach(acc => {
+                    const taskEl = document.getElementById('task-' + acc.username);
+                    if (taskEl) taskEl.textContent = acc.current_task || 'Idle';
+                    const statusEl = document.getElementById('status-' + acc.username);
+                    if (statusEl) statusEl.textContent = acc.status || '';
+                    const nextEl = document.getElementById('next-' + acc.username);
+                    if (nextEl) nextEl.textContent = acc.next_post || '—';
+                    
+                    // Auto-reload page if account became connected but buttons aren't showing
+                    const startBtn = document.querySelector('.btn-start');
+                    const sessionPanel = document.getElementById('session-panel-' + acc.username);
+                    if (acc.connected && sessionPanel) {
+                        // Page still shows disconnected panel but account is connected - reload
+                        location.reload();
+                    }
+                });
+            });
+        }
+
+        setInterval(refreshCams, 1000);
+        setInterval(updateInfo, 4000);
+    </script>
+</body>
+</html>

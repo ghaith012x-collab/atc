@@ -1,0 +1,8 @@
+flask
+gunicorn
+playwright
+pillow
+greenlet
+requests
+opencv-python-headless
+numpy
