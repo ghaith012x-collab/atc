@@ -1254,6 +1254,26 @@ def upload_video_to_tiktok(username, file_path, caption):
 
         take_screenshot(username)
 
+        # === CRITICAL: Wait for TikTok to enable the Post button ===
+        # The button stays disabled (data-disabled + aria-disabled = true) until video is fully processed
+        print(f"[{username}] Waiting for Post button to become enabled (aria-disabled=false + data-disabled=false)...")
+        for _ in range(30):  # up to ~60 seconds of extra waiting
+            try:
+                pb = page.locator('button[data-e2e="post_video_button"]').first
+                if pb.count() > 0:
+                    aria = (pb.get_attribute("aria-disabled") or "").lower()
+                    ddis = (pb.get_attribute("data-disabled") or "").lower()
+                    dload = (pb.get_attribute("data-loading") or "").lower()
+                    if aria != "true" and ddis != "true" and dload != "true":
+                        txt = (pb.inner_text(timeout=300) or "").strip()
+                        print(f"[{username}] ✓ Post button is now ENABLED (text='{txt}') — ready to click")
+                        break
+            except:
+                pass
+            time.sleep(2)
+        else:
+            print(f"[{username}] ⚠ Post button still disabled after waiting — will try aggressive clicks anyway")
+
         # === Click Post — EXACTLY 6 attempts, 10s apart. Targeting real enabled button ===
         print(f"[{username}] Posting video... (will click Post up to 6 times, 10s apart)")
         update_account(username, current_task="Posting video...")
@@ -1261,31 +1281,76 @@ def upload_video_to_tiktok(username, file_path, caption):
         post_clicked = False
 
         # Most reliable selector from real TikTok automation repos (wkaisertexas, selenium examples, SO)
-        # The button is data-e2e="post_video_button" and only clickable when aria-disabled="false"
+        # Exact button user provided: data-e2e="post_video_button" + aria-disabled="false" + data-disabled="false" + data-loading="false"
+        # Text = "Publiser" (Norwegian) or "Post"
         primary_post_selector = 'button[data-e2e="post_video_button"]'
 
         def _debug_post_dom(page, note=""):
             try:
-                # Dump the critical buttons
-                for sel in ['button[data-e2e*="post"]', 'button:has-text("Post")', 'button[style*="fe2c55"]']:
+                print(f"[{username}] === {note} DEBUG DUMP ===")
+
+                # === CRITICAL: Exact post_video_button state (matches user's DOM exactly) ===
+                try:
+                    post_btn = page.locator('button[data-e2e="post_video_button"]').first
+                    if post_btn.count() > 0:
+                        aria = post_btn.get_attribute("aria-disabled") or "?"
+                        ddis = post_btn.get_attribute("data-disabled") or "?"
+                        dload = post_btn.get_attribute("data-loading") or "?"
+                        txt = (post_btn.inner_text(timeout=400) or "")[:80]
+                        cls = post_btn.get_attribute("class") or ""
+                        style = post_btn.get_attribute("style") or ""
+                        role = post_btn.get_attribute("role") or "?"
+                        print(f"[{username}] {note} EXACT post_video_button → aria-disabled={aria} data-disabled={ddis} data-loading={dload} text='{txt}' role={role}")
+                        print(f"[{username}] {note} class='{cls[:120]}' style='{style[:80]}'")
+                        try:
+                            outer = post_btn.evaluate("(el) => el.outerHTML")
+                            print(f"[{username}] {note} BUTTON OUTERHTML: {outer[:650]}")
+                        except Exception as oe:
+                            print(f"[{username}] outerHTML err: {oe}")
+                    else:
+                        print(f"[{username}] {note} ❌ post_video_button NOT FOUND in current DOM")
+                except Exception as be:
+                    print(f"[{username}] {note} post_button inspect error: {be}")
+
+                # Other potential post buttons (including Norwegian "Publiser")
+                for sel in [
+                    'button[data-e2e*="post"]',
+                    'button:has-text("Post")',
+                    'button:has-text("Publiser")',
+                    'button[style*="fe2c55"]',
+                    'button[class*="primary"]',
+                    'button[class*="Button__root--type-primary"]'
+                ]:
                     try:
                         els = page.locator(sel).all()
                         for i, el in enumerate(els[:3]):
                             if el.count() > 0:
-                                txt = (el.inner_text(timeout=300) or "")[:40]
+                                txt = (el.inner_text(timeout=300) or "")[:50]
                                 aria = el.get_attribute("aria-disabled") or "?"
-                                dis = el.get_attribute("disabled") or "?"
-                                print(f"[{username}] {note} {sel}[{i}]: text='{txt}' aria-disabled={aria} disabled={dis}")
+                                ddis = el.get_attribute("data-disabled") or "?"
+                                de2e = el.get_attribute("data-e2e") or ""
+                                print(f"[{username}] {note} {sel}[{i}]: text='{txt}' aria={aria} data-dis={ddis} data-e2e={de2e}")
                     except:
                         pass
-                # Also dump a chunk of the main upload area
+
+                # === ALWAYS SAVE FULL PAGE HTML (complete DOM) ===
                 try:
-                    area = page.locator('div[role="main"], form, .upload-form').first
-                    if area.count() > 0:
-                        h = area.inner_html(timeout=1500)[:1200]
-                        print(f"[{username}] {note} UPLOAD AREA HTML (first 1200 chars): {h}")
-                except:
-                    pass
+                    import os
+                    os.makedirs("/home/user/debug_htmls", exist_ok=True)
+                    safe_user = username.replace("@", "").replace("/", "_")
+                    ts = int(time.time())
+                    full_path = f"/home/user/debug_htmls/tiktok_upload_{safe_user}_{note or 'post'}_{ts}.html"
+                    full_html = page.content()
+                    with open(full_path, "w", encoding="utf-8") as f:
+                        f.write(full_html)
+                    print(f"[{username}] ✅ FULL DOM saved → {full_path} (size={len(full_html)} bytes)")
+                    latest_path = f"/home/user/debug_htmls/LATEST_{safe_user}.html"
+                    with open(latest_path, "w", encoding="utf-8") as f:
+                        f.write(full_html)
+                    print(f"[{username}] (LATEST_{safe_user}.html updated for easy retrieval)")
+                except Exception as save_err:
+                    print(f"[{username}] Could not save full DOM: {save_err}")
+
             except Exception as de:
                 print(f"[{username}] debug_dom error: {de}")
 
@@ -1296,52 +1361,77 @@ def upload_video_to_tiktok(username, file_path, caption):
             found_btn = None
 
             # 1. Best selector first: post_video_button (most common in working repos)
+            # User's button has: aria-disabled="false" data-disabled="false" data-loading="false" data-e2e="post_video_button"
+            # Text can be "Post" OR "Publiser" (Norwegian)
             try:
                 btn = page.locator(primary_post_selector).first
                 if btn.count() > 0:
-                    # Wait for it to be enabled (this is the key!)
                     try:
                         btn.wait_for(state="visible", timeout=8000)
                     except:
                         pass
 
-                    aria = btn.get_attribute("aria-disabled") or ""
-                    if aria != "true" or btn.is_enabled():
+                    # Wait up to 4s for the button to actually be ready (processing can finish during the 10s sleep)
+                    for _ in range(8):
+                        aria = (btn.get_attribute("aria-disabled") or "").lower()
+                        ddis = (btn.get_attribute("data-disabled") or "").lower()
+                        dload = (btn.get_attribute("data-loading") or "").lower()
+                        if aria != "true" and ddis != "true" and dload != "true":
+                            break
+                        time.sleep(0.5)
+
+                    aria = (btn.get_attribute("aria-disabled") or "").lower()
+                    ddis = (btn.get_attribute("data-disabled") or "").lower()
+                    dload = (btn.get_attribute("data-loading") or "").lower()
+                    btn_text = (btn.inner_text(timeout=500) or "").strip().lower()
+
+                    # Button is ready only when NONE of these are true
+                    is_disabled = (aria == "true" or ddis == "true" or dload == "true")
+                    if not is_disabled:
                         found_btn = btn
-                        print(f"[{username}] Found ENABLED post_video_button (aria-disabled={aria})")
-            except:
+                        print(f"[{username}] Found ENABLED post_video_button (aria={aria} data-dis={ddis} data-load={dload} text='{btn_text}')")
+            except Exception as e1:
                 pass
 
-            # 2. Fallbacks if primary not ready
+            # 2. Fallbacks if primary not ready — include exact user's button class + Norwegian "Publiser"
             if not found_btn:
                 for sel in [
-                    'button[data-e2e="post-button"]',
+                    'button[data-e2e="post_video_button"]',
+                    'button[class*="Button__root--type-primary"]',
                     'button:has-text("Post")',
+                    'button:has-text("Publiser")',
                     'button[aria-label*="Post"]',
+                    'button[aria-label*="Publiser"]',
                     'button[style*="254,44,85"]',
                     'button[style*="fe2c55"]',
                     'button[class*="primary"]',
                     'div[role="button"]:has-text("Post")',
+                    'div[role="button"]:has-text("Publiser")',
                 ]:
                     try:
                         b = page.locator(sel).first
                         if b.count() > 0 and b.is_visible():
-                            aria = b.get_attribute("aria-disabled") or ""
-                            if aria != "true":
+                            aria = (b.get_attribute("aria-disabled") or "").lower()
+                            ddis = (b.get_attribute("data-disabled") or "").lower()
+                            dload = (b.get_attribute("data-loading") or "").lower()
+                            if aria != "true" and ddis != "true" and dload != "true":
                                 found_btn = b
+                                print(f"[{username}] Found fallback button via: {sel}")
                                 break
                     except:
                         continue
 
-            # 3. Exact text fallback
+            # 3. Exact text fallback — supports "post" and "publiser"
             if not found_btn:
                 try:
                     cands = page.locator('button, [role="button"], div[role="button"]')
-                    for k in range(min(cands.count(), 15)):
+                    for k in range(min(cands.count(), 20)):
                         b = cands.nth(k)
                         if b.count() > 0 and b.is_visible():
-                            if (b.inner_text(timeout=400) or "").strip().lower() == "post":
+                            txt = (b.inner_text(timeout=400) or "").strip().lower()
+                            if txt in ["post", "publiser"]:
                                 found_btn = b
+                                print(f"[{username}] Found exact text button: '{txt}'")
                                 break
                 except:
                     pass
@@ -1349,79 +1439,161 @@ def upload_video_to_tiktok(username, file_path, caption):
             clicked = False
             if found_btn:
                 try:
-                    # Force enable by re-focusing caption (common pattern)
+                    # Re-focus caption area (helps enable the Post button on TikTok)
                     try:
-                        page.locator('div[contenteditable="true"]').first.click(timeout=600)
+                        page.locator('div[contenteditable="true"]').first.click(timeout=800)
                     except:
                         pass
-                    time.sleep(0.5)
+                    time.sleep(0.7)
 
-                    # Final enabled check
-                    aria = found_btn.get_attribute("aria-disabled") or ""
-                    if aria == "true":
-                        print(f"[{username}] Button still disabled (aria=true), skipping click this round")
+                    # === AGGRESSIVE STATE CHECK (exact flags from user's provided DOM) ===
+                    aria = (found_btn.get_attribute("aria-disabled") or "").lower()
+                    ddis = (found_btn.get_attribute("data-disabled") or "").lower()
+                    dload = (found_btn.get_attribute("data-loading") or "").lower()
+                    btn_text = (found_btn.inner_text(timeout=400) or "").strip()
+
+                    is_ready = (aria != "true" and ddis != "true" and dload != "true")
+                    print(f"[{username}] Pre-click state (attempt {click_attempt}): aria-disabled={aria} data-disabled={ddis} data-loading={dload} text='{btn_text}' ready={is_ready}")
+
+                    if not is_ready:
+                        print(f"[{username}] Button still not ready (disabled state), will retry after sleep")
                     else:
-                        found_btn.click(timeout=5000, force=True)
-                        clicked = True
-                        print(f"[{username}] ✓ CLICKED Post via locator (attempt {click_attempt}/6)")
-                except Exception as ce:
-                    print(f"[{username}] Normal click failed: {str(ce)[:60]}")
-                    # coordinate + JS fallbacks
-                    try:
-                        bb = found_btn.bounding_box(timeout=600)
-                        if bb:
-                            page.mouse.click(bb['x'] + bb['width']/2, bb['y'] + bb['height']/2)
-                            clicked = True
-                            print(f"[{username}] ✓ Coord-clicked Post (attempt {click_attempt})")
-                    except:
-                        pass
-                    if not clicked:
+                        # Make sure it's in viewport
                         try:
-                            page.evaluate("(el) => el && el.click()", found_btn)
-                            clicked = True
-                            print(f"[{username}] ✓ JS-clicked Post (attempt {click_attempt})")
+                            found_btn.scroll_into_view_if_needed(timeout=2000)
+                            time.sleep(0.25)
                         except:
                             pass
 
-            # Color-based pink button (last resort)
+                        # 1. Strong Playwright locator click (force)
+                        try:
+                            found_btn.click(timeout=7000, force=True, no_wait_after=True)
+                            clicked = True
+                            print(f"[{username}] ✓ CLICKED via .click(force=True) → '{btn_text}' (attempt {click_attempt}/6)")
+                        except Exception as ce:
+                            print(f"[{username}] .click(force) failed: {str(ce)[:65]}")
+
+                        # 2. Ultra-aggressive JS (real mouse events + focus + click)
+                        if not clicked:
+                            try:
+                                page.evaluate('''(el) => {
+                                    if (!el) return;
+                                    el.scrollIntoView({block: "center"});
+                                    el.focus();
+                                    // Full mouse event sequence
+                                    const opts = {bubbles: true, cancelable: true, view: window};
+                                    el.dispatchEvent(new MouseEvent("mousedown", opts));
+                                    el.dispatchEvent(new MouseEvent("mouseup", opts));
+                                    el.dispatchEvent(new MouseEvent("click", opts));
+                                    // Try native click too
+                                    el.click();
+                                    // Some TikTok handlers listen to pointer events
+                                    try {
+                                        el.dispatchEvent(new PointerEvent("pointerdown", opts));
+                                        el.dispatchEvent(new PointerEvent("pointerup", opts));
+                                    } catch(e){}
+                                }''', found_btn)
+                                clicked = True
+                                print(f"[{username}] ✓ Full mouse-event JS click on exact post_video_button (attempt {click_attempt})")
+                            except Exception as je:
+                                print(f"[{username}] Aggressive JS failed: {str(je)[:55]}")
+
+                        # 3. Coordinate hammer (fallback for overlays)
+                        if not clicked:
+                            try:
+                                bb = found_btn.bounding_box(timeout=900)
+                                if bb:
+                                    cx = bb['x'] + bb['width']/2
+                                    cy = bb['y'] + bb['height']/2
+                                    page.mouse.move(cx - 20, cy)
+                                    time.sleep(0.1)
+                                    for _ in range(3):
+                                        page.mouse.click(cx + random.randint(-2,2), cy + random.randint(-1,1))
+                                        time.sleep(0.06)
+                                    clicked = True
+                                    print(f"[{username}] ✓ Coordinate triple-click on Post/Publiser (attempt {click_attempt})")
+                            except:
+                                pass
+
+                except Exception as outer_e:
+                    print(f"[{username}] Click block error: {str(outer_e)[:55]}")
+
+            # === LAST RESORT: Exact user's button structure (Button__root--type-primary + data-e2e) + Publiser ===
             if not clicked:
                 try:
-                    pink = page.locator('button[style*="254,44,85"], button[style*="fe2c55"], button[style*="ff0050"]').first
-                    if pink.count() > 0 and pink.is_visible():
-                        pink.click(timeout=3000, force=True)
-                        clicked = True
-                        print(f"[{username}] ✓ Pink primary clicked (attempt {click_attempt})")
-                except:
+                    # Exact match to the DOM the user pasted
+                    exact_sel = 'button[data-e2e="post_video_button"][class*="Button__root--type-primary"]'
+                    cands = page.locator(exact_sel + ', button[data-e2e="post_video_button"], button[class*="Button__root--type-primary"]')
+                    for i in range(min(cands.count(), 4)):
+                        c = cands.nth(i)
+                        if c.count() > 0 and c.is_visible():
+                            aria = (c.get_attribute("aria-disabled") or "").lower()
+                            ddis = (c.get_attribute("data-disabled") or "").lower()
+                            dload = (c.get_attribute("data-loading") or "").lower()
+                            if aria != "true" and ddis != "true" and dload != "true":
+                                # Try clicking the button itself + the content div (TikTok sometimes needs the inner)
+                                try:
+                                    c.click(timeout=5000, force=True)
+                                except:
+                                    pass
+                                try:
+                                    content = c.locator('.Button__content').first
+                                    if content.count() > 0:
+                                        content.click(timeout=3000, force=True)
+                                except:
+                                    pass
+                                clicked = True
+                                print(f"[{username}] ✓ EXACT Button__root--type-primary + post_video_button clicked (attempt {click_attempt})")
+                                break
+                except Exception as ex:
                     pass
 
-            # Full JS DOM scan (very reliable)
+            # Full aggressive JS DOM scan (covers Norwegian + all flags + exact class from user)
             if not clicked:
                 try:
                     res = page.evaluate('''
-                        const els = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"]'));
-                        let t = els.find(e => {
-                            const tt = (e.innerText || "").trim().toLowerCase();
-                            const s = (e.getAttribute("style") || "") + " " + (e.className || "");
+                        const els = Array.from(document.querySelectorAll('button[data-e2e="post_video_button"], button[class*="Button__root--type-primary"], button'));
+                        let target = els.find(e => {
+                            const tt = (e.innerText || e.textContent || "").trim().toLowerCase();
                             const de = e.getAttribute("data-e2e") || "";
-                            const ad = e.getAttribute("aria-disabled") || "";
-                            return (tt === "post" || de.includes("post_video")) && ad !== "true";
+                            const ad = (e.getAttribute("aria-disabled") || "").toLowerCase();
+                            const dd = (e.getAttribute("data-disabled") || "").toLowerCase();
+                            const dl = (e.getAttribute("data-loading") || "").toLowerCase();
+                            const cls = (e.className || "").toLowerCase();
+                            
+                            const isExactBtn = de === "post_video_button";
+                            const isPostText = tt === "post" || tt === "publiser";
+                            const isPrimary = cls.includes("button__root--type-primary");
+                            
+                            const ready = ad !== "true" && dd !== "true" && dl !== "true";
+                            
+                            return ready && (isExactBtn || (isPostText && isPrimary));
                         });
-                        if (t) { t.click(); return true; }
+                        if (target) {
+                            target.click();
+                            // Extra dispatch for stubborn TikTok buttons
+                            try { 
+                                target.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                                target.dispatchEvent(new Event('mousedown', {bubbles: true}));
+                                target.dispatchEvent(new Event('mouseup', {bubbles: true}));
+                            } catch(_) {}
+                            return true;
+                        }
                         return false;
                     ''')
                     if res:
                         clicked = True
-                        print(f"[{username}] ✓ JS full DOM scan clicked Post (attempt {click_attempt})")
-                except:
-                    pass
+                        print(f"[{username}] ✓ Aggressive JS DOM scan clicked exact post_video_button / Publiser (attempt {click_attempt})")
+                except Exception as jse:
+                    print(f"[{username}] JS DOM scan error: {str(jse)[:50]}")
 
             if clicked:
                 post_clicked = True
                 _debug_post_dom(page, f"POST-CLICKED-{click_attempt}")
                 break
 
-            # Debug on every attempt
-            if click_attempt % 2 == 0 or click_attempt == 1:
+            # Debug on every attempt (full DOM + button state)
+            if click_attempt % 1 == 0:   # every attempt for maximum debugging
                 _debug_post_dom(page, f"ATTEMPT-{click_attempt}")
 
             print(f"[{username}] Post attempt {click_attempt}/6 — waiting exactly 10s before retry...")
