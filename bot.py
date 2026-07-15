@@ -2073,9 +2073,17 @@ def _must_click(page, labels_or_selectors, task="", max_attempts=8):
                     el = page.locator(sel).first
                     if el.is_visible(timeout=2000):
                         el.scroll_into_view_if_needed(timeout=2000)
-                        el.click(timeout=5000)
-                        clicked = True
-                        break
+                        try:
+                            el.click(timeout=6000, force=True)
+                            clicked = True
+                            break
+                        except Exception:
+                            try:
+                                page.evaluate("""(el) => el.click()""", el)
+                                clicked = True
+                                break
+                            except Exception:
+                                continue
             except Exception:
                 continue
         
@@ -2087,14 +2095,22 @@ def _must_click(page, labels_or_selectors, task="", max_attempts=8):
                     continue
                 for el in els[:300]:
                     try:
-                        if not el.is_visible(timeout=500):
+                        if not el.is_visible(timeout=800):
                             continue
-                        txt = (el.inner_text(timeout=500) or "").strip().lower()
+                        txt = (el.inner_text(timeout=800) or "").strip().lower()
                         if any(n in txt for n in norm):
                             el.scroll_into_view_if_needed(timeout=2000)
-                            el.click(timeout=5000)
-                            clicked = True
-                            break
+                            try:
+                                el.click(timeout=6000, force=True)
+                                clicked = True
+                            except Exception:
+                                try:
+                                    page.evaluate("""(el) => el.click()""", el)
+                                    clicked = True
+                                except Exception:
+                                    continue
+                            if clicked:
+                                break
                     except Exception:
                         continue
                 if clicked:
@@ -2168,6 +2184,7 @@ def login_with_google(username, email=""):
 
         update_account(username, current_task="Clicking Continue with Google...")
         _must_click(page, [
+            '#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50',
             '[data-e2e="google-login-button"]',
             'a[href*="google"]',
             'button:has-text("Continue with Google")',
