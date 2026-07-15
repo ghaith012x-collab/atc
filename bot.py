@@ -2181,6 +2181,31 @@ def login_with_google(username, email=""):
         take_screenshot(username)
 
         update_account(username, current_task="Clicking Log in...")
+        for attempt in range(20):
+            try:
+                btn = page.locator('#top-right-action-bar-login-button')
+                if btn.count() > 0:
+                    btn.first.scroll_into_view_if_needed(timeout=2000)
+                    page.evaluate("""(el) => el.click()""", btn.first)
+                    log(f"[{username}] Log in: clicked attempt {attempt+1}")
+                    time.sleep(2)
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=3000)
+                    except Exception:
+                        pass
+                    if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="google-login-button"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url:
+                        log(f"[{username}] Log in: login UI detected on attempt {attempt+1}")
+                        break
+                else:
+                    log(f"[{username}] Log in: button not found on attempt {attempt+1}")
+            except Exception as e:
+                log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
+            time.sleep(2)
+            take_screenshot(username)
+        time.sleep(3)
+        take_screenshot(username)
+
+        update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
                 btn = page.locator('#top-right-action-bar-login-button')
