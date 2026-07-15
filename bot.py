@@ -2084,23 +2084,9 @@ def login_with_qr(username):
         browser_sessions[username] = {"pw": pw, "browser": browser, "context": context, "page": page}
         log(f"[{username}] QR login: browser ready")
 
-        page.goto("https://www.tiktok.com/login", timeout=30000)
+        page.goto("https://www.tiktok.com/login/qrcode", timeout=30000)
         time.sleep(3)
         take_screenshot(username)
-
-        update_account(username, current_task="Opening QR code...")
-        _click_text(page, ["use qr code", "scan to log in with qr", "qr"])
-        time.sleep(3)
-        take_screenshot(username)
-
-        if "/login" in page.url:
-            try:
-                page.locator('[data-e2e="qr-code-button"], [class*="qr"] button, [class*="qr"] a').first.click(timeout=5000)
-                log(f"[{username}] QR login: clicked via direct selector")
-            except Exception:
-                pass
-            time.sleep(3)
-            take_screenshot(username)
 
         update_account(username, status="QR login", current_task="Scan QR code with your phone...")
 
