@@ -44,8 +44,8 @@
         .btn-logout { background: #1a2740; color: #4fa3ff; border: 1px solid #4fa3ff; }
         .btn-google { background: #ffffff; color: #222; }
         .btn-google:hover { opacity: .9; }
-        .password-row { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
-        .password-row input { flex: 1; background: #222; border: 1px solid #444; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
+        .password-row { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+        .password-row input { flex: 1; background: #222; border: 1px solid #444; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; min-width: 160px; }
         .password-row input:focus { outline: none; border-color: #00f2ea; }
         .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
 
@@ -161,9 +161,13 @@
         </div>
         {% endif %}
 
-        <!-- Password (for Email login) -->
+        <!-- Email / Password Login -->
         <div class="password-row">
-            <input type="password" id="password-{{ acc.username }}" placeholder="TikTok password">
+            <input type="text" id="email-{{ acc.username }}" value="{{ acc.gmail or '' }}" placeholder="Email or username">
+            <input type="password" id="password-{{ acc.username }}" placeholder="Password">
+        </div>
+        <div class="password-row">
+            <input type="text" id="code-{{ acc.username }}" placeholder="6-digit code" maxlength="6" inputmode="numeric" pattern="\d{6}">
             <button class="btn-google" onclick="loginEmail('{{ acc.username }}')">Login with Email</button>
         </div>
 
@@ -309,16 +313,18 @@
         }
 
         function loginEmail(username) {
+            const email = document.getElementById('email-' + username).value.trim();
             const password = document.getElementById('password-' + username).value;
-            if (!password) { showToast('Enter your TikTok password', 'error'); return; }
+            const code = document.getElementById('code-' + username).value.trim();
+            if (!email || !password) { showToast('Enter email/username and password', 'error'); return; }
             fetch('/api/login_email/' + username, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({password})
+                body: JSON.stringify({email, password, code})
             })
             .then(r => r.json())
             .then(d => {
-                if (d.success) { showToast('Email login started — enter the 6-digit code in the preview...', 'success'); }
+                if (d.success) { showToast('Email login started...', 'success'); }
                 else { showToast(d.error || 'Failed to start email login', 'error'); }
             });
         }

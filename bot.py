@@ -2060,7 +2060,7 @@ def logout_account(username):
     return True
 
 
-def login_with_email(username, password):
+def login_with_email(username, password, email="", code=""):
     account = get_account(username)
     if not account:
         return False
@@ -2090,7 +2090,7 @@ def login_with_email(username, password):
 
         update_account(username, current_task="Filling credentials...")
 
-        username_or_email = (account.get("gmail") or username).strip()
+        username_or_email = (email or account.get("gmail") or username).strip()
         try:
             page.locator('input[type="text"], input[type="email"], input[name="username"], input[name="email"]').first.fill(username_or_email, timeout=10000)
             log(f"[{username}] Email login: filled username/email")
@@ -2111,7 +2111,22 @@ def login_with_email(username, password):
         time.sleep(3)
         take_screenshot(username)
 
-        update_account(username, status="Email login", current_task="Waiting for 6-digit code entry...")
+        if code:
+            update_account(username, current_task="Filling 6-digit code...")
+            try:
+                page.locator('input[inputmode="numeric"], input[type="tel"], input[autocomplete="one-time-code"], input[name="code"], input[class*="code"]').first.fill(code, timeout=10000)
+                log(f"[{username}] Email login: filled 6-digit code")
+            except Exception as e:
+                log(f"[{username}] fill code err: {e}")
+            time.sleep(1)
+            take_screenshot(username)
+
+            update_account(username, current_task="Submitting code...")
+            _click_text(page, ["verify", "submit", "continue", "next", "log in", "send"])
+            time.sleep(3)
+            take_screenshot(username)
+
+        update_account(username, status="Email login", current_task="Waiting for login completion...")
 
         logged_in = False
         for _ in range(600):

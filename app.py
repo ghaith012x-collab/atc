@@ -128,9 +128,11 @@ def api_logout(username):
 def api_login_email(username):
     data = request.get_json(silent=True) or {}
     password = data.get("password", "")
+    email = data.get("email", "")
+    code = data.get("code", "")
     if not password:
         return jsonify({"success": False, "error": "Password required"})
-    threading.Thread(target=login_with_email, args=(username, password), daemon=True).start()
+    threading.Thread(target=login_with_email, args=(username, password, email, code), daemon=True).start()
     return jsonify({"success": True, "message": "Email login started..."})
 
 
