@@ -2070,7 +2070,7 @@ def login_with_google(username, email=""):
         update_account(username, status="Need Gmail", current_task="Enter a @gmail.com address")
         return False
 
-    update_account(username, status="Google login", current_task="Starting browser...", google_trust=0)
+    update_account(username, status="Google login", current_task="Starting browser...")
     try:
         pw = sync_playwright().start()
         browser = pw.chromium.launch(
@@ -2128,6 +2128,7 @@ def login_with_google(username, email=""):
 
         update_account(username, status="Google login", current_task="Waiting for you to approve on your phone...")
 
+        logged_in = False
         for _ in range(300):
             try:
                 if page.locator('[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]').count() > 0:
@@ -2143,7 +2144,7 @@ def login_with_google(username, email=""):
         if logged_in:
             cookies = context.cookies()
             update_account(username, session_data=json.dumps(cookies), connected=1,
-                          status="Connected", current_task="Ready", google_trust=0)
+                          status="Connected", current_task="Ready")
             log(f"[{username}] Google login SUCCESS")
             return True
         else:
@@ -2154,7 +2155,7 @@ def login_with_google(username, email=""):
         import traceback
         traceback.print_exc()
         update_account(username, status="Google login error",
-                      current_task=f"Error: {str(e)[:60]}", google_trust=0)
+                      current_task=f"Error: {str(e)[:60]}")
         return False
 
 
