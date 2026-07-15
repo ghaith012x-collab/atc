@@ -2183,11 +2183,56 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Log in...")
         for attempt in range(20):
             try:
-                btn = page.locator('#top-right-action-bar-login-button')
-                if btn.count() > 0:
-                    btn.first.scroll_into_view_if_needed(timeout=2000)
-                    page.evaluate("""(el) => el.click()""", btn.first)
-                    log(f"[{username}] Log in: clicked attempt {attempt+1}")
+                candidates = []
+                try:
+                    all_buttons = page.locator('button, a, [role="button"], [role="link"]').all()
+                except Exception:
+                    all_buttons = []
+                for el in all_buttons[:200]:
+                    try:
+                        if not el.is_visible(timeout=500):
+                            continue
+                        txt = (el.inner_text(timeout=500) or "").strip().lower()
+                        if txt == "log in":
+                            candidates.append(el)
+                    except Exception:
+                        continue
+
+                target = None
+                for el in candidates:
+                    try:
+                        eid = el.get_attribute("id") or ""
+                        eclasses = el.get_attribute("class") or ""
+                        if eid == "top-right-action-bar-login-button":
+                            target = el
+                            break
+                        if "top-right" in eclasses or "primary" in eclasses.lower():
+                            target = el
+                            break
+                    except Exception:
+                        continue
+                if not target and candidates:
+                    target = candidates[0]
+
+                if target:
+                    try:
+                        box = target.bounding_box(timeout=2000)
+                        log(f"[{username}] Log in button found at x={box['x']}, y={box['y']}, w={box['width']}, h={box['height']}")
+                    except Exception:
+                        pass
+                    try:
+                        target.scroll_into_view_if_needed(timeout=2000)
+                    except Exception:
+                        pass
+                    try:
+                        page.evaluate("""(el) => el.click()""", target)
+                        log(f"[{username}] Log in: JS click attempt {attempt+1}")
+                    except Exception:
+                        try:
+                            target.click(timeout=4000, force=True)
+                            log(f"[{username}] Log in: force click attempt {attempt+1}")
+                        except Exception as e:
+                            log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
                     time.sleep(2)
                     try:
                         page.wait_for_load_state("domcontentloaded", timeout=3000)
@@ -2199,7 +2244,7 @@ def login_with_google(username, email=""):
                 else:
                     log(f"[{username}] Log in: button not found on attempt {attempt+1}")
             except Exception as e:
-                log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
+                log(f"[{username}] Login loop err attempt {attempt+1}: {e}")
             time.sleep(2)
             take_screenshot(username)
         time.sleep(3)
