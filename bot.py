@@ -2060,12 +2060,12 @@ def logout_account(username):
     return True
 
 
-def login_with_qr(username):
+def login_with_email(username, password):
     account = get_account(username)
     if not account:
         return False
 
-    update_account(username, status="QR login", current_task="Starting browser...")
+    update_account(username, status="Email login", current_task="Starting browser...")
     try:
         pw = sync_playwright().start()
         browser = pw.chromium.launch(
@@ -2082,16 +2082,39 @@ def login_with_qr(username):
         )
         page = context.new_page()
         browser_sessions[username] = {"pw": pw, "browser": browser, "context": context, "page": page}
-        log(f"[{username}] QR login: browser ready")
+        log(f"[{username}] Email login: browser ready")
 
-        page.goto("https://www.tiktok.com/login/qrcode", timeout=30000)
+        page.goto("https://www.tiktok.com/login/phone-or-email-/email", timeout=30000)
         time.sleep(3)
         take_screenshot(username)
 
-        update_account(username, status="QR login", current_task="Scan QR code with your phone...")
+        update_account(username, current_task="Filling credentials...")
+
+        username_or_email = (account.get("gmail") or username).strip()
+        try:
+            page.locator('input[type="text"], input[type="email"], input[name="username"], input[name="email"]').first.fill(username_or_email, timeout=10000)
+            log(f"[{username}] Email login: filled username/email")
+        except Exception as e:
+            log(f"[{username}] fill username err: {e}")
+
+        try:
+            page.locator('input[type="password"], input[name="password"]').first.fill(password, timeout=10000)
+            log(f"[{username}] Email login: filled password")
+        except Exception as e:
+            log(f"[{username}] fill password err: {e}")
+
+        time.sleep(1)
+        take_screenshot(username)
+
+        update_account(username, current_task="Clicking send code...")
+        _click_text(page, ["send code", "verify", "log in", "submit", "continue", "next"])
+        time.sleep(3)
+        take_screenshot(username)
+
+        update_account(username, status="Email login", current_task="Waiting for 6-digit code entry...")
 
         logged_in = False
-        for _ in range(300):
+        for _ in range(600):
             try:
                 if page.locator('[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]').count() > 0:
                     logged_in = True
@@ -2107,16 +2130,16 @@ def login_with_qr(username):
             cookies = context.cookies()
             update_account(username, session_data=json.dumps(cookies), connected=1,
                           status="Connected", current_task="Ready")
-            log(f"[{username}] QR login SUCCESS")
+            log(f"[{username}] Email login SUCCESS")
             return True
         else:
-            update_account(username, status="QR login failed",
-                          current_task="Timed out waiting for QR scan")
+            update_account(username, status="Email login failed",
+                          current_task="Timed out waiting for code")
             return False
     except Exception as e:
         import traceback
         traceback.print_exc()
-        update_account(username, status="QR login error",
+        update_account(username, status="Email login error",
                       current_task=f"Error: {str(e)[:60]}")
         return False
 

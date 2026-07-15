@@ -5,7 +5,7 @@ from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
     connect_account, start_automation, stop_automation,
-    delete_account_session, logout_account, login_with_qr,
+    delete_account_session, logout_account, login_with_email,
     screenshots, browser_sessions, take_screenshot
 )
 
@@ -124,10 +124,14 @@ def api_logout(username):
     return jsonify({"success": True})
 
 
-@app.route("/api/login_qr/<path:username>", methods=["POST"])
-def api_login_qr(username):
-    threading.Thread(target=login_with_qr, args=(username,), daemon=True).start()
-    return jsonify({"success": True, "message": "QR login started..."})
+@app.route("/api/login_email/<path:username>", methods=["POST"])
+def api_login_email(username):
+    data = request.get_json(silent=True) or {}
+    password = data.get("password", "")
+    if not password:
+        return jsonify({"success": False, "error": "Password required"})
+    threading.Thread(target=login_with_email, args=(username, password), daemon=True).start()
+    return jsonify({"success": True, "message": "Email login started..."})
 
 
 @app.route("/live/<path:username>")

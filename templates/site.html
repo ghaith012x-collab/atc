@@ -42,6 +42,11 @@
         .btn-delete { background: #444; color: #ccc; }
         .btn-delete-session { background: #2a1a1a; color: #ff5252; border: 1px solid #ff5252; }
         .btn-logout { background: #1a2740; color: #4fa3ff; border: 1px solid #4fa3ff; }
+        .btn-google { background: #ffffff; color: #222; }
+        .btn-google:hover { opacity: .9; }
+        .password-row { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
+        .password-row input { flex: 1; background: #222; border: 1px solid #444; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
+        .password-row input:focus { outline: none; border-color: #00f2ea; }
         .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
 
         /* Session paste panel */
@@ -156,6 +161,12 @@
         </div>
         {% endif %}
 
+        <!-- Password (for Email login) -->
+        <div class="password-row">
+            <input type="password" id="password-{{ acc.username }}" placeholder="TikTok password">
+            <button class="btn-google" onclick="loginEmail('{{ acc.username }}')">Login with Email</button>
+        </div>
+
         <!-- Controls -->
         <div class="controls">
             {% if acc.connected %}
@@ -164,7 +175,6 @@
                 <button class="btn-delete-session" onclick="deleteSession('{{ acc.username }}')">Delete Session</button>
                 <button class="btn-logout" onclick="logoutAccount('{{ acc.username }}')">Log out</button>
             {% endif %}
-            <button class="btn-google" onclick="loginQR('{{ acc.username }}')">Login with QR</button>
             <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
         </div>
     </div>
@@ -298,12 +308,18 @@
             .then(() => { showToast('Logged out', 'success'); setTimeout(() => location.reload(), 800); });
         }
 
-        function loginQR(username) {
-            fetch('/api/login_qr/' + username, {method: 'POST'})
+        function loginEmail(username) {
+            const password = document.getElementById('password-' + username).value;
+            if (!password) { showToast('Enter your TikTok password', 'error'); return; }
+            fetch('/api/login_email/' + username, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({password})
+            })
             .then(r => r.json())
             .then(d => {
-                if (d.success) { showToast('QR login started — scan the code with your phone...', 'success'); }
-                else { showToast(d.error || 'Failed to start QR login', 'error'); }
+                if (d.success) { showToast('Email login started — enter the 6-digit code in the preview...', 'success'); }
+                else { showToast(d.error || 'Failed to start email login', 'error'); }
             });
         }
 
