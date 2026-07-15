@@ -2181,76 +2181,6 @@ def login_with_google(username, email=""):
         take_screenshot(username)
 
         update_account(username, current_task="Clicking Log in...")
-        for attempt in range(20):
-            try:
-                candidates = []
-                try:
-                    all_buttons = page.locator('button, a, [role="button"], [role="link"]').all()
-                except Exception:
-                    all_buttons = []
-                for el in all_buttons[:200]:
-                    try:
-                        if not el.is_visible(timeout=500):
-                            continue
-                        txt = (el.inner_text(timeout=500) or "").strip().lower()
-                        if txt == "log in":
-                            candidates.append(el)
-                    except Exception:
-                        continue
-
-                target = None
-                for el in candidates:
-                    try:
-                        eid = el.get_attribute("id") or ""
-                        eclasses = el.get_attribute("class") or ""
-                        if eid == "top-right-action-bar-login-button":
-                            target = el
-                            break
-                        if "top-right" in eclasses or "primary" in eclasses.lower():
-                            target = el
-                            break
-                    except Exception:
-                        continue
-                if not target and candidates:
-                    target = candidates[0]
-
-                if target:
-                    try:
-                        box = target.bounding_box(timeout=2000)
-                        log(f"[{username}] Log in button found at x={box['x']}, y={box['y']}, w={box['width']}, h={box['height']}")
-                    except Exception:
-                        pass
-                    try:
-                        target.scroll_into_view_if_needed(timeout=2000)
-                    except Exception:
-                        pass
-                    try:
-                        page.evaluate("""(el) => el.click()""", target)
-                        log(f"[{username}] Log in: JS click attempt {attempt+1}")
-                    except Exception:
-                        try:
-                            target.click(timeout=4000, force=True)
-                            log(f"[{username}] Log in: force click attempt {attempt+1}")
-                        except Exception as e:
-                            log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
-                    time.sleep(2)
-                    try:
-                        page.wait_for_load_state("domcontentloaded", timeout=3000)
-                    except Exception:
-                        pass
-                    if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="google-login-button"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url:
-                        log(f"[{username}] Log in: login UI detected on attempt {attempt+1}")
-                        break
-                else:
-                    log(f"[{username}] Log in: button not found on attempt {attempt+1}")
-            except Exception as e:
-                log(f"[{username}] Login loop err attempt {attempt+1}: {e}")
-            time.sleep(2)
-            take_screenshot(username)
-        time.sleep(3)
-        take_screenshot(username)
-
-        update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
                 btn = page.locator('#top-right-action-bar-login-button')
@@ -2275,71 +2205,37 @@ def login_with_google(username, email=""):
         time.sleep(3)
         take_screenshot(username)
 
+        update_account(username, current_task="Waiting for login modal...")
+        for _ in range(20):
+            if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url:
+                break
+            time.sleep(1)
+        time.sleep(2)
+        take_screenshot(username)
+
         update_account(username, current_task="Clicking Continue with Google...")
         for attempt in range(20):
             try:
-                candidates = []
+                result = page.evaluate("""() => {
+                    const btn = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === 'Continue with Google');
+                    if (!btn) return 'not_found';
+                    btn.scrollIntoView({block: 'center'});
+                    btn.click();
+                    return 'clicked';
+                }""")
+                log(f"[{username}] Continue with Google: JS result={result} attempt {attempt+1}")
+                
+                time.sleep(2)
                 try:
-                    all_buttons = page.locator('button, a, [role="button"], [role="link"]').all()
+                    page.wait_for_load_state("domcontentloaded", timeout=3000)
                 except Exception:
-                    all_buttons = []
-                for el in all_buttons[:200]:
-                    try:
-                        if not el.is_visible(timeout=500):
-                            continue
-                        txt = (el.inner_text(timeout=500) or "").strip().lower()
-                        if txt == "continue with google":
-                            candidates.append(el)
-                    except Exception:
-                        continue
-
-                target = None
-                for el in candidates:
-                    try:
-                        eid = el.get_attribute("id") or ""
-                        eclasses = el.get_attribute("class") or ""
-                        if eid:
-                            target = el
-                            break
-                        if "google" in eclasses.lower() or "channel-item" in eclasses.lower():
-                            target = el
-                            break
-                    except Exception:
-                        continue
-                if not target and candidates:
-                    target = candidates[0]
-
-                if target:
-                    try:
-                        box = target.bounding_box(timeout=2000)
-                        log(f"[{username}] Continue with Google button found at x={box['x']}, y={box['y']}, w={box['width']}, h={box['height']}")
-                    except Exception:
-                        pass
-                    try:
-                        target.scroll_into_view_if_needed(timeout=2000)
-                    except Exception:
-                        pass
-                    try:
-                        page.evaluate("""(el) => el.click()""", target)
-                        log(f"[{username}] Continue with Google: JS click attempt {attempt+1}")
-                    except Exception:
-                        try:
-                            target.click(timeout=4000, force=True)
-                            log(f"[{username}] Continue with Google: force click attempt {attempt+1}")
-                        except Exception as e:
-                            log(f"[{username}] Continue with Google click err attempt {attempt+1}: {e}")
-                    time.sleep(2)
-                    try:
-                        page.wait_for_load_state("domcontentloaded", timeout=3000)
-                    except Exception:
-                        pass
-                    if "accounts.google.com" in page.url or page.locator('input[type="email"], input[name="identifier"]').count() > 0:
-                        log(f"[{username}] Continue with Google: Google page detected on attempt {attempt+1}")
-                        break
-                else:
-                    log(f"[{username}] Continue with Google: button not found on attempt {attempt+1}")
+                    pass
+                
+                if "accounts.google.com" in page.url or page.locator('input[type="email"], input[name="identifier"]').count() > 0:
+                    log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
+                    break
             except Exception as e:
-                log(f"[{username}] Continue with Google loop err attempt {attempt+1}: {e}")
+                log(f"[{username}] Continue with Google err attempt {attempt+1}: {e}")
             time.sleep(2)
             take_screenshot(username)
         time.sleep(3)
