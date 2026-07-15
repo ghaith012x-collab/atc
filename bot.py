@@ -2276,26 +2276,71 @@ def login_with_google(username, email=""):
         take_screenshot(username)
 
         update_account(username, current_task="Clicking Continue with Google...")
-        for attempt in range(12):
+        for attempt in range(20):
             try:
-                google_btn = page.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50')
-                if google_btn.count() > 0:
-                    google_btn.first.scroll_into_view_if_needed(timeout=2000)
-                    page.evaluate("""(el) => el.click()""", google_btn.first)
-                    log(f"[{username}] Continue with Google: JS click attempt {attempt+1}")
+                candidates = []
+                try:
+                    all_buttons = page.locator('button, a, [role="button"], [role="link"]').all()
+                except Exception:
+                    all_buttons = []
+                for el in all_buttons[:200]:
+                    try:
+                        if not el.is_visible(timeout=500):
+                            continue
+                        txt = (el.inner_text(timeout=500) or "").strip().lower()
+                        if txt == "continue with google":
+                            candidates.append(el)
+                    except Exception:
+                        continue
+
+                target = None
+                for el in candidates:
+                    try:
+                        eid = el.get_attribute("id") or ""
+                        eclasses = el.get_attribute("class") or ""
+                        if eid:
+                            target = el
+                            break
+                        if "google" in eclasses.lower() or "channel-item" in eclasses.lower():
+                            target = el
+                            break
+                    except Exception:
+                        continue
+                if not target and candidates:
+                    target = candidates[0]
+
+                if target:
+                    try:
+                        box = target.bounding_box(timeout=2000)
+                        log(f"[{username}] Continue with Google button found at x={box['x']}, y={box['y']}, w={box['width']}, h={box['height']}")
+                    except Exception:
+                        pass
+                    try:
+                        target.scroll_into_view_if_needed(timeout=2000)
+                    except Exception:
+                        pass
+                    try:
+                        page.evaluate("""(el) => el.click()""", target)
+                        log(f"[{username}] Continue with Google: JS click attempt {attempt+1}")
+                    except Exception:
+                        try:
+                            target.click(timeout=4000, force=True)
+                            log(f"[{username}] Continue with Google: force click attempt {attempt+1}")
+                        except Exception as e:
+                            log(f"[{username}] Continue with Google click err attempt {attempt+1}: {e}")
+                    time.sleep(2)
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=3000)
+                    except Exception:
+                        pass
+                    if "accounts.google.com" in page.url or page.locator('input[type="email"], input[name="identifier"]').count() > 0:
+                        log(f"[{username}] Continue with Google: Google page detected on attempt {attempt+1}")
+                        break
                 else:
-                    page.get_by_role("button", name="Continue with Google").click(timeout=3000, force=True)
-                    log(f"[{username}] Continue with Google: text click attempt {attempt+1}")
+                    log(f"[{username}] Continue with Google: button not found on attempt {attempt+1}")
             except Exception as e:
-                log(f"[{username}] Continue with Google click err attempt {attempt+1}: {e}")
+                log(f"[{username}] Continue with Google loop err attempt {attempt+1}: {e}")
             time.sleep(2)
-            try:
-                page.wait_for_load_state("domcontentloaded", timeout=3000)
-            except Exception:
-                pass
-            if "accounts.google.com" in page.url or page.locator('input[type="email"], input[name="identifier"]').count() > 0:
-                log(f"[{username}] Continue with Google: Google page detected on attempt {attempt+1}")
-                break
             take_screenshot(username)
         time.sleep(3)
         take_screenshot(username)
