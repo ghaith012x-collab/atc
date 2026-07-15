@@ -557,6 +557,14 @@ os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 TIKWM_API = "https://www.tikwm.com/api/"
 TIKWM_SEARCH_API = "https://www.tikwm.com/api/feed/search"
 
+# Exact, accurate posting interval. The worker waits until this many seconds
+# have elapsed since the previous successful post, so the gap between posts is
+# always ~10 minutes (not 25+ as before).
+POST_INTERVAL_SECONDS = 600  # 10 minutes
+
+# How many of the top-ranked candidates to randomly choose between, so we never
+# keep picking the exact same viral video every cycle.
+VIDEO_CHOICE_POOL = 6
 # Hashtag pools per category used to enrich captions
 CATEGORY_HASHTAGS = {
     "horror": ["#horror", "#scary", "#horrortok", "#creepy", "#scarystories", "#fyp", "#viral"],
@@ -837,32 +845,38 @@ def search_on_tiktok(username, category):
         return False
 
 
-def find_viral_video(username, category):
-    """Step 2: Find a viral video for the category and return its info dict.
+def find_viral_video(username, category, exclude=None):
+    """Step 2: pick a viral video for the category — NEVER one we already posted.
 
-    First scrapes video links from the on-screen search results, then uses
-    the tikwm API to fetch engagement stats and picks the most viewed one.
-    If the page yields no links (headless blocks, captcha walls, etc.), it
-    falls back to the tikwm search API which returns stats directly.
-    Returns dict {url, video_id, title, play_count, digg_count, play} or None.
+    Gathers several candidates (on-screen search results + the tikwm search
+    API), drops any video_id in `exclude`, ranks by engagement, then chooses a
+    RANDOM one from the top VIDEO_CHOICE_POOL so every cycle gets a different,
+    fresh video. Returns dict or None.
     """
+    exclude = exclude or set()
     page = _get_page(username)
     update_account(username, current_task="Scanning results for viral videos...")
 
-    candidate_urls = []
+    candidates = []
 
-    # --- Try scraping video links from the browser search results ---
+    def _add(info):
+        if not info or not info.get("video_id"):
+            return
+        if info["video_id"] in exclude:   # never repost the same clip
+            return
+        if info.get("play_count", 0) < 5000:
+            return
+        candidates.append(info)
+
+    # --- Scrape video links from the browser search results, get their stats ---
+    candidate_urls = []
     if page is not None:
         try:
             for _ in range(3):
                 page.mouse.wheel(0, 1200)
                 time.sleep(1.5)
             take_screenshot(username)
-
-            links = page.eval_on_selector_all(
-                'a[href*="/video/"]',
-                "els => els.map(e => e.href)"
-            )
+            links = page.eval_on_selector_all('a[href*="/video/"]', "els => els.map(e => e.href)")
             seen = set()
             for link in links:
                 m = re.search(r"tiktok\.com/@[^/]+/video/(\d+)", link)
@@ -874,9 +888,6 @@ def find_viral_video(username, category):
         except Exception as e:
             print(f"[{username}] scraping search results failed: {e}")
 
-    best = None
-
-    # --- Get stats for scraped candidates via the tikwm detail API ---
     for url in candidate_urls[:6]:
         try:
             r = requests.get(TIKWM_API, params={"url": url}, timeout=20)
@@ -885,59 +896,62 @@ def find_viral_video(username, category):
                 time.sleep(1.2)
                 continue
             d = data["data"]
-            info = {
+            _add({
                 "url": url,
                 "video_id": str(d.get("id", "")),
                 "title": d.get("title", ""),
                 "play_count": d.get("play_count", 0),
                 "digg_count": d.get("digg_count", 0),
                 "play": d.get("hdplay") or d.get("play", ""),
-            }
-            if best is None or info["play_count"] > best["play_count"]:
-                best = info
+            })
             time.sleep(1.2)  # be polite to the free API
         except Exception as e:
             print(f"[{username}] tikwm detail lookup failed for {url}: {e}")
 
-    # --- Fallback: tikwm search API (returns stats directly) ---
-    if best is None or best.get("play_count", 0) < 10000:
-        try:
-            r = requests.post(
-                TIKWM_SEARCH_API,
-                data={"keywords": category, "count": 20, "cursor": 0, "HD": 1},
-                timeout=25,
+    # --- Fallback / supplement: tikwm search API (returns stats directly) ---
+    try:
+        r = requests.post(
+            TIKWM_SEARCH_API,
+            data={"keywords": category, "count": 30, "cursor": 0, "HD": 1},
+            timeout=25,
+        )
+        data = r.json()
+        if data.get("code") == 0:
+            videos = data.get("data", {}).get("videos", [])
+            videos.sort(
+                key=lambda v: v.get("play_count", 0) + v.get("digg_count", 0) * 20,
+                reverse=True,
             )
-            data = r.json()
-            if data.get("code") == 0:
-                videos = data.get("data", {}).get("videos", [])
-                # Rank by engagement (views + likes weighted)
-                videos.sort(
-                    key=lambda v: v.get("play_count", 0) + v.get("digg_count", 0) * 20,
-                    reverse=True,
-                )
-                for v in videos:
-                    if v.get("duration", 0) > 180:  # skip very long videos
-                        continue
-                    author = (v.get("author") or {}).get("unique_id", "unknown")
-                    info = {
-                        "url": f"https://www.tiktok.com/@{author}/video/{v['video_id']}",
-                        "video_id": str(v["video_id"]),
-                        "title": v.get("title", ""),
-                        "play_count": v.get("play_count", 0),
-                        "digg_count": v.get("digg_count", 0),
-                        "play": v.get("play", ""),
-                    }
-                    if best is None or info["play_count"] > best.get("play_count", 0):
-                        best = info
-                    break  # top-ranked acceptable video is enough
-        except Exception as e:
-            print(f"[{username}] tikwm search API failed: {e}")
+            for v in videos:
+                if v.get("duration", 0) > 180:  # skip very long videos
+                    continue
+                author = (v.get("author") or {}).get("unique_id", "unknown")
+                _add({
+                    "url": f"https://www.tiktok.com/@{author}/video/{v['video_id']}",
+                    "video_id": str(v["video_id"]),
+                    "title": v.get("title", ""),
+                    "play_count": v.get("play_count", 0),
+                    "digg_count": v.get("digg_count", 0),
+                    "play": v.get("play", ""),
+                })
+    except Exception as e:
+        print(f"[{username}] tikwm search API failed: {e}")
 
-    if best:
-        views = best.get("play_count", 0)
-        update_account(username, current_task=f"Found viral video ({views:,} views)")
-        print(f"[{username}] selected video {best['url']} ({views} views)")
-    return best
+    if not candidates:
+        update_account(username, current_task="No new videos found, will retry")
+        return None
+
+    # Rank by engagement and pick a RANDOM one from the top pool -> variety
+    candidates.sort(
+        key=lambda c: c.get("play_count", 0) + c.get("digg_count", 0) * 20,
+        reverse=True,
+    )
+    pool = candidates[:VIDEO_CHOICE_POOL]
+    info = random.choice(pool)
+    views = info.get("play_count", 0)
+    update_account(username, current_task=f"Found viral video ({views:,} views)")
+    print(f"[{username}] selected video {info['url']} ({views} views) [pool {len(pool)}/{len(candidates)}]")
+    return info
 
 
 def download_video_no_watermark(username, video_info):
@@ -1689,9 +1703,33 @@ def _init_worker_browser(username, account):
     }
     return True
 
+def _posted_ids_path(username):
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", username)
+    return os.path.join(DOWNLOADS_DIR, f"posted_{safe}.json")
+
+
+def load_posted_ids(username):
+    """Load the set of already-posted video ids (so we never repeat a clip)."""
+    try:
+        with open(_posted_ids_path(username), "r") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+
+def save_posted_ids(username, ids):
+    try:
+        with open(_posted_ids_path(username), "w") as f:
+            json.dump(sorted(ids), f)
+    except Exception:
+        pass
+
+
 def automation_worker(username):
     log(f"[{username}] === AUTOMATION WORKER STARTED ===")
-    posted_video_ids = set()
+    # Load the history of already-posted videos so we NEVER repeat a clip,
+    # even across restarts of the worker/bot.
+    posted_video_ids = load_posted_ids(username)
 
     try:
       while True:
@@ -1736,7 +1774,7 @@ def automation_worker(username):
             # --- Step 2: find a viral video in the results ---
             log(f"[{username}] Step 2: Finding viral video...")
             update_account(username, current_task="Step 2: Finding viral video...")
-            video_info = find_viral_video(username, category)
+            video_info = find_viral_video(username, category, exclude=posted_video_ids)
             if not video_info:
                 update_account(username, current_task="No viral video found, retrying in 2 min")
                 time.sleep(120)
@@ -1768,43 +1806,43 @@ def automation_worker(username):
             log(f"[{username}] Upload result: {success}")
 
             if success:
-                posted_video_ids.add(video_info.get("video_id"))
+                vid = video_info.get("video_id")
+                posted_video_ids.add(vid)
+                save_posted_ids(username, posted_video_ids)   # persist so we never repeat
+                post_cycle_start = time.time()
                 now = datetime.now()
-                next_time = (now + timedelta(minutes=10)).strftime("%H:%M")
+                next_dt = now + timedelta(seconds=POST_INTERVAL_SECONDS)
                 update_account(
                     username,
                     last_post=now.strftime("%Y-%m-%d %H:%M"),
-                    next_post=next_time,
+                    next_post=next_dt.strftime("%H:%M"),
                     current_task=f"Posted! Going to For You Page..."
                 )
 
                 # ======================================================
-                # NEW: After posting → go to For You, heart & scroll
+                # After posting -> go to For You, heart & scroll (capped
+                # so the full cycle stays ~10 min, then sleep the remainder)
                 # ======================================================
                 try:
                     page = _get_page(username)
                     if page:
-                        # Go to For You page
                         log(f"[{username}] Going to For You page to humanize...")
                         update_account(username, current_task="Browsing For You Page...")
-                        
                         page.goto("https://www.tiktok.com", timeout=25000)
                         time.sleep(random.uniform(2.5, 4.5))
 
-                        # Scroll + heart for ~3-7 minutes (human-like behavior)
                         hearts = 0
-                        start = time.time()
-                        duration = random.randint(180, 420)  # 3 to 7 minutes
+                        fyp_start = time.time()
+                        # Keep FYP time comfortably under the 10-min interval
+                        fyp_budget = max(60, POST_INTERVAL_SECONDS - 150)
 
-                        while time.time() - start < duration:
+                        while time.time() - fyp_start < fyp_budget:
                             try:
-                                # Scroll down a bit
                                 scroll_amount = random.randint(350, 720)
                                 page.mouse.wheel(0, scroll_amount)
                                 time.sleep(random.uniform(1.2, 3.8))
 
-                                # Occasionally like a video
-                                if random.random() < 0.65:  # 65% chance
+                                if random.random() < 0.65:
                                     try:
                                         like_btn = page.locator('button[aria-label*="Like"], [data-e2e="like-btn"]').first
                                         if like_btn.count() > 0 and like_btn.is_visible():
@@ -1814,31 +1852,35 @@ def automation_worker(username):
                                     except:
                                         pass
 
-                                # Every now and then pause to "watch"
                                 if random.random() < 0.25:
                                     time.sleep(random.uniform(3.5, 8.0))
 
-                                # Take screenshot every ~25 seconds
-                                if random.random() < 0.18:
+                                # Keep the live preview fresh (no lag)
+                                if random.random() < 0.12:
                                     take_screenshot(username)
 
                             except Exception:
                                 time.sleep(2)
 
-                        log(f"[{username}] Humanized on FYP for {int((time.time()-start)/60)}min — liked {hearts} videos")
+                        log(f"[{username}] Humanized on FYP for {int((time.time()-fyp_start)/60)}min — liked {hearts} videos")
                         update_account(username, current_task=f"Liked {hearts} videos on FYP")
-
                 except Exception as e:
                     log(f"[{username}] FYP humanize error: {e}")
 
-                # Wait until next post time (while checking enabled)
+                # Accurate wait: sleep ONLY the remaining time until exactly
+                # POST_INTERVAL_SECONDS since the post. The cycle then repeats
+                # identically (search -> pick new video -> upload -> post).
+                remaining = POST_INTERVAL_SECONDS - (time.time() - post_cycle_start)
+                remaining = max(0, remaining)
+                log(f"[{username}] Next post in {remaining/60:.1f} min (interval={POST_INTERVAL_SECONDS}s)")
                 waited = 0
-                while waited < 1500:
+                while waited < remaining:
                     account = get_account(username)
                     if not account or not account["enabled"]:
                         break
-                    time.sleep(10)
-                    waited += 10
+                    step = min(10, remaining - waited)
+                    time.sleep(step)
+                    waited += step
             else:
                 log(f"[{username}] Post failed, retrying in 3 min")
                 update_account(username, current_task="Post failed, retrying in 3 min")

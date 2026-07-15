@@ -4,8 +4,8 @@ import threading
 from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
-    connect_account, start_automation, stop_automation, 
-    delete_account_session, screenshots, browser_sessions
+    connect_account, start_automation, stop_automation,
+    delete_account_session, screenshots, browser_sessions, take_screenshot
 )
 
 app = Flask(__name__)
@@ -119,14 +119,23 @@ def api_delete_session(username):
 
 @app.route("/live/<path:username>")
 def live(username):
+    # Capture a FRESH frame on every request so the live preview is crisp and
+    # lag-free (the dashboard already re-polls this route ~every 1s).
+    if username in browser_sessions:
+        try:
+            take_screenshot(username)
+        except Exception:
+            pass
+
     if username not in screenshots:
         from PIL import Image
-        img = Image.new("RGB", (800, 450), "#111111")
+        img = Image.new("RGB", (1280, 720), "#111111")
         screenshots[username] = img
-    
+
     from io import BytesIO
     buffer = BytesIO()
-    screenshots[username].save(buffer, "JPEG", quality=80)
+    # High quality so the preview stays sharp.
+    screenshots[username].save(buffer, "JPEG", quality=95)
     buffer.seek(0)
     return Response(buffer.getvalue(), mimetype="image/jpeg")
 
