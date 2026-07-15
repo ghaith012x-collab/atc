@@ -1070,28 +1070,252 @@ def _save_debug_screenshot(page, label, username):
         print(f"[{username}] debug_screenshot error: {e}")
         return None
 
+# ---------------------------------------------------------------------------
+# Robust TikTok upload helpers (iframe-aware + accurate 100% + real DOM click)
+# ---------------------------------------------------------------------------
+def _iter_frame_factories(page):
+    """Yield locator factories for the main page and every (same-origin) iframe."""
+    yield page
+    try:
+        for f in page.frames:
+            yield f
+    except Exception:
+        pass
+
+
+def _find_file_input(page):
+    """Return a file <input> locator (main page or iframe), or None."""
+    for factory in _iter_frame_factories(page):
+        try:
+            loc = factory.locator('input[type="file"]').first
+            if loc.count() > 0:
+                return loc
+        except Exception:
+            pass
+    return None
+
+
+_POST_SELECTORS = [
+    'button[data-e2e="post_video_button"]',
+    'button[class*="Button__root--type-primary"]',
+    'button[class*="TUXButton--primary"]',
+    'button[class*="btn-post"]',
+    'button:has-text("Post")',
+    'button:has-text("Publish")',
+    'button:has-text("Publiser")',
+    'button:has-text("Post now")',
+]
+
+
+def _find_post_button(page):
+    """Return the first visible Post button locator (main page or iframe), or None."""
+    best = None
+    for factory in _iter_frame_factories(page):
+        for sel in _POST_SELECTORS:
+            try:
+                loc = factory.locator(sel).first
+                if loc.count() > 0:
+                    # Prefer the exact data-e2e button if present
+                    if sel == 'button[data-e2e="post_video_button"]':
+                        return loc
+                    if best is None and loc.is_visible():
+                        best = loc
+            except Exception:
+                pass
+    return best
+
+
+def _button_can_post(loc):
+    """True only if the post-button locator is present, visible AND not disabled.
+
+    Handles TikTok's several disable signals, and treats MISSING attributes as
+    enabled (the old code treated a missing attribute as disabled, so the button
+    was considered never-ready and clicks landed on a disabled React button).
+    """
+    try:
+        if loc.count() == 0:
+            return False
+        loc = loc.first
+        if not loc.is_visible():
+            return False
+        info = loc.evaluate("""e => {
+            const g = n => (e.getAttribute(n) || '').toLowerCase();
+            return {
+                d: !!e.disabled,
+                aria: g('aria-disabled'),
+                dd: g('data-disabled'),
+                dl: g('data-loading'),
+                cls: (e.className || '').toLowerCase(),
+            };
+        }""")
+        if info["d"]:
+            return False
+        if info["aria"] == "true":
+            return False
+        if info["dd"] == "true":
+            return False
+        if info["dl"] == "true":
+            return False
+        if "disabled" in info["cls"]:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _read_upload_percent(page):
+    """Return the highest visible upload percentage (0-100) or None if none shown."""
+    best = None
+    for factory in _iter_frame_factories(page):
+        try:
+            val = factory.evaluate("""() => {
+                const re = /(\\d+)\\s*%/;
+                let max = -1;
+                for (const el of document.querySelectorAll('*')) {
+                    if (el.children.length === 0) {
+                        const m = (el.textContent || '').trim().match(re);
+                        if (m) { const v = parseInt(m[1], 10); if (v > max) max = v; }
+                    }
+                }
+                return max < 0 ? null : max;
+            }""")
+            if isinstance(val, int) and val > 0:
+                if best is None or val > best:
+                    best = val
+        except Exception:
+            pass
+    return best
+
+
+def _dismiss_blockers(page, username):
+    """Dismiss the common TikTok upload-page popups that can block the Post button."""
+    blockers = [
+        'button[data-e2e="cookie_banner_button"]',
+        '//button[./div[text()="Not now"]]',
+        'button:has-text("Not now")',
+        'button:has-text("Skip")',
+        '[class*="joyride"] button',
+        '[class*="modal"] button[aria-label="Close"]',
+        'button:has-text("Maybe later")',
+        'button:has-text("Got it")',
+    ]
+    for sel in blockers:
+        try:
+            blk = page.locator(sel).first
+            if blk.count() > 0 and blk.is_visible():
+                blk.click(timeout=1500, force=True)
+                print(f"[{username}] dismissed blocker: {sel}")
+                time.sleep(0.4)
+        except Exception:
+            pass
+
+
+def _click_post_robust(page, loc, username):
+    """Click the Post button reliably. Returns (clicked_bool, method_str).
+
+    Order:
+      1. real Playwright click (verifies actionability, no overlay)
+      2. click inner .Button__content (exact node from user's pasted HTML)
+      3. JS .click() on the ACTUAL node (bypasses any overlay/interception)
+      4. coordinate click ONLY if elementFromPoint confirms the button is on top
+    """
+    btn = loc.first
+
+    # 1) real click
+    try:
+        btn.scroll_into_view_if_needed(timeout=3000)
+        time.sleep(0.2)
+        btn.click(timeout=8000)
+        print(f"[{username}] ✓ 1. real click (Playwright) on Post")
+        return True, "real-click"
+    except Exception as e1:
+        print(f"[{username}] 1. real click failed: {str(e1)[:80]}")
+
+    # 2) inner content element
+    try:
+        content = btn.locator('div[class*="Button__content"]').first
+        if content.count() > 0:
+            content.click(timeout=6000, force=True)
+            print(f"[{username}] ✓ 2. clicked inner .Button__content (Publiser)")
+            return True, "inner-content"
+    except Exception as e2:
+        print(f"[{username}] 2. inner content click failed: {str(e2)[:80]}")
+
+    # 3) JS .click() on the actual DOM node (overlay-proof)
+    try:
+        res = page.evaluate("""() => {
+            const b = document.querySelector('button[data-e2e="post_video_button"]')
+                    || document.querySelector('button[class*="Button__root--type-primary"]')
+                    || document.querySelector('button[class*="TUXButton--primary"]')
+                    || [...document.querySelectorAll('button')].find(x => /post|publis/i.test((x.textContent||'').trim()));
+            if (!b) return 'no-btn';
+            b.click();
+            return 'js-click';
+        }""")
+        if res == "js-click":
+            print(f"[{username}] ✓ 3. JS .click() on real Post node (overlay-proof)")
+            return True, "js-click"
+    except Exception as e3:
+        print(f"[{username}] 3. JS click failed: {str(e3)[:80]}")
+
+    # 4) coordinate click ONLY if the button is actually the top element
+    try:
+        bb = btn.bounding_box(timeout=2500)
+        if bb:
+            cx = bb["x"] + bb["width"] / 2
+            cy = bb["y"] + bb["height"] / 2
+            top = page.evaluate(
+                "(x,y)=>{const el=document.elementFromPoint(x,y);"
+                "return el?(el.getAttribute('data-e2e')||el.tagName):null;}", cx, cy)
+            if top == "post_video_button":
+                page.mouse.click(cx, cy)
+                print(f"[{username}] ✓ 4. coordinate click (button confirmed on top)")
+                return True, "coord-click"
+            else:
+                print(f"[{username}] ⚠ 4. skipped coord click: top element = {top} (overlay)")
+    except Exception as e4:
+        print(f"[{username}] 4. coord click failed: {str(e4)[:80]}")
+
+    return False, "none"
+
+
+def _handle_continue_to_post(page, username):
+    """Newer TikTok shows a 'Continue to post?' dialog after clicking Post.
+    Click its primary confirm button if present. Returns True if handled."""
+    confirms = [
+        'button:has-text("Post now")',
+        'button:has-text("Continue")',
+        'button:has-text("Continue to post")',
+        'button[data-e2e="post_button"]',
+        'div[role="dialog"] button:has-text("Post")',
+    ]
+    for sel in confirms:
+        try:
+            b = page.locator(sel).first
+            if b.count() > 0 and b.is_visible():
+                b.click(timeout=3000, force=True)
+                print(f"[{username}] ✓ handled 'Continue to post?' via: {sel}")
+                time.sleep(2)
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def upload_video_to_tiktok(username, file_path, caption):
-    """TikTok Upload & Post using VERIFIED selectors from user's GitHub paste + wkaisertexas/makiisthenes.
-    EXACT button from pasted HTML: data-e2e="post_video_button" + aria-disabled=false + data-disabled=false + data-loading=false + Button__root--type-primary
-    MAIN PRIORITY: accurate 100% wait then click.
-    Full logging, no silent excepts in post path, elementFromPoint, network, screenshots, debug HTMLs.
+    """TikTok Upload & Post (robust: iframe-aware, accurate 100% wait, real DOM click).
+    Waits until the upload truly reaches 100% AND the Post button is enabled, then
+    clicks the real button node (overlay-proof) and verifies the publish happened.
     """
     page = _get_page(username)
     if page is None:
         print(f"[{username}] No page available")
         return False
 
-    # VERIFIED selectors (exact from paste + repos)
-    POST = 'button[data-e2e="post_video_button"]'
-    POST_XPATH = '//button[@data-e2e="post_video_button" and @aria-disabled="false" and @data-disabled="false"]'
+    # Selectors still used as fallbacks (primary lookups are iframe-aware helpers)
     FILE = 'input[type="file"]'
-    RES = '//div[contains(@class,"resolution-label-text")]'
-    CANCEL = '//div[contains(@class,"btn-cancel")]'
     CAP = '//div[@contenteditable="true"]'
-    NOTNOW = '//button[./div[text()="Not now"]]'
-    COOKIE = '//button[@data-e2e="cookie_banner_button"]'
     SUCCESS = 'text=/Your video has been uploaded|Video published|Publiser|视频已发布|uploaded successfully/i'
-    PROGRESS = r"text=/\d+%|uploading|processing/i"
 
     nets = []
 
@@ -1116,9 +1340,9 @@ def upload_video_to_tiktok(username, file_path, caption):
 
         # Navigate to verified upload URL (prefer creator-center)
         upload_url_used = None
-        for u in ["https://www.tiktok.com/creator-center/upload?lang=en",
-                  "https://www.tiktok.com/tiktokstudio/upload",
-                  "https://www.tiktok.com/upload"]:
+        for u in ["https://www.tiktok.com/upload?lang=en",
+                  "https://www.tiktok.com/creator-center/upload?lang=en",
+                  "https://www.tiktok.com/tiktokstudio/upload"]:
             try:
                 print(f"[{username}] Trying: {u}")
                 page.goto(u, timeout=48000, wait_until="domcontentloaded")
@@ -1126,24 +1350,13 @@ def upload_video_to_tiktok(username, file_path, caption):
                 take_screenshot(username)
                 if "/login" in page.url.lower() or "signin" in page.url.lower():
                     continue
-                # Check for file input (main or iframe)
-                file_found = False
-                if page.locator(FILE).first.count() > 0:
-                    file_found = True
-                    print(f"[{username}] ✓ file input on main")
-                else:
-                    for i in range(min(page.locator("iframe").count(), 4)):
-                        try:
-                            fr = page.locator("iframe").nth(i).content_frame()
-                            if fr and fr.locator(FILE).first.count() > 0:
-                                print(f"[{username}] ✓ file input in iframe[{i}]")
-                                file_found = True
-                                break
-                        except Exception as fe:
-                            print(f"[{username}] iframe check err: {fe}")
-                if file_found:
+                # Check for file input (main OR iframe) — iframe-aware
+                if _find_file_input(page) is not None:
+                    print(f"[{username}] ✓ file input found on {u}")
                     upload_url_used = u
                     break
+                else:
+                    print(f"[{username}] no file input on {u}")
             except Exception as g:
                 print(f"[{username}] goto err: {str(g)[:60]}")
                 import traceback
@@ -1158,12 +1371,14 @@ def upload_video_to_tiktok(username, file_path, caption):
         print(f"[{username}] Using upload page: {upload_url_used}")
         print(f"[{username}] Current URL before upload: {page.url}")
 
-        # Upload the file
+        # Upload the file (iframe-aware: the <input> may live inside an iframe)
         print(f"[{username}] Uploading file...")
-        try:
+        file_input = _find_file_input(page)
+        if file_input is None:
             file_input = page.locator(FILE).first
-            file_input.set_input_files(file_path, timeout=15000)
-            print(f"[{username}] ✓ set_input_files succeeded")
+        try:
+            file_input.set_input_files(file_path, timeout=20000)
+            print(f"[{username}] ✓ set_input_files succeeded (iframe-aware)")
         except Exception as se:
             print(f"[{username}] set_input EXCEPTION: {se}")
             import traceback
@@ -1171,88 +1386,73 @@ def upload_video_to_tiktok(username, file_path, caption):
             _save_debug_html(page, "SET_INPUT_FAIL", username)
             return False
 
-        # === ACCURATE WAIT FOR UPLOAD TO HIT 100% ===
-        # Wait until: no 100% progress text OR progress gone + post button fully enabled (all 3 attrs false)
-        print(f"[{username}] === WAITING FOR UPLOAD TO HIT 100% (ACCURATE + VERIFIED) ===")
+        # The Post button appears only after the file picker has been attached;
+        # wait for it so the rest of the flow is deterministic.
+        try:
+            page.wait_for_selector('button[data-e2e="post_video_button"]', timeout=20000)
+        except Exception:
+            _find_post_button(page)
+
+        # === ACCURATE WAIT FOR UPLOAD 100% AND POST BUTTON ENABLED ===
+        # The Post button is the source of truth: it only becomes enabled once
+        # TikTok has finished uploading AND server-side processing. We also read
+        # the visible percentage so we never click while still below 100%.
+        print(f"[{username}] === WAITING FOR UPLOAD 100% + Post button ENABLED ===")
         upload_100 = False
-        for sec in range(300):  # up to ~10min
-            if sec % 15 == 0:
-                print(f"[{username}] upload wait {sec}s ...")
+        for sec in range(360):  # up to ~12 min
+            if sec % 10 == 0:
+                pct = _read_upload_percent(page)
+                can = _button_can_post(_find_post_button(page))
+                print(f"[{username}] upload wait {sec}s — progress={pct}% can_post={can}")
             time.sleep(2)
 
-            # Clear blockers (no silent)
-            for blocker_sel, name in [(COOKIE, "cookie"), (NOTNOW, "notnow")]:
-                try:
-                    blk = page.locator(blocker_sel)
-                    if blk.count() > 0 and blk.first.is_visible():
-                        blk.first.click(timeout=1500, force=True)
-                        print(f"[{username}] cleared {name} blocker")
-                except Exception as be:
-                    print(f"[{username}] blocker {name} err: {be}")
+            # Dismiss any popups that could block the Post button
+            _dismiss_blockers(page, username)
 
             try:
-                # Check progress state
-                progress_count = page.locator(PROGRESS).count()
-                has_active_progress = False
-                if progress_count > 0:
-                    try:
-                        prog_txt = page.locator(PROGRESS).first.inner_text(timeout=800) or ""
-                        if "%" in prog_txt and "100" not in prog_txt:
-                            has_active_progress = True
-                    except:
-                        has_active_progress = True
+                pct = _read_upload_percent(page)
+                post_loc = _find_post_button(page)
+                can = _button_can_post(post_loc) if post_loc is not None else False
 
-                # Check exact enabled button (from pasted HTML)
-                post_btn = page.locator(POST).first
-                btn_ready = False
-                if post_btn.count() > 0:
-                    try:
-                        aria = (post_btn.get_attribute("aria-disabled") or "true").lower().strip()
-                        ddis = (post_btn.get_attribute("data-disabled") or "true").lower().strip()
-                        dload = (post_btn.get_attribute("data-loading") or "true").lower().strip()
-                        is_vis = post_btn.is_visible()
-                        is_en = post_btn.is_enabled()
-                        if aria == "false" and ddis == "false" and dload == "false" and is_vis:
-                            btn_ready = True
-                            print(f"[{username}] ✓ exact post button ready: aria={aria} data-disabled={ddis} loading={dload} vis={is_vis}")
-                    except Exception as ae:
-                        print(f"[{username}] attr check err: {ae}")
-
-                # Additional verified signals
-                has_res = page.locator(RES).count() > 0
-                has_cancel = page.locator(CANCEL).count() > 0
-
-                if not has_active_progress and btn_ready:
-                    print(f"[{username}] ✓✓ UPLOAD HIT 100% + POST BUTTON ENABLED (no progress + all attrs false)")
+                if can and (pct is None or pct >= 100):
+                    print(f"[{username}] ✓✓ UPLOAD 100% + POST BUTTON ENABLED (progress={pct}%)")
                     upload_100 = True
                     break
-                if btn_ready and not has_active_progress:
-                    print(f"[{username}] ✓ post ready (fallback)")
+                if can and pct is None:
+                    print(f"[{username}] ✓ Post button enabled (no progress label present)")
                     upload_100 = True
                     break
             except Exception as we:
-                print(f"[{username}] 100% wait loop err: {we}")
-                import traceback
-                traceback.print_exc()
+                print(f"[{username}] wait loop err: {we}")
 
             if sec % 20 == 0:
                 take_screenshot(username)
                 _save_debug_screenshot(page, f"upload_wait_{sec}", username)
 
         if not upload_100:
-            print(f"[{username}] ⚠ 100% wait timeout — will still attempt post if button present")
+            print(f"[{username}] ⚠ 100%/enabled wait timeout — will still attempt post if button present")
             _save_debug_html(page, "UPLOAD_100_TIMEOUT", username)
 
         take_screenshot(username)
         _save_debug_screenshot(page, "pre_caption", username)
 
-        # Set caption (after upload started, before final post wait)
+        # Set caption (iframe-aware). Do this after the upload has started.
         print(f"[{username}] Setting caption...")
         try:
-            c = page.locator(CAP).first
+            c = None
+            for factory in _iter_frame_factories(page):
+                try:
+                    loc = factory.locator('div[contenteditable="true"]').first
+                    if loc.count() > 0 and loc.is_visible():
+                        c = loc
+                        break
+                except Exception:
+                    pass
+            if c is None:
+                c = page.locator(CAP).first
             if c.count() > 0:
                 c.click(timeout=6000)
-                time.sleep(0.25)
+                time.sleep(0.3)
                 page.keyboard.press("Control+A")
                 time.sleep(0.12)
                 page.keyboard.press("Delete")
@@ -1266,39 +1466,26 @@ def upload_video_to_tiktok(username, file_path, caption):
             import traceback
             traceback.print_exc()
 
-        # === FINAL ACCURATE WAIT FOR BUTTON + 100% ===
-        print(f"[{username}] === FINAL WAIT: 100% + button data-disabled=false + aria=false + loading=false ===")
-        ready = False
-        for sec in range(180):
-            if sec % 10 == 0:
-                print(f"[{username}] final wait {sec}s")
-            time.sleep(2)
-            try:
-                b = page.locator(POST).first
-                if b.count() > 0:
-                    aria = (b.get_attribute("aria-disabled") or "").lower()
-                    ddis = (b.get_attribute("data-disabled") or "").lower()
-                    dload = (b.get_attribute("data-loading") or "").lower()
-                    if aria == "false" and ddis == "false" and dload == "false":
-                        if b.is_visible() and b.is_enabled():
-                            print(f"[{username}] ✓ POST BUTTON FULLY READY (verified attrs + visible)")
-                            ready = True
-                            break
-                # Fallback verified signals
-                if page.locator(RES).count() > 0 and page.locator("text=/100%/").count() == 0:
-                    print(f"[{username}] ✓ resolution + no 100% progress")
-                    ready = True
+        # Final confirmation: the Post button MUST be genuinely enabled right
+        # before clicking. Never click a still-disabled React button.
+        post_loc = _find_post_button(page)
+        if post_loc is None or not _button_can_post(post_loc):
+            print(f"[{username}] ⚠ Post button not enabled yet — final short wait")
+            for sec in range(90):
+                time.sleep(2)
+                _dismiss_blockers(page, username)
+                post_loc = _find_post_button(page)
+                if post_loc is not None and _button_can_post(post_loc):
+                    print(f"[{username}] ✓ Post button became enabled (final wait {sec}s)")
                     break
-            except Exception as fe:
-                print(f"[{username}] final wait err: {fe}")
-            if sec % 25 == 0:
-                take_screenshot(username)
+                if sec % 15 == 0:
+                    take_screenshot(username)
 
         take_screenshot(username)
         _save_debug_screenshot(page, "pre_post", username)
         _save_debug_html(page, "PRE_POST", username)
 
-        print(f"[{username}] === PRE-POST DEBUG (ALL REQUIRED + VERIFIED) ===")
+        print(f"[{username}] === PRE-POST DEBUG ===")
         print(f"[{username}] URL: {page.url}")
         print(f"[{username}] upload_url_used: {upload_url_used}")
         try:
@@ -1307,174 +1494,107 @@ def upload_video_to_tiktok(username, file_path, caption):
                 try:
                     fu = fr.url if hasattr(fr, 'url') else 'no-url'
                     print(f"  frame{fi}: {fu[:80]}")
-                except: pass
+                except Exception:
+                    pass
         except Exception as fe:
             print(f"frames err: {fe}")
 
-        # Locate exact button (prefer data-e2e, fallback to class from HTML)
-        b = page.locator(POST).first
-        if b.count() == 0:
-            b = page.locator('button[class*="Button__root--type-primary"], .TUXButton--primary').first
-        if b.count() == 0:
-            b = page.locator(POST_XPATH).first
-
-        if b.count() > 0:
+        # Diagnostic dump of the located Post button
+        post_loc = _find_post_button(page)
+        if post_loc is not None and post_loc.count() > 0:
             try:
-                outer = b.evaluate("(e)=>e.outerHTML") or ""
-                print(f"[{username}] outerHTML (exact):\n{outer[:950]}")
+                outer = post_loc.first.evaluate("(e)=>e.outerHTML") or ""
+                print(f"[{username}] Post button outerHTML:\n{outer[:950]}")
             except Exception as oe:
                 print(f"[{username}] outerHTML err: {oe}")
             try:
-                print(f"[{username}] visible={b.is_visible()} enabled={b.is_enabled()} count={b.count()}")
-                print(f"[{username}] data-disabled={b.get_attribute('data-disabled')} aria-disabled={b.get_attribute('aria-disabled')} data-loading={b.get_attribute('data-loading')}")
-                print(f"[{username}] role={b.get_attribute('role')} type={b.get_attribute('type')}")
-            except Exception as ae:
-                print(f"[{username}] attrs err: {ae}")
-            try:
-                bb = b.bounding_box(timeout=2500)
+                bb = post_loc.first.bounding_box(timeout=2500)
+                info = post_loc.first.evaluate("""e => ({
+                    vis: e.offsetParent !== null,
+                    dis: !!e.disabled,
+                    aria: e.getAttribute('aria-disabled'),
+                    dd: e.getAttribute('data-disabled'),
+                    dl: e.getAttribute('data-loading'),
+                    txt: (e.textContent||'').trim().slice(0,40)
+                })""")
+                print(f"[{username}] Post button state: {info}")
                 if bb:
                     cx = bb["x"] + bb["width"] / 2
                     cy = bb["y"] + bb["height"] / 2
-                    h = page.evaluate('''(x,y)=>{const el=document.elementFromPoint(x,y);if(!el)return{tag:"NULL"};return{tag:el.tagName,cls:(el.className||"").slice(0,85),txt:(el.innerText||"").slice(0,55),de2e:el.getAttribute("data-e2e"),pe:getComputedStyle(el).pointerEvents,role:el.getAttribute("role")}}''', cx, cy)
-                    print(f"[{username}] elementFromPoint(center): {h}")
-                    if h.get("de2e") != "post_video_button":
-                        print(f"[{username}] ⚠⚠ OVERLAP / Z-INDEX BLOCK DETECTED at button center!")
-                    if h.get("pe") == "none":
-                        print(f"[{username}] ⚠ pointer-events:none on top element!")
+                    top = page.evaluate(
+                        "(x,y)=>{const el=document.elementFromPoint(x,y);"
+                        "return el?(el.getAttribute('data-e2e')||el.tagName):null;}", cx, cy)
+                    print(f"[{username}] elementFromPoint(center): {top}")
+                    if top != "post_video_button":
+                        print(f"[{username}] ⚠⚠ OVERLAP — top element is {top}, not the Post button")
             except Exception as oe2:
-                print(f"[{username}] elementFromPoint EXCEPTION: {oe2}")
-                import traceback
-                traceback.print_exc()
+                print(f"[{username}] post-button debug err: {oe2}")
         else:
             print(f"[{username}] ❌ post button NOT FOUND in DOM")
             _save_debug_html(page, "NO_POST_BUTTON", username)
 
-        print(f"[{username}] === ATTEMPTING EXACT CLICK (from pasted HTML) ===")
-        clicked = False
-        ev = False
-
-        try:
-            btn = page.locator(POST).first
-            if btn.count() == 0:
-                btn = page.locator('button[class*="Button__root--type-primary"]').first
-            if btn.count() == 0:
-                btn = page.locator('.TUXButton--primary').first
-
-            if btn.count() > 0:
-                try:
-                    pre_ddis = btn.get_attribute("data-disabled")
-                    pre_aria = btn.get_attribute("aria-disabled")
-                    print(f"[{username}] pre-click: data-disabled={pre_ddis} aria-disabled={pre_aria}")
-                except: pass
-
-                # Strategy 1: scroll + force click (primary)
-                try:
-                    btn.scroll_into_view_if_needed(timeout=3000)
-                    time.sleep(0.25)
-                    btn.click(timeout=8000, force=True, no_wait_after=True)
-                    clicked = True
-                    print(f"[{username}] ✓ 1. force click on data-e2e=post_video_button")
-                except Exception as c1:
-                    print(f"[{username}] 1. force click EXCEPTION: {c1}")
-                    import traceback
-                    traceback.print_exc()
-
-                # Strategy 2: click inner Button__content (exact from user's pasted HTML)
-                if not clicked:
-                    try:
-                        content = btn.locator('div[class*="Button__content"]').first
-                        if content.count() > 0:
-                            content.click(timeout=6000, force=True)
-                            clicked = True
-                            print(f"[{username}] ✓ 2. clicked inner .Button__content (Publiser)")
-                    except Exception as c2:
-                        print(f"[{username}] 2. content click EXCEPTION: {c2}")
-                        import traceback
-                        traceback.print_exc()
-
-                # Strategy 3: precise JS dispatch (mimics real user + from verified repos)
-                if not clicked:
-                    try:
-                        result = page.evaluate('''() => {
-                            let b = document.querySelector('button[data-e2e="post_video_button"]') ||
-                                    document.querySelector('button[class*="Button__root--type-primary"]');
-                            if (!b) return "no-btn";
-                            b.scrollIntoView({block: "center", behavior: "smooth"});
-                            b.focus();
-                            const opts = {bubbles: true, cancelable: true, view: window, composed: true};
-                            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(t => {
-                                b.dispatchEvent(new MouseEvent(t, opts));
-                            });
-                            b.click();
-                            return "dispatched";
-                        }''')
-                        clicked = True
-                        print(f"[{username}] ✓ 3. JS pointer events + click (result: {result})")
-                    except Exception as c3:
-                        print(f"[{username}] 3. JS EXCEPTION: {c3}")
-                        import traceback
-                        traceback.print_exc()
-
-                # Strategy 4: last resort coordinate click on button box
-                if not clicked:
-                    try:
-                        bb = btn.bounding_box(timeout=2000)
-                        if bb:
-                            page.mouse.click(bb["x"] + bb["width"]/2, bb["y"] + bb["height"]/2)
-                            clicked = True
-                            print(f"[{username}] ✓ 4. coordinate click")
-                    except Exception as c4:
-                        print(f"[{username}] 4. coord EXCEPTION: {c4}")
-                        import traceback
-                        traceback.print_exc()
-
-                _save_debug_screenshot(page, "post_clicked_immediate", username)
-                take_screenshot(username)
-                time.sleep(5)
-                _save_debug_screenshot(page, "post_clicked_5s", username)
-                take_screenshot(username)
-                _save_debug_html(page, "POST_CLICKED", username)
-
-                print(f"[{username}] === POST-CLICK EVIDENCE CHECK (navigation / toast / net / button gone) ===")
+        print(f"[{username}] === CLICKING POST (real DOM click, overlay-proof) ===")
+        posted = False
+        for attempt in range(4):
+            post_loc = _find_post_button(page)
+            if post_loc is None:
+                print(f"[{username}] ❌ no Post button (attempt {attempt+1})")
                 time.sleep(3)
-                try:
-                    print(f"[{username}] URL after click: {page.url}")
-                    if "/video/" in page.url or "creator-center" not in page.url:
-                        print(f"[{username}] ✓ URL changed (likely posted)")
-                        ev = True
-                    if page.locator(SUCCESS).count() > 0:
-                        print(f"[{username}] ✓ success / published toast text visible")
-                        ev = True
-                    if page.locator(POST).count() == 0:
-                        print(f"[{username}] ✓ post button disappeared")
-                        ev = True
-                    if len(nets) > 0:
-                        print(f"[{username}] ✓ network activity: {len(nets)} relevant")
-                        for n in nets[-5:]:
-                            print(f"  {n}")
-                        ev = True
-                    # Check for processing / published indicators
-                    try:
-                        body = page.inner_text("body", timeout=2000) or ""
-                        if any(k in body.lower() for k in ["posted", "published", "publiser", "upload complete", "video has been"]):
-                            print(f"[{username}] ✓ body text indicates success")
-                            ev = True
-                    except: pass
-                except Exception as de:
-                    print(f"[{username}] evidence check EXCEPTION: {de}")
-                    import traceback
-                    traceback.print_exc()
+                continue
 
-                print(f"[{username}] clicked={clicked} evidence={ev}")
-            else:
-                print(f"[{username}] ❌ NO BUTTON AT CLICK TIME")
-                _save_debug_html(page, "NO_BUTTON_AT_CLICK", username)
-        except Exception as ce:
-            print(f"[{username}] CLICK CRASH (full): {ce}")
-            import traceback
-            traceback.print_exc()
-            _save_debug_screenshot(page, "click_crash", username)
-            _save_debug_html(page, "CLICK_CRASH", username)
+            if not _button_can_post(post_loc):
+                print(f"[{username}] Post button still disabled (attempt {attempt+1}) — waiting")
+                time.sleep(4)
+                continue
+
+            clicked, method = _click_post_robust(page, post_loc, username)
+            print(f"[{username}] click attempt {attempt+1}: clicked={clicked} method={method}")
+
+            # Newer TikTok shows a 'Continue to post?' confirmation after the click
+            _handle_continue_to_post(page, username)
+
+            _save_debug_screenshot(page, f"post_attempt_{attempt+1}", username)
+            take_screenshot(username)
+            _save_debug_html(page, f"POST_ATTEMPT_{attempt+1}", username)
+
+            # === VERIFY THE POST ACTUALLY REGISTERED ===
+            print(f"[{username}] verifying post (attempt {attempt+1})...")
+            for _ in range(15):  # up to ~45s
+                time.sleep(3)
+                _handle_continue_to_post(page, username)
+                url = page.url.lower()
+                if "/video/" in url or "/content" in url:
+                    print(f"[{username}] ✓ URL changed after post: {page.url}")
+                    posted = True
+                    break
+                if _find_post_button(page) is None:
+                    print(f"[{username}] ✓ Post button disappeared (published)")
+                    posted = True
+                    break
+                if page.locator(SUCCESS).count() > 0:
+                    print(f"[{username}] ✓ success/published toast visible")
+                    posted = True
+                    break
+                try:
+                    body = page.inner_text("body", timeout=2000) or ""
+                    if any(k in body.lower() for k in
+                           ["your video has been uploaded", "video published", "is being uploaded",
+                            "uploaded successfully", "posted", "publiser"]):
+                        print(f"[{username}] ✓ body text indicates published")
+                        posted = True
+                        break
+                except Exception:
+                    pass
+                # 'Something went wrong' -> retry the whole click
+                try:
+                    if "something went wrong" in (page.inner_text("body", timeout=1500) or "").lower():
+                        print(f"[{username}] ⚠ 'Something went wrong' — will retry click")
+                        break
+                except Exception:
+                    pass
+            if posted:
+                break
+            print(f"[{username}] attempt {attempt+1} did not confirm a post — retrying")
 
         try:
             page.remove_listener("request", nr)
@@ -1482,20 +1602,15 @@ def upload_video_to_tiktok(username, file_path, caption):
         except Exception as re:
             print(f"[{username}] remove_listener err: {re}")
 
-        if clicked and (ev or True):  # return True if we clicked (TikTok may be slow)
+        if posted:
             try:
                 handle_content_check_dialog(page, username)
             except Exception as hde:
                 print(f"[{username}] content dialog err: {hde}")
-            try:
-                time.sleep(4)
-                page.goto("https://www.tiktok.com", timeout=15000)
-            except Exception as ge:
-                print(f"[{username}] goto home err: {ge}")
-            _save_debug_html(page, "FINAL_SUCCESS_ATTEMPT", username)
+            _save_debug_html(page, "FINAL_SUCCESS", username)
             return True
         else:
-            print(f"[{username}] ❌ CLICK HAD NO EFFECT or no evidence (see PRE-POST + elementFromPoint + nets + debug HTMLs above)")
+            print(f"[{username}] ❌ Post never confirmed (see debug HTMLs / screenshots above)")
             _save_debug_html(page, "FINAL_FAIL", username)
             take_screenshot(username)
             return False
