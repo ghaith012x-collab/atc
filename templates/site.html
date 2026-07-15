@@ -80,11 +80,12 @@
             <input type="text" id="new-username" placeholder="@username" style="flex:1;min-width:160px;">
             <select id="new-category">
                 <option value="dance">Dance</option>
-                <option value="comedy">Comedy</option>
-                <option value="gaming">Gaming</option>
                 <option value="horror">Horror</option>
                 <option value="story">Story Animation</option>
-                <option value="memes">Memes</option>
+                <option value="memes">Funny Videos</option>
+                <option value="comedy">Gin Stories</option>
+                <option value="gaming">Scary facts</option>
+                <option value="predator">Predator Catches</option>
             </select>
             <button class="btn-primary" onclick="addAccount()">Add Account</button>
         </div>
@@ -127,10 +128,6 @@
             <div class="info-item">
                 <div class="info-label">LAST POST</div>
                 <div class="info-value">{{ acc.last_post or '—' }}</div>
-            </div>
-            <div class="info-item">
-                <div class="info-label">NEXT POST</div>
-                <div class="info-value" id="next-{{ acc.username }}">{{ acc.next_post or '—' }}</div>
             </div>
             <div class="info-item">
                 <div class="info-label">NEXT POST IN</div>

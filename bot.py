@@ -565,14 +565,29 @@ POST_INTERVAL_SECONDS = 600  # 10 minutes
 # How many of the top-ranked candidates to randomly choose between, so we never
 # keep picking the exact same viral video every cycle.
 VIDEO_CHOICE_POOL = 6
+# Category key -> the ACTUAL TikTok search query used (search page + tikwm API).
+# Display labels live in the dashboard <select>; this controls what gets searched.
+CATEGORY_SEARCH = {
+    "dance": "dance",
+    "horror": "horror",
+    "story": "Horror Story Animation",
+    "comedy": "Jinn stories Islam",       # shown as "Gin Stories"
+    "gaming": "Scary Facts",              # shown as "Scary facts"
+    "memes": "Funny Videos",
+    "predator": "Pred catches",
+}
+
 # Hashtag pools per category used to enrich captions
 CATEGORY_HASHTAGS = {
     "horror": ["#horror", "#scary", "#horrortok", "#creepy", "#scarystories", "#fyp", "#viral"],
     "dance": ["#dance", "#dancechallenge", "#dancer", "#trending", "#fyp", "#viral"],
-    "comedy": ["#comedy", "#funny", "#lol", "#humor", "#fyp", "#viral"],
+    "story": ["#storyanimation", "#horrorstory", "#horror", "#scary", "#animation", "#fyp", "#viral"],
+    "comedy": ["#jinns", "#islam", "#jinnstories", "#supernatural", "#unseen", "#fyp", "#viral"],
+    "gaming": ["#scaryfacts", "#facts", "#didyouknow", "#scary", "#learn", "#fyp", "#viral"],
+    "memes": ["#funny", "#memes", "#lol", "#comedyvideos", "#fyp", "#viral"],
+    "predator": ["#predator", "#predcatch", "#wildlife", "#animal", "#nature", "#fyp", "#viral"],
     "food": ["#food", "#foodtok", "#recipe", "#cooking", "#foodie", "#fyp", "#viral"],
     "fitness": ["#fitness", "#gym", "#workout", "#fitnessmotivation", "#fyp", "#viral"],
-    "gaming": ["#gaming", "#gamer", "#gamingtok", "#videogames", "#fyp", "#viral"],
     "pets": ["#pets", "#dogsoftiktok", "#catsoftiktok", "#animals", "#fyp", "#viral"],
     "motivation": ["#motivation", "#mindset", "#success", "#inspiration", "#fyp", "#viral"],
 }
@@ -826,10 +841,11 @@ def search_on_tiktok(username, category):
     if page is None:
         return False
 
-    update_account(username, current_task=f"Searching TikTok for '{category}'...")
+    query = CATEGORY_SEARCH.get(category, category)
+    update_account(username, current_task=f"Searching TikTok for '{query}'...")
 
     try:
-        q = urllib.parse.quote(category)
+        q = urllib.parse.quote(query)
         page.goto(f"https://www.tiktok.com/search/video?q={q}", timeout=30000)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -912,7 +928,7 @@ def find_viral_video(username, category, exclude=None):
     try:
         r = requests.post(
             TIKWM_SEARCH_API,
-            data={"keywords": category, "count": 30, "cursor": 0, "HD": 1},
+            data={"keywords": CATEGORY_SEARCH.get(category, category), "count": 30, "cursor": 0, "HD": 1},
             timeout=25,
         )
         data = r.json()
@@ -1034,11 +1050,35 @@ def generate_caption(video_info, category):
             "The energy is unmatched",
             plain or "This dance is too good",
         ],
+        "story": [
+            "This horror story animation gave me chills 😱",
+            "POV: the story takes a dark turn...",
+            "Animation horror hits different",
+            plain or "This story animation is wild",
+        ],
         "comedy": [
+            "This jinn story is terrifying 😨",
+            "Islam teaches us about the unseen 👀",
+            "You won't believe this jinn story",
+            plain or "Jinn stories always hit different",
+        ],
+        "gaming": [
+            "This fact gave me chills 🥶",
+            "Did you know this? 👀",
+            "Scary fact you weren't ready for",
+            plain or "This fact is unforgettable",
+        ],
+        "memes": [
             "I can't stop laughing 😂",
             "This is too real",
             "The accuracy 💀",
             plain or "This had me dying",
+        ],
+        "predator": [
+            "When the predator strikes 🐊",
+            "Nature is brutal 🔥",
+            "Caught in the act 📸",
+            plain or "This catch was insane",
         ],
     }
 
@@ -1839,25 +1879,55 @@ def automation_worker(username):
 
                         while time.time() - fyp_start < fyp_budget:
                             try:
-                                scroll_amount = random.randint(350, 720)
-                                page.mouse.wheel(0, scroll_amount)
-                                time.sleep(random.uniform(1.2, 3.8))
+                                # Mostly scroll down, occasionally a small scroll up (re-read)
+                                if random.random() < 0.12:
+                                    page.mouse.wheel(0, -random.randint(120, 350))
+                                else:
+                                    page.mouse.wheel(0, random.randint(250, 820))
+                                time.sleep(random.uniform(1.0, 3.5))
 
-                                if random.random() < 0.65:
+                                # Sometimes open a video and actually WATCH it (very human)
+                                if random.random() < 0.30:
                                     try:
-                                        like_btn = page.locator('button[aria-label*="Like"], [data-e2e="like-btn"]').first
-                                        if like_btn.count() > 0 and like_btn.is_visible():
-                                            like_btn.click(timeout=1500)
-                                            hearts += 1
-                                            time.sleep(random.uniform(0.6, 1.8))
-                                    except:
+                                        vid = page.locator('a[href*="/video/"]').first
+                                        if vid.count() > 0 and vid.is_visible():
+                                            vid.click(timeout=2000)
+                                            time.sleep(random.uniform(4, 16))  # watch
+                                            try:
+                                                lb = page.locator('button[aria-label*="Like"], [data-e2e="like-btn"]').first
+                                                if lb.count() > 0 and lb.is_visible() and random.random() < 0.7:
+                                                    lb.click(timeout=1500)
+                                                    hearts += 1
+                                            except Exception:
+                                                pass
+                                            # Return to the For You feed
+                                            try:
+                                                page.keyboard.press("Escape")
+                                                time.sleep(random.uniform(1.0, 2.5))
+                                            except Exception:
+                                                pass
+                                            page.goto("https://www.tiktok.com", timeout=20000)
+                                            time.sleep(random.uniform(1.5, 3.0))
+                                    except Exception:
                                         pass
+                                else:
+                                    # Like a video inline on the feed
+                                    if random.random() < 0.6:
+                                        try:
+                                            like_btn = page.locator('button[aria-label*="Like"], [data-e2e="like-btn"]').first
+                                            if like_btn.count() > 0 and like_btn.is_visible():
+                                                like_btn.click(timeout=1500)
+                                                hearts += 1
+                                                time.sleep(random.uniform(0.5, 1.8))
+                                        except Exception:
+                                            pass
 
-                                if random.random() < 0.25:
-                                    time.sleep(random.uniform(3.5, 8.0))
+                                # Occasional longer "watch" pause (looks like real viewing)
+                                if random.random() < 0.22:
+                                    time.sleep(random.uniform(4.0, 9.0))
 
                                 # Keep the live preview fresh (no lag)
-                                if random.random() < 0.12:
+                                if random.random() < 0.15:
                                     take_screenshot(username)
 
                             except Exception:
