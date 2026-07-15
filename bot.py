@@ -1312,7 +1312,7 @@ def upload_video_to_tiktok(username, file_path, caption):
         #   data-e2e="post_video_button" style="width: 200px;">
         #   <div class="Button__content Button__content--loading-false">Publiser</div>
         # </button>
-        primary_post_selector = 'button[data-e2e="post_video_button"].Button__root--type-primary, button[data-e2e="post_video_button"][class*="Button__root--type-primary"]'
+        primary_post_selector = 'button[data-e2e="post_video_button"][class*="Button__root--type-primary"]'  # EXACT from your HTML
 
         def _debug_post_dom(page, note=""):
             try:
