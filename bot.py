@@ -2084,7 +2084,12 @@ def login_with_email(username, password, email="", code=""):
         browser_sessions[username] = {"pw": pw, "browser": browser, "context": context, "page": page}
         log(f"[{username}] Email login: browser ready")
 
-        page.goto("https://www.tiktok.com/login/phone-or-email-/email", timeout=30000)
+        page.goto("https://www.tiktok.com", timeout=30000)
+        time.sleep(3)
+        take_screenshot(username)
+
+        update_account(username, current_task="Clicking Log in...")
+        _click_text(page, ["log in", "login", "sign in"])
         time.sleep(3)
         take_screenshot(username)
 
