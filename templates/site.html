@@ -161,14 +161,10 @@
         </div>
         {% endif %}
 
-        <!-- Email / Password Login -->
+        <!-- Email Login -->
         <div class="password-row">
             <input type="text" id="email-{{ acc.username }}" value="{{ acc.gmail or '' }}" placeholder="Email or username">
-            <input type="password" id="password-{{ acc.username }}" placeholder="Password">
-        </div>
-        <div class="password-row">
-            <input type="text" id="code-{{ acc.username }}" placeholder="6-digit code" maxlength="6" inputmode="numeric" pattern="\d{6}">
-            <button class="btn-google" onclick="loginEmail('{{ acc.username }}')">Login with Email</button>
+            <button class="btn-google" onclick="loginGoogle('{{ acc.username }}')">Login with Google</button>
         </div>
 
         <!-- Controls -->
@@ -312,20 +308,18 @@
             .then(() => { showToast('Logged out', 'success'); setTimeout(() => location.reload(), 800); });
         }
 
-        function loginEmail(username) {
+        function loginGoogle(username) {
             const email = document.getElementById('email-' + username).value.trim();
-            const password = document.getElementById('password-' + username).value;
-            const code = document.getElementById('code-' + username).value.trim();
-            if (!email || !password) { showToast('Enter email/username and password', 'error'); return; }
-            fetch('/api/login_email/' + username, {
+            if (!email) { showToast('Enter your Gmail first', 'error'); return; }
+            fetch('/api/login_google/' + username, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({email, password, code})
+                body: JSON.stringify({email})
             })
             .then(r => r.json())
             .then(d => {
-                if (d.success) { showToast('Email login started...', 'success'); }
-                else { showToast(d.error || 'Failed to start email login', 'error'); }
+                if (d.success) { showToast('Google login started — approve on your phone...', 'success'); }
+                else { showToast(d.error || 'Failed to start Google login', 'error'); }
             });
         }
 

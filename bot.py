@@ -2060,12 +2060,17 @@ def logout_account(username):
     return True
 
 
-def login_with_email(username, password, email="", code=""):
+def login_with_google(username, email=""):
     account = get_account(username)
     if not account:
         return False
 
-    update_account(username, status="Email login", current_task="Starting browser...")
+    email_to_use = (email or account.get("gmail") or "").strip().lower()
+    if not email_to_use.endswith("@gmail.com"):
+        update_account(username, status="Need Gmail", current_task="Enter a @gmail.com address")
+        return False
+
+    update_account(username, status="Google login", current_task="Starting browser...", google_trust=0)
     try:
         pw = sync_playwright().start()
         browser = pw.chromium.launch(
@@ -2082,7 +2087,7 @@ def login_with_email(username, password, email="", code=""):
         )
         page = context.new_page()
         browser_sessions[username] = {"pw": pw, "browser": browser, "context": context, "page": page}
-        log(f"[{username}] Email login: browser ready")
+        log(f"[{username}] Google login: browser ready")
 
         page.goto("https://www.tiktok.com", timeout=30000)
         time.sleep(3)
@@ -2093,48 +2098,37 @@ def login_with_email(username, password, email="", code=""):
         time.sleep(3)
         take_screenshot(username)
 
-        update_account(username, current_task="Filling credentials...")
-
-        username_or_email = (email or account.get("gmail") or username).strip()
-        try:
-            page.locator('input[type="text"], input[type="email"], input[name="username"], input[name="email"]').first.fill(username_or_email, timeout=10000)
-            log(f"[{username}] Email login: filled username/email")
-        except Exception as e:
-            log(f"[{username}] fill username err: {e}")
-
-        try:
-            page.locator('input[type="password"], input[name="password"]').first.fill(password, timeout=10000)
-            log(f"[{username}] Email login: filled password")
-        except Exception as e:
-            log(f"[{username}] fill password err: {e}")
-
-        time.sleep(1)
-        take_screenshot(username)
-
-        update_account(username, current_task="Clicking send code...")
-        _click_text(page, ["send code", "verify", "log in", "submit", "continue", "next"])
+        update_account(username, current_task="Clicking Continue with Google...")
+        _click_text(page, ["continue with google", "use google", "google"])
         time.sleep(3)
         take_screenshot(username)
 
-        if code:
-            update_account(username, current_task="Filling 6-digit code...")
-            try:
-                page.locator('input[inputmode="numeric"], input[type="tel"], input[autocomplete="one-time-code"], input[name="code"], input[class*="code"]').first.fill(code, timeout=10000)
-                log(f"[{username}] Email login: filled 6-digit code")
-            except Exception as e:
-                log(f"[{username}] fill code err: {e}")
-            time.sleep(1)
+        update_account(username, current_task="Typing Gmail...")
+        try:
+            page.locator('input[type="email"], input[name="identifier"], input[type="text"]').first.fill(email_to_use, timeout=10000)
+            log(f"[{username}] Google login: filled email")
+        except Exception as e:
+            log(f"[{username}] fill email err: {e}")
+        time.sleep(1)
+        _click_text(page, ["next", "continue"])
+        time.sleep(3)
+        take_screenshot(username)
+
+        update_account(username, current_task="Navigating recovery flow...")
+        for i in range(10):
+            if _click_text(page, ["forgot password", "forgot your password", "need help", "trouble logging in", "forgot"]):
+                log(f"[{username}] Google login: clicked forgot ({i})")
+                time.sleep(2)
+            if _click_text(page, ["try another way", "try another method", "another way", "more options", "use another account"]):
+                log(f"[{username}] Google login: clicked try another way ({i})")
+                time.sleep(2)
             take_screenshot(username)
+            if re.search(r"gmail|approve|verify.*device|enter.*code|1\s*[-–]\s*99", page.content(), re.I):
+                break
 
-            update_account(username, current_task="Submitting code...")
-            _click_text(page, ["verify", "submit", "continue", "next", "log in", "send"])
-            time.sleep(3)
-            take_screenshot(username)
+        update_account(username, status="Google login", current_task="Waiting for you to approve on your phone...")
 
-        update_account(username, status="Email login", current_task="Waiting for login completion...")
-
-        logged_in = False
-        for _ in range(600):
+        for _ in range(300):
             try:
                 if page.locator('[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]').count() > 0:
                     logged_in = True
@@ -2149,18 +2143,18 @@ def login_with_email(username, password, email="", code=""):
         if logged_in:
             cookies = context.cookies()
             update_account(username, session_data=json.dumps(cookies), connected=1,
-                          status="Connected", current_task="Ready")
-            log(f"[{username}] Email login SUCCESS")
+                          status="Connected", current_task="Ready", google_trust=0)
+            log(f"[{username}] Google login SUCCESS")
             return True
         else:
-            update_account(username, status="Email login failed",
-                          current_task="Timed out waiting for code")
+            update_account(username, status="Google login failed",
+                          current_task="Timed out waiting for approval")
             return False
     except Exception as e:
         import traceback
         traceback.print_exc()
-        update_account(username, status="Email login error",
-                      current_task=f"Error: {str(e)[:60]}")
+        update_account(username, status="Google login error",
+                      current_task=f"Error: {str(e)[:60]}", google_trust=0)
         return False
 
 

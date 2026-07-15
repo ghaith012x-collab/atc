@@ -5,7 +5,7 @@ from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
     connect_account, start_automation, stop_automation,
-    delete_account_session, logout_account, login_with_email,
+    delete_account_session, logout_account, login_with_google,
     screenshots, browser_sessions, take_screenshot
 )
 
@@ -124,16 +124,12 @@ def api_logout(username):
     return jsonify({"success": True})
 
 
-@app.route("/api/login_email/<path:username>", methods=["POST"])
-def api_login_email(username):
+@app.route("/api/login_google/<path:username>", methods=["POST"])
+def api_login_google(username):
     data = request.get_json(silent=True) or {}
-    password = data.get("password", "")
     email = data.get("email", "")
-    code = data.get("code", "")
-    if not password:
-        return jsonify({"success": False, "error": "Password required"})
-    threading.Thread(target=login_with_email, args=(username, password, email, code), daemon=True).start()
-    return jsonify({"success": True, "message": "Email login started..."})
+    threading.Thread(target=login_with_google, args=(username, email), daemon=True).start()
+    return jsonify({"success": True, "message": "Google login started..."})
 
 
 @app.route("/live/<path:username>")
