@@ -1254,65 +1254,282 @@ def upload_video_to_tiktok(username, file_path, caption):
 
         take_screenshot(username)
 
-        # === CRITICAL: Wait for TikTok to enable the Post button ===
-        # The button stays disabled (data-disabled + aria-disabled = true) until video is fully processed
-        print(f"[{username}] Waiting for Post button to become enabled (aria-disabled=false + data-disabled=false)...")
-        for _ in range(30):  # up to ~60 seconds of extra waiting
+        # ============================================================
+        # ACCURATE UPLOAD COMPLETION + DETAILED POST DEBUG
+        # ============================================================
+        print(f"[{username}] === WAITING FOR UPLOAD TO HIT 100% (accurate) ===")
+
+        upload_finished = False
+        for sec in range(240):  # up to 8 minutes
             try:
-                pb = page.locator('button[data-e2e="post_video_button"]').first
-                if pb.count() > 0:
-                    aria = (pb.get_attribute("aria-disabled") or "").lower()
-                    ddis = (pb.get_attribute("data-disabled") or "").lower()
-                    dload = (pb.get_attribute("data-loading") or "").lower()
-                    if aria != "true" and ddis != "true" and dload != "true":
-                        txt = (pb.inner_text(timeout=300) or "").strip()
-                        print(f"[{username}] ✓ Post button is now ENABLED (text='{txt}') — ready to click")
-                        break
+                # Log URL occasionally
+                if sec % 10 == 0:
+                    print(f"[{username}] [upload {sec}s] URL={page.url[:70]}")
+
+                # Check for 100% progress text or complete state
+                progress_100 = False
+                try:
+                    # Look for any element showing 100%
+                    for sel in ['text=/100%/', 'text=/uploading.*100/i', '[aria-valuenow="100"]', 'text=/complete|uploaded/i']:
+                        els = page.locator(sel)
+                        if els.count() > 0:
+                            for i in range(min(els.count(), 2)):
+                                try:
+                                    t = (els.nth(i).inner_text(timeout=300) or "").lower()
+                                    if "100" in t or "complete" in t or "uploaded" in t:
+                                        progress_100 = True
+                                        print(f"[{username}]   100%/complete detected: {t[:50]}")
+                                        break
+                                except:
+                                    pass
+                except:
+                    pass
+
+                # Check if uploading text is gone
+                still_uploading = False
+                try:
+                    up = page.locator('text=/uploading|processing your video|upload in progress/i').first
+                    if up.count() > 0 and up.is_visible():
+                        still_uploading = True
+                except:
+                    pass
+
+                # Check Post button state
+                btn = page.locator('button[data-e2e="post_video_button"]').first
+                btn_ready = False
+                if btn.count() > 0:
+                    a = (btn.get_attribute("aria-disabled") or "").lower()
+                    d = (btn.get_attribute("data-disabled") or "").lower()
+                    l = (btn.get_attribute("data-loading") or "").lower()
+                    btn_ready = (a != "true" and d != "true" and l != "true")
+
+                if (progress_100 or not still_uploading) and btn_ready:
+                    print(f"[{username}] ✓ UPLOAD 100% + Post button ready (progress_100={progress_100}, still_uploading={still_uploading})")
+                    upload_finished = True
+                    break
+
+            except Exception as uw:
+                print(f"[{username}] upload-wait error: {uw}")
+
+            time.sleep(2)
+
+            if sec % 15 == 0:
+                take_screenshot(username)
+
+        if not upload_finished:
+            print(f"[{username}] ⚠ Upload 100% wait timed out — proceeding anyway (will log why click may fail)")
+
+        take_screenshot(username)
+
+        # === DETAILED PRE-CLICK DEBUG (as requested) ===
+        print(f"[{username}] === DETAILED PRE-POST DEBUG ===")
+        try:
+            print(f"[{username}] Current page URL: {page.url}")
+
+            # Check for iframes
+            try:
+                frames = page.frames
+                for fr in frames:
+                    try:
+                        fu = fr.url
+                        if 'upload' in fu.lower() or 'creator' in fu.lower() or 'tiktokstudio' in fu.lower():
+                            print(f"[{username}]   Found relevant frame: {fu}")
+                    except:
+                        pass
+            except Exception as fr_e:
+                print(f"[{username}] Frame check error: {fr_e}")
+
+            btn = page.locator('button[data-e2e="post_video_button"]').first
+            if btn.count() == 0:
+                btn = page.locator(primary_post_selector).first
+
+            if btn.count() > 0:
+                try:
+                    outer = btn.evaluate("(el) => el.outerHTML")
+                    print(f"[{username}] Button outerHTML:\n{outer[:850]}")
+                except Exception as ohe:
+                    print(f"[{username}] outerHTML error: {ohe}")
+
+                try:
+                    print(f"[{username}] is_visible(): {btn.is_visible()}")
+                    print(f"[{username}] is_enabled(): {btn.is_enabled()}")
+                    print(f"[{username}] count() (attached to DOM): {btn.count()}")
+                except Exception as st_e:
+                    print(f"[{username}] State check error: {st_e}")
+
+                # elementFromPoint overlap detection
+                try:
+                    bb = btn.bounding_box(timeout=2500)
+                    if bb:
+                        cx = bb['x'] + bb['width'] / 2
+                        cy = bb['y'] + bb['height'] / 2
+                        top = page.evaluate('''(x, y) => {
+                            const el = document.elementFromPoint(x, y);
+                            if (!el) return {tag: 'NULL'};
+                            return {
+                                tag: el.tagName,
+                                class: (el.className || '').substring(0,80),
+                                text: (el.innerText || '').substring(0,50),
+                                data_e2e: el.getAttribute('data-e2e'),
+                                is_button: el.tagName === 'BUTTON'
+                            };
+                        }''', cx, cy)
+                        print(f"[{username}] elementFromPoint(center): {top}")
+                except Exception as ov_e:
+                    print(f"[{username}] elementFromPoint error: {ov_e}")
+            else:
+                print(f"[{username}] ❌ Post button NOT FOUND in DOM")
+        except Exception as pre_e:
+            print(f"[{username}] PRE-CLICK DEBUG EXCEPTION: {pre_e}")
+            import traceback
+            traceback.print_exc()
+
+        take_screenshot(username)
+
+        # === PERFORM THE CLICK (no silent excepts) ===
+        print(f"[{username}] === ATTEMPTING POST CLICK (accurate, no blind retries) ===")
+        update_account(username, current_task="Clicking Post...")
+
+        clicked = False
+        post_evidence = False
+
+        try:
+            btn = page.locator('button[data-e2e="post_video_button"]').first
+            if btn.count() == 0:
+                btn = page.locator(primary_post_selector).first
+
+            if btn.count() > 0:
+                # One last state log
+                try:
+                    aria = (btn.get_attribute("aria-disabled") or "").lower()
+                    ddis = (btn.get_attribute("data-disabled") or "").lower()
+                    dload = (btn.get_attribute("data-loading") or "").lower()
+                    print(f"[{username}] Final state before click → aria={aria} data-disabled={ddis} data-loading={dload}")
+                except:
+                    pass
+
+                # 1. Force click
+                try:
+                    btn.scroll_into_view_if_needed(timeout=3000)
+                    time.sleep(0.25)
+                    btn.click(timeout=7000, force=True)
+                    clicked = True
+                    print(f"[{username}] ✓ .click(force=True) succeeded")
+                except Exception as ce:
+                    print(f"[{username}] .click(force=True) EXCEPTION: {ce}")
+                    import traceback
+                    traceback.print_exc()
+
+                # 2. Click inner .Button__content (exact from your HTML)
+                if not clicked:
+                    try:
+                        c = btn.locator('.Button__content').first
+                        if c.count() > 0:
+                            c.click(timeout=5000, force=True)
+                            clicked = True
+                            print(f"[{username}] ✓ Clicked .Button__content directly")
+                    except Exception as cce:
+                        print(f"[{username}] .Button__content click EXCEPTION: {cce}")
+                        import traceback
+                        traceback.print_exc()
+
+                # 3. Full JS event sequence
+                if not clicked:
+                    try:
+                        page.evaluate('''(sel) => {
+                            const b = document.querySelector(sel) || document.querySelector('button[data-e2e="post_video_button"]');
+                            if (!b) return false;
+                            b.scrollIntoView({block:"center"});
+                            b.focus();
+                            const opts = {bubbles:true, cancelable:true, view:window};
+                            b.dispatchEvent(new MouseEvent("mousedown", opts));
+                            b.dispatchEvent(new MouseEvent("mouseup", opts));
+                            b.dispatchEvent(new MouseEvent("click", opts));
+                            b.click();
+                            return true;
+                        }''', 'button[data-e2e="post_video_button"]')
+                        clicked = True
+                        print(f"[{username}] ✓ JS full mouse events executed")
+                    except Exception as jse:
+                        print(f"[{username}] JS click EXCEPTION: {jse}")
+                        import traceback
+                        traceback.print_exc()
+
+                # Screenshot right after click attempt
+                take_screenshot(username)
+
+                # Wait 5 seconds + screenshot (as requested)
+                time.sleep(5)
+                take_screenshot(username)
+
+                # === POST-CLICK EVIDENCE DETECTION ===
+                print(f"[{username}] === POST-CLICK EVIDENCE CHECK ===")
+                time.sleep(2)
+
+                try:
+                    after_url = page.url
+                    print(f"[{username}] URL after click: {after_url}")
+
+                    # Look for success / processing indicators
+                    for indicator in [
+                        'text=/video is being (processed|uploaded)/i',
+                        'text=/your video has been posted/i',
+                        'text=/posted/i',
+                        'text=/processing/i',
+                        '[class*="toast"]',
+                        '[class*="success"]'
+                    ]:
+                        try:
+                            if page.locator(indicator).count() > 0:
+                                print(f"[{username}] ✓ Evidence found: {indicator}")
+                                post_evidence = True
+                        except:
+                            pass
+
+                    if after_url != page.url:
+                        print(f"[{username}] ✓ URL changed after click")
+                        post_evidence = True
+
+                except Exception as det_e:
+                    print(f"[{username}] Post-click detection exception: {det_e}")
+
+                if clicked:
+                    print(f"[{username}] Click was executed. Evidence of success: {post_evidence}")
+
+            else:
+                print(f"[{username}] ❌ NO POST BUTTON FOUND TO CLICK")
+
+        except Exception as click_main_e:
+            print(f"[{username}] CRITICAL CLICK BLOCK EXCEPTION: {click_main_e}")
+            import traceback
+            traceback.print_exc()
+            take_screenshot(username)
+
+        # Final decision
+        if clicked:
+            print(f"[{username}] ✓ Post click performed (evidence={post_evidence})")
+            # Handle content check dialog if it appears
+            try:
+                handle_content_check_dialog(page, username)
+            except Exception as cd_e:
+                print(f"[{username}] content check dialog error (non-fatal): {cd_e}")
+
+            try:
+                page.goto("https://www.tiktok.com", timeout=18000)
             except:
                 pass
-            time.sleep(2)
+            return True
         else:
-            print(f"[{username}] ⚠ Post button still disabled after waiting — will try aggressive clicks anyway")
+            print(f"[{username}] ❌ FAILED TO SUCCESSFULLY CLICK POST")
+            take_screenshot(username)
+            return False
 
-        # === Click Post — EXACTLY 6 attempts, 10s apart. Targeting real enabled button ===
-        print(f"[{username}] Posting video... (will click Post up to 6 times, 10s apart)")
-        update_account(username, current_task="Posting video...")
-
-        post_clicked = False
-
-        # === EXACT BUTTON FROM USER HTML (copy-pasted) ===
-        # <button role="button" type="button"
-        #   class="Button__root Button__root--shape-default Button__root--size-large Button__root--type-primary"
-        #   aria-disabled="false" data-icon-only="false" data-size="large" data-loading="false" data-disabled="false"
-        #   data-e2e="post_video_button" style="width: 200px;">
-        #   <div class="Button__content Button__content--loading-false">Publiser</div>
-        # </button>
-        # === EXACT BUTTON FROM THE HTML YOU GAVE ===
-        # <button role="button" type="button"
-        #   class="Button__root Button__root--shape-default Button__root--size-large Button__root--type-primary"
-        #   aria-disabled="false" data-icon-only="false" data-size="large"
-        #   data-loading="false" data-disabled="false"
-        #   data-e2e="post_video_button" style="width: 200px;">
-        #   ...
-        #   <div class="Button__content Button__content--loading-false">Publiser</div>
-        # </button>
-        # === EXACT BUTTON FROM THE HTML YOU GAVE ===
-        # <button role="button" type="button"
-        #   class="Button__root Button__root--shape-default Button__root--size-large Button__root--type-primary"
-        #   aria-disabled="false" data-icon-only="false" data-size="large"
-        #   data-loading="false" data-disabled="false"
-        #   data-e2e="post_video_button" style="width: 200px;">
-        #   <div class="Button__content Button__content--loading-false">Publiser</div>
-        # </button>
-        # === EXACT BUTTON FROM THE HTML YOU GAVE ===
-        # <button role="button" type="button"
-        #   class="Button__root Button__root--shape-default Button__root--size-large Button__root--type-primary"
-        #   aria-disabled="false" data-icon-only="false" data-size="large"
-        #   data-loading="false" data-disabled="false"
-        #   data-e2e="post_video_button" style="width: 200px;">
-        #   <div class="Button__content Button__content--loading-false">Publiser</div>
-        # </button>
-        primary_post_selector = 'button[data-e2e="post_video_button"][class*="Button__root--type-primary"]'  # EXACT from your HTML
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[{username}] upload flow failed: {e}")
+        take_screenshot(username)
+        return False
 
         def _debug_post_dom(page, note=""):
             try:
