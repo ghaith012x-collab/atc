@@ -2172,6 +2172,7 @@ def login_with_google(username, email=""):
 
         update_account(username, current_task="Clicking Log in...")
         _must_click(page, [
+            '#top-right-action-bar-login-button',
             'a[href*="/login"]',
             '[data-e2e="top-login-button"]',
             'button:has-text("Log in")',
