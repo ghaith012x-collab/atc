@@ -2095,15 +2095,44 @@ def login_with_google(username, email=""):
         take_screenshot(username)
 
         update_account(username, current_task="Clicking Log in...")
-        if not _click_text(page, ["log in", "login", "sign in"]):
-            log(f"[{username}] Could not find Log in button")
+        clicked = False
+        for sel in [
+            'a[href*="/login"]',
+            '[data-e2e="top-login-button"]',
+            'button:has-text("Log in")',
+            'button:has-text("Log in with phone or email")',
+            'a:has-text("Log in")',
+        ]:
+            try:
+                if page.locator(sel).count() > 0:
+                    page.locator(sel).first.click(timeout=5000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            _click_text(page, ["log in", "login", "sign in"])
         page.wait_for_load_state("domcontentloaded", timeout=10000)
         time.sleep(3)
         take_screenshot(username)
 
         update_account(username, current_task="Clicking Continue with Google...")
-        if not _click_text(page, ["continue with google", "use google", "google"]):
-            log(f"[{username}] Could not find Google button")
+        clicked = False
+        for sel in [
+            '[data-e2e="google-login-button"]',
+            'a[href*="google"]',
+            'button:has-text("Continue with Google")',
+            'button:has-text("Use Google")',
+        ]:
+            try:
+                if page.locator(sel).count() > 0:
+                    page.locator(sel).first.click(timeout=5000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            _click_text(page, ["continue with google", "use google", "google"])
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         time.sleep(3)
         take_screenshot(username)
@@ -2115,23 +2144,65 @@ def login_with_google(username, email=""):
             log(f"[{username}] Google login: filled email")
         except Exception as e:
             log(f"[{username}] fill email err: {e}")
-        time.sleep(1)
-        if not _click_text(page, ["next", "continue"]):
-            log(f"[{username}] Could not find Next button after email")
+        time.sleep(2)
+        clicked = False
+        for sel in [
+            'button:has-text("Next")',
+            'button:has-text("Continue")',
+            'input[type="submit"]',
+        ]:
+            try:
+                if page.locator(sel).count() > 0:
+                    page.locator(sel).first.click(timeout=5000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            _click_text(page, ["next", "continue"])
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         time.sleep(3)
         take_screenshot(username)
 
         update_account(username, current_task="Navigating recovery flow...")
         for i in range(15):
-            forgot_clicked = _click_text(page, ["forgot password", "forgot your password", "need help", "trouble logging in", "forgot"])
+            forgot_clicked = False
+            another_clicked = False
+            
+            for sel in [
+                'button:has-text("Forgot password")',
+                'a:has-text("Forgot password")',
+                '[data-e2e="forgot-password-button"]',
+            ]:
+                try:
+                    if page.locator(sel).count() > 0:
+                        page.locator(sel).first.click(timeout=5000)
+                        forgot_clicked = True
+                        break
+                except Exception:
+                    continue
+            if not forgot_clicked:
+                forgot_clicked = _click_text(page, ["forgot password", "forgot your password", "need help", "trouble logging in", "forgot"])
             if forgot_clicked:
                 log(f"[{username}] Google login: clicked forgot ({i})")
                 time.sleep(3)
                 page.wait_for_load_state("domcontentloaded", timeout=10000)
                 take_screenshot(username)
 
-            another_clicked = _click_text(page, ["try another way", "try another method", "another way", "more options", "use another account"])
+            for sel in [
+                'button:has-text("Try another way")',
+                'a:has-text("Try another way")',
+                '[data-e2e="try-another-way-button"]',
+            ]:
+                try:
+                    if page.locator(sel).count() > 0:
+                        page.locator(sel).first.click(timeout=5000)
+                        another_clicked = True
+                        break
+                except Exception:
+                    continue
+            if not another_clicked:
+                another_clicked = _click_text(page, ["try another way", "try another method", "another way", "more options", "use another account"])
             if another_clicked:
                 log(f"[{username}] Google login: clicked try another way ({i})")
                 time.sleep(3)
