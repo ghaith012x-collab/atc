@@ -2060,6 +2060,66 @@ def logout_account(username):
     return True
 
 
+def _must_click(page, labels_or_selectors, task="", max_attempts=8):
+    norm = [l.lower().strip() for l in labels_or_selectors if l and not l.startswith(('[', 'button:', 'a:', 'input[', 'div[', 'span[', '#', '.'))]
+    selectors = [s for s in labels_or_selectors if s and (s.startswith('[') or s.startswith('button:') or s.startswith('a:') or s.startswith('input[') or s.startswith('div[') or s.startswith('span[') or s.startswith('#') or s.startswith('.'))]
+    
+    for attempt in range(max_attempts):
+        clicked = False
+        
+        for sel in selectors:
+            try:
+                if page.locator(sel).count() > 0:
+                    el = page.locator(sel).first
+                    if el.is_visible(timeout=2000):
+                        el.scroll_into_view_if_needed(timeout=2000)
+                        el.click(timeout=5000)
+                        clicked = True
+                        break
+            except Exception:
+                continue
+        
+        if not clicked and norm:
+            for sel in ['button', 'a', '[role="button"]', '[role="link"]', 'div', 'span']:
+                try:
+                    els = page.locator(sel).all()
+                except Exception:
+                    continue
+                for el in els[:300]:
+                    try:
+                        if not el.is_visible(timeout=500):
+                            continue
+                        txt = (el.inner_text(timeout=500) or "").strip().lower()
+                        if any(n in txt for n in norm):
+                            el.scroll_into_view_if_needed(timeout=2000)
+                            el.click(timeout=5000)
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if clicked:
+                    break
+        
+        if clicked:
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=8000)
+            except Exception:
+                pass
+            time.sleep(2)
+            log(f"[{task}] Clicked '{labels_or_selectors[0]}' on attempt {attempt+1}")
+            return True
+        
+        log(f"[{task}] Attempt {attempt+1}/{max_attempts}: click not registered yet, retrying...")
+        time.sleep(2)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
+    
+    log(f"[{task}] FAILED to click '{labels_or_selectors[0]}' after {max_attempts} attempts")
+    return False
+
+
 def login_with_google(username, email=""):
     account = get_account(username)
     if not account:
@@ -2095,45 +2155,25 @@ def login_with_google(username, email=""):
         take_screenshot(username)
 
         update_account(username, current_task="Clicking Log in...")
-        clicked = False
-        for sel in [
+        _must_click(page, [
             'a[href*="/login"]',
             '[data-e2e="top-login-button"]',
             'button:has-text("Log in")',
             'button:has-text("Log in with phone or email")',
             'a:has-text("Log in")',
-        ]:
-            try:
-                if page.locator(sel).count() > 0:
-                    page.locator(sel).first.click(timeout=5000)
-                    clicked = True
-                    break
-            except Exception:
-                continue
-        if not clicked:
-            _click_text(page, ["log in", "login", "sign in"])
-        page.wait_for_load_state("domcontentloaded", timeout=10000)
+            "log in", "login", "sign in"
+        ], task=username)
         time.sleep(3)
         take_screenshot(username)
 
         update_account(username, current_task="Clicking Continue with Google...")
-        clicked = False
-        for sel in [
+        _must_click(page, [
             '[data-e2e="google-login-button"]',
             'a[href*="google"]',
             'button:has-text("Continue with Google")',
             'button:has-text("Use Google")',
-        ]:
-            try:
-                if page.locator(sel).count() > 0:
-                    page.locator(sel).first.click(timeout=5000)
-                    clicked = True
-                    break
-            except Exception:
-                continue
-        if not clicked:
-            _click_text(page, ["continue with google", "use google", "google"])
-        page.wait_for_load_state("domcontentloaded", timeout=15000)
+            "continue with google", "use google", "google"
+        ], task=username)
         time.sleep(3)
         take_screenshot(username)
 
@@ -2145,65 +2185,36 @@ def login_with_google(username, email=""):
         except Exception as e:
             log(f"[{username}] fill email err: {e}")
         time.sleep(2)
-        clicked = False
-        for sel in [
+        _must_click(page, [
             'button:has-text("Next")',
             'button:has-text("Continue")',
             'input[type="submit"]',
-        ]:
-            try:
-                if page.locator(sel).count() > 0:
-                    page.locator(sel).first.click(timeout=5000)
-                    clicked = True
-                    break
-            except Exception:
-                continue
-        if not clicked:
-            _click_text(page, ["next", "continue"])
-        page.wait_for_load_state("domcontentloaded", timeout=15000)
+            "next", "continue"
+        ], task=username)
         time.sleep(3)
         take_screenshot(username)
 
         update_account(username, current_task="Navigating recovery flow...")
         for i in range(15):
-            forgot_clicked = False
-            another_clicked = False
-            
-            for sel in [
+            forgot_ok = _must_click(page, [
                 'button:has-text("Forgot password")',
                 'a:has-text("Forgot password")',
                 '[data-e2e="forgot-password-button"]',
-            ]:
-                try:
-                    if page.locator(sel).count() > 0:
-                        page.locator(sel).first.click(timeout=5000)
-                        forgot_clicked = True
-                        break
-                except Exception:
-                    continue
-            if not forgot_clicked:
-                forgot_clicked = _click_text(page, ["forgot password", "forgot your password", "need help", "trouble logging in", "forgot"])
-            if forgot_clicked:
+                "forgot password", "forgot your password", "need help", "trouble logging in", "forgot"
+            ], task=username)
+            if forgot_ok:
                 log(f"[{username}] Google login: clicked forgot ({i})")
                 time.sleep(3)
                 page.wait_for_load_state("domcontentloaded", timeout=10000)
                 take_screenshot(username)
 
-            for sel in [
+            another_ok = _must_click(page, [
                 'button:has-text("Try another way")',
                 'a:has-text("Try another way")',
                 '[data-e2e="try-another-way-button"]',
-            ]:
-                try:
-                    if page.locator(sel).count() > 0:
-                        page.locator(sel).first.click(timeout=5000)
-                        another_clicked = True
-                        break
-                except Exception:
-                    continue
-            if not another_clicked:
-                another_clicked = _click_text(page, ["try another way", "try another method", "another way", "more options", "use another account"])
-            if another_clicked:
+                "try another way", "try another method", "another way", "more options", "use another account"
+            ], task=username)
+            if another_ok:
                 log(f"[{username}] Google login: clicked try another way ({i})")
                 time.sleep(3)
                 page.wait_for_load_state("domcontentloaded", timeout=10000)
@@ -2342,49 +2353,6 @@ def login_with_google(username, email=""):
         update_account(username, status="Google login error",
                       current_task=f"Error: {str(e)[:60]}")
         return False
-
-
-def _click_text(page, labels, timeout=8000):
-    norm = [l.lower().strip() for l in labels if l]
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=5000)
-    except Exception:
-        pass
-    for sel in ['button', 'a', '[role="button"]', '[role="link"]', 'div', 'span']:
-        try:
-            els = page.locator(sel).all()
-        except Exception:
-            continue
-        for el in els[:300]:
-            try:
-                if not el.is_visible(timeout=800):
-                    continue
-                txt = (el.inner_text(timeout=800) or "").strip().lower()
-                if any(n in txt for n in norm):
-                    try:
-                        el.scroll_into_view_if_needed(timeout=2000)
-                    except Exception:
-                        pass
-                    el.click(timeout=6000)
-                    page.wait_for_load_state("domcontentloaded", timeout=5000)
-                    return True
-            except Exception:
-                continue
-    try:
-        for label in norm:
-            try:
-                loc = page.locator(f'text="{label}"').first
-                if loc.count() > 0 and loc.is_visible(timeout=2000):
-                    loc.click(timeout=5000)
-                    page.wait_for_load_state("domcontentloaded", timeout=5000)
-                    return True
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return False
-
-
 
 
 def delete_account_session(username):
