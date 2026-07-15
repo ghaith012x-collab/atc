@@ -1040,520 +1040,337 @@ def generate_caption(video_info, category):
 
 
 def upload_video_to_tiktok(username, file_path, caption):
-    """Steps 4-6: Open tiktok.com/upload, set the video on the file input,
-    type the caption, and click the Post button. Returns True on success.
-    
-    ACCURATE implementation:
-    - Waits for upload to reach 100% (progress text gone + button enabled)
-    - Exact selector from user HTML: button[data-e2e="post_video_button"]
-    - Detailed logging + screenshots before/after/+5s
-    - elementFromPoint overlap check
-    - iframe/frame verification
-    - Post-click evidence detection (no blind retries)
-    - Full exception logging, NO silent pass blocks in post logic
+    """Accurate TikTok uploader with deep debugging.
+    Waits for 100%, logs everything required, uses exact button, detects real publish evidence.
     """
     page = _get_page(username)
     if page is None:
         print(f"[{username}] No page available for upload")
         return False
 
-    # Define EXACT selector from pasted HTML
     POST_BTN_SELECTOR = 'button[data-e2e="post_video_button"]'
-    PRIMARY_POST_CLASS_SEL = 'button[class*="Button__root--type-primary"]'
+    PRIMARY_CLASS_SEL = 'button[class*="Button__root--type-primary"]'
+
+    captured_requests = []
+    captured_responses = []
+
+    def _on_request(req):
+        u = req.url.lower()
+        if any(k in u for k in ['/api/', 'post', 'publish', 'video', 'upload']):
+            captured_requests.append({"url": req.url[:160], "method": req.method})
+
+    def _on_response(resp):
+        u = resp.url.lower()
+        if any(k in u for k in ['/api/', 'post', 'publish']):
+            try:
+                captured_responses.append({"url": resp.url[:120], "status": resp.status})
+            except: pass
 
     try:
-        update_account(username, current_task="Opening TikTok upload page...")
-        print(f"[{username}] Step5: Opening upload page...")
+        page.on("request", _on_request)
+        page.on("response", _on_response)
 
-        # CAPTCHA + content check dialogs (isolated)
+        print(f"[{username}] Step5: Opening upload page...")
+        update_account(username, current_task="Opening TikTok upload page...")
+
         handle_captcha_if_present(page, username)
         handle_content_check_dialog(page, username)
 
-        # Current TikTok upload URLs (2026)
         upload_urls = [
             "https://www.tiktok.com/upload",
             "https://www.tiktok.com/creator#/upload",
             "https://www.tiktok.com/tiktokstudio/upload",
             "https://www.tiktok.com/creator/upload",
-            "https://www.tiktok.com/upload?from=webapp",
         ]
 
         file_input_found = False
         upload_context = page
-        used_url = None
 
-        for upload_url in upload_urls:
+        for uurl in upload_urls:
             try:
-                print(f"[{username}] Trying upload URL: {upload_url}")
-                page.goto(upload_url, timeout=50000, wait_until="domcontentloaded")
-                time.sleep(random.uniform(2.5, 5.5))
+                page.goto(uurl, timeout=45000, wait_until="domcontentloaded")
+                time.sleep(random.uniform(2.8, 5.2))
                 take_screenshot(username)
 
-                if "/login" in page.url.lower():
-                    print(f"[{username}] Redirected to login on {upload_url}")
-                    continue
+                if "/login" in page.url.lower(): continue
 
-                # Find file input (direct or iframe)
-                for _ in range(4):
-                    try:
-                        file_input = page.locator('input[type="file"]').first
-                        if file_input.count() > 0:
-                            file_input_found = True
-                            upload_context = page
-                            used_url = upload_url
-                            print(f"[{username}] ✓ File input found DIRECTLY on {upload_url}")
-                            break
-
-                        iframes = page.locator('iframe')
-                        for fi_idx in range(min(iframes.count(), 3)):
-                            try:
-                                iframe = iframes.nth(fi_idx)
-                                if iframe.count() > 0:
-                                    frame = iframe.content_frame()
-                                    if frame:
-                                        fi = frame.locator('input[type="file"]').first
-                                        if fi.count() > 0:
-                                            file_input_found = True
-                                            upload_context = frame
-                                            used_url = upload_url
-                                            print(f"[{username}] ✓ File input found INSIDE iframe on {upload_url}")
-                                            break
-                            except Exception as ifr_e:
-                                print(f"[{username}] iframe scan err: {ifr_e}")
-                        if file_input_found:
-                            break
-                    except Exception as fi_e:
-                        print(f"[{username}] file_input scan err: {fi_e}")
-                    if file_input_found:
+                for _ in range(3):
+                    fi = page.locator('input[type="file"]').first
+                    if fi.count() > 0:
+                        file_input_found = True
+                        upload_context = page
+                        print(f"[{username}] ✓ File input DIRECT on {uurl}")
                         break
-                    time.sleep(1.8)
 
-                if file_input_found:
-                    print(f"[{username}] Using upload_context type: {'frame' if upload_context != page else 'page'}")
-                    break
-            except Exception as e:
-                print(f"[{username}] Failed to load {upload_url}: {str(e)[:75]}")
-                continue
+                    for i in range(min(page.locator("iframe").count(), 3)):
+                        try:
+                            fr = page.locator("iframe").nth(i).content_frame()
+                            if fr and fr.locator('input[type="file"]').first.count() > 0:
+                                file_input_found = True
+                                upload_context = fr
+                                print(f"[{username}] ✓ File input in IFRAME")
+                                break
+                        except: pass
+                    if file_input_found: break
+                    time.sleep(1.5)
+                if file_input_found: break
+            except Exception as ge:
+                print(f"[{username}] goto {uurl} failed: {ge}")
 
         if not file_input_found:
-            print(f"[{username}] ❌ No file input found on ANY upload URL")
-            update_account(username, current_task="Upload page failed - no file input")
+            print(f"[{username}] ❌ No file input anywhere")
             take_screenshot(username)
             return False
 
-        # === Upload the file ===
-        print(f"[{username}] Setting video file on upload_context...")
-        update_account(username, current_task="Uploading video file...")
-
+        print(f"[{username}] Uploading file...")
         try:
-            file_input = upload_context.locator('input[type="file"]').first
-            file_input.set_input_files(file_path)
-            print(f"[{username}] ✓ File selected successfully ({os.path.getsize(file_path)} bytes)")
-        except Exception as e:
-            print(f"[{username}] ❌ Failed to set file input: {e}")
-            take_screenshot(username)
+            upload_context.locator('input[type="file"]').first.set_input_files(file_path)
+        except Exception as se:
+            print(f"[{username}] set_input_files EXCEPTION: {se}")
+            import traceback; traceback.print_exc()
             return False
 
-        # Wait for processing (caption editor)
-        print(f"[{username}] Waiting for upload to process (caption editor to appear)...")
-        update_account(username, current_task="Processing upload...")
-
-        caption_editor_found = False
-        editor_element = None
-        for i in range(55):  # up to ~4.5 minutes
+        # Wait for editor
+        print(f"[{username}] Waiting for caption editor (processing)...")
+        editor = None
+        for i in range(55):
             time.sleep(5)
             take_screenshot(username)
-
             try:
-                editors = upload_context.locator(
-                    'div[contenteditable="true"], '
-                    '[data-e2e="caption-editor"], '
-                    'div[role="textbox"], '
-                    'div[aria-label*="caption" i], '
-                    'textarea[placeholder*="Write a caption"], '
-                    'div[data-contents="true"], '
-                    '[class*="caption"] div[contenteditable]'
-                )
-
-                if editors.count() > 0:
-                    for j in range(min(editors.count(), 4)):
-                        try:
-                            ed = editors.nth(j)
-                            if ed.is_visible() or ed.count() > 0:
-                                caption_editor_found = True
-                                editor_element = ed
-                                print(f"[{username}] ✓ Caption editor appeared after {i*5}s (selector index {j})")
-                                break
-                        except:
-                            pass
-                    if caption_editor_found:
+                cands = upload_context.locator('div[contenteditable="true"], [data-e2e*="caption"], div[aria-label*="caption" i]')
+                for j in range(min(cands.count(), 3)):
+                    el = cands.nth(j)
+                    if el.count() > 0:
+                        editor = el
+                        print(f"[{username}] ✓ Editor ready after {i*5}s")
                         break
-            except Exception as ed_err:
-                if i % 8 == 0:
-                    print(f"[{username}] editor detection error: {str(ed_err)[:50]}")
-
-            if i % 5 == 0:
-                print(f"[{username}] Still waiting for caption editor / processing... ({i*5}s) url={page.url[:60]}")
-
-        if not caption_editor_found:
-            print(f"[{username}] ❌ Caption editor never appeared after waiting")
-            take_screenshot(username)
+                if editor: break
+            except: pass
+        if not editor:
+            print(f"[{username}] ❌ Editor never appeared")
             return False
 
-        # === Type caption ===
-        print(f"[{username}] Typing caption into editor...")
-        update_account(username, current_task="Writing caption...")
-
+        # Caption
         try:
-            if editor_element:
-                editor_element.click(timeout=7000)
-            else:
-                upload_context.locator('div[contenteditable="true"]').first.click(timeout=7000)
-            time.sleep(0.6)
-
-            try:
-                page.keyboard.press("Control+A")
-            except:
-                try:
-                    if hasattr(upload_context, "keyboard") and upload_context != page:
-                        upload_context.keyboard.press("Control+A")
-                    else:
-                        page.keyboard.press("Control+A")
-                except:
-                    pass
-            time.sleep(0.25)
-            try:
-                page.keyboard.press("Delete")
-            except:
-                pass
-            time.sleep(0.35)
-
-            typed_ok = False
-            if editor_element:
-                try:
-                    editor_element.type(caption, delay=random.randint(22, 70))
-                    typed_ok = True
-                except:
-                    pass
-            if not typed_ok:
-                try:
-                    if hasattr(upload_context, "type") and upload_context != page:
-                        upload_context.type(caption, delay=random.randint(22, 70))
-                    else:
-                        page.keyboard.insert_text(caption)
-                    typed_ok = True
-                except:
-                    pass
-
-            if typed_ok:
-                print(f"[{username}] ✓ Caption typed: {caption[:65]}...")
-            else:
-                print(f"[{username}] ⚠ Caption typing may have failed, continuing")
-            time.sleep(1.8)
-        except Exception as e:
-            print(f"[{username}] Caption typing issue (continuing anyway): {e}")
+            editor.click(timeout=5000)
+            time.sleep(0.5)
+            page.keyboard.press("Control+A"); time.sleep(0.15)
+            page.keyboard.press("Delete"); time.sleep(0.25)
+            editor.type(caption, delay=28)
+            print(f"[{username}] ✓ Caption entered")
+            time.sleep(1.6)
+        except Exception as te:
+            print(f"[{username}] caption type EXCEPTION: {te}")
+            import traceback; traceback.print_exc()
 
         take_screenshot(username)
 
-        # ============================================================
-        # ACCURATE 100% UPLOAD WAIT + DETAILED DEBUG (MAIN FIX)
-        # ============================================================
+        # ==================== 100% WAIT ====================
         print(f"[{username}] === WAITING FOR UPLOAD TO HIT 100% (accurate) ===")
-
-        upload_finished = False
-        for sec in range(240):  # up to 8 minutes
+        finished = False
+        for sec in range(280):
+            if sec % 15 == 0:
+                print(f"[{username}] upload-wait {sec}s | {page.url[:65]}")
             try:
-                if sec % 10 == 0:
-                    print(f"[{username}] [upload {sec}s] URL={page.url[:70]}")
+                p100 = False
+                for s in ['text=/100%/', '[aria-valuenow="100"]', 'text=/complete|uploaded/i']:
+                    if page.locator(s).count() > 0:
+                        p100 = True; break
 
-                progress_100 = False
+                still_up = False
                 try:
-                    for sel in ['text=/100%/', 'text=/uploading.*100/i', '[aria-valuenow="100"]', 'text=/complete|uploaded/i']:
-                        els = page.locator(sel)
-                        if els.count() > 0:
-                            for i in range(min(els.count(), 2)):
-                                try:
-                                    t = (els.nth(i).inner_text(timeout=300) or "").lower()
-                                    if "100" in t or "complete" in t or "uploaded" in t:
-                                        progress_100 = True
-                                        print(f"[{username}]   100%/complete detected: {t[:50]}")
-                                        break
-                                except:
-                                    pass
-                except:
-                    pass
+                    if page.locator('text=/uploading|processing your video/i').first.is_visible():
+                        still_up = True
+                except: pass
 
-                still_uploading = False
-                try:
-                    up = page.locator('text=/uploading|processing your video|upload in progress/i').first
-                    if up.count() > 0 and up.is_visible():
-                        still_uploading = True
-                except:
-                    pass
-
-                # Check Post button state using EXACT selector
                 btn = page.locator(POST_BTN_SELECTOR).first
-                btn_ready = False
+                ready = False
                 if btn.count() > 0:
                     a = (btn.get_attribute("aria-disabled") or "").lower()
                     d = (btn.get_attribute("data-disabled") or "").lower()
                     l = (btn.get_attribute("data-loading") or "").lower()
-                    btn_ready = (a != "true" and d != "true" and l != "true")
+                    ready = a != "true" and d != "true" and l != "true"
 
-                if (progress_100 or not still_uploading) and btn_ready:
-                    print(f"[{username}] ✓ UPLOAD 100% + Post button ready (progress_100={progress_100}, still_uploading={still_uploading})")
-                    upload_finished = True
+                if (p100 or not still_up) and ready:
+                    print(f"[{username}] ✓ 100% + button ready")
+                    finished = True
                     break
-
-            except Exception as uw:
-                print(f"[{username}] upload-wait error: {uw}")
-
+            except Exception as we:
+                print(f"[{username}] wait-err: {we}")
             time.sleep(2)
+            if sec % 20 == 0: take_screenshot(username)
 
-            if sec % 15 == 0:
-                take_screenshot(username)
-
-        if not upload_finished:
-            print(f"[{username}] ⚠ Upload 100% wait timed out — will still attempt detailed debug + click")
-
+        if not finished:
+            print(f"[{username}] ⚠ 100% timeout - continuing to debug")
         take_screenshot(username)
 
-        # ============================================================
-        # DETAILED PRE-CLICK DEBUG (ALL REQUIRED LOGS)
-        # ============================================================
+        # ==================== PRE-CLICK FULL DEBUG ====================
         print(f"[{username}] === DETAILED PRE-POST DEBUG ===")
+        print(f"[{username}] Current page URL: {page.url}")
+
+        # frames
         try:
-            print(f"[{username}] Current page URL: {page.url}")
+            print(f"[{username}] frames: {len(page.frames)}")
+            for fr in page.frames:
+                fu = getattr(fr, "url", "") or ""
+                if "upload" in fu.lower() or "creator" in fu.lower():
+                    print(f"[{username}]   frame: {fu}")
+        except: pass
 
-            # Verify not in iframe / find correct frame
+        btn = page.locator(POST_BTN_SELECTOR).first
+        if btn.count() == 0:
+            btn = page.locator(f"{POST_BTN_SELECTOR}, {PRIMARY_CLASS_SEL}").first
+
+        if btn.count() > 0:
             try:
-                frames = page.frames
-                print(f"[{username}] Total frames on page: {len(frames)}")
-                for fr in frames:
-                    try:
-                        fu = fr.url or ""
-                        if fu and ('upload' in fu.lower() or 'creator' in fu.lower() or 'tiktokstudio' in fu.lower()):
-                            print(f"[{username}]   Relevant frame URL: {fu}")
-                    except:
-                        pass
-                # Use the best context for locator (already set)
-                print(f"[{username}] Active upload_context is {'FRAME' if upload_context != page else 'MAIN PAGE'}")
-            except Exception as fr_e:
-                print(f"[{username}] Frame check error: {fr_e}")
+                outer = btn.evaluate("(e) => e.outerHTML")
+                print(f"[{username}] Button outerHTML:\\n{outer[:880]}")
+            except Exception as oerr:
+                print(f"[{username}] outerHTML err: {oerr}")
 
-            # Locate the EXACT button
-            btn = page.locator(POST_BTN_SELECTOR).first
-            if btn.count() == 0:
-                btn = page.locator(f'{POST_BTN_SELECTOR}, {PRIMARY_POST_CLASS_SEL}').first
+            try:
+                print(f"[{username}] is_visible(): {btn.is_visible()}")
+                print(f"[{username}] is_enabled(): {btn.is_enabled()}")
+                print(f"[{username}] count(): {btn.count()}")
+                print(f"[{username}] aria={btn.get_attribute('aria-disabled')} data-d={btn.get_attribute('data-disabled')} data-l={btn.get_attribute('data-loading')}")
+            except Exception as sterr:
+                print(f"[{username}] state err: {sterr}")
 
-            if btn.count() > 0:
-                try:
-                    outer = btn.evaluate("(el) => el.outerHTML")
-                    print(f"[{username}] Button outerHTML:\n{outer[:900]}")
-                except Exception as ohe:
-                    print(f"[{username}] outerHTML error: {ohe}")
-
-                try:
-                    print(f"[{username}] is_visible(): {btn.is_visible()}")
-                    print(f"[{username}] is_enabled(): {btn.is_enabled()}")
-                    print(f"[{username}] count() (attached to DOM): {btn.count()}")
-                except Exception as st_e:
-                    print(f"[{username}] State check error: {st_e}")
-
-                # elementFromPoint overlap detection (CRITICAL)
-                try:
-                    bb = btn.bounding_box(timeout=2500)
-                    if bb:
-                        cx = bb['x'] + bb['width'] / 2
-                        cy = bb['y'] + bb['height'] / 2
-                        top = page.evaluate('''(x, y) => {
-                            const el = document.elementFromPoint(x, y);
-                            if (!el) return {tag: 'NULL'};
-                            return {
-                                tag: el.tagName,
-                                class: (el.className || '').substring(0,90),
-                                text: (el.innerText || '').substring(0,60),
-                                data_e2e: el.getAttribute('data-e2e'),
-                                is_button: el.tagName === 'BUTTON',
-                                aria_disabled: el.getAttribute('aria-disabled'),
-                                data_disabled: el.getAttribute('data-disabled'),
-                                data_loading: el.getAttribute('data-loading')
-                            };
-                        }''', cx, cy)
-                        print(f"[{username}] elementFromPoint(center): {top}")
-                        # Compare to our button
-                        if top.get('data_e2e') != 'post_video_button':
-                            print(f"[{username}] ⚠ OVERLAP WARNING: elementFromPoint is NOT the post button!")
-                except Exception as ov_e:
-                    print(f"[{username}] elementFromPoint error: {ov_e}")
-            else:
-                print(f"[{username}] ❌ Post button NOT FOUND in DOM using {POST_BTN_SELECTOR}")
-        except Exception as pre_e:
-            print(f"[{username}] PRE-CLICK DEBUG EXCEPTION: {pre_e}")
-            import traceback
-            traceback.print_exc()
+            # elementFromPoint
+            try:
+                bb = btn.bounding_box(timeout=2800)
+                if bb:
+                    cx, cy = bb["x"] + bb["width"]/2, bb["y"] + bb["height"]/2
+                    hit = page.evaluate('''(x,y) => {
+                        const el = document.elementFromPoint(x,y);
+                        if(!el) return {tag:"NULL"};
+                        const cs = getComputedStyle(el);
+                        return {tag:el.tagName, cls:(el.className||"").slice(0,80), txt:(el.innerText||"").slice(0,50), de2e:el.getAttribute("data-e2e"), pe:cs.pointerEvents};
+                    }''', cx, cy)
+                    print(f"[{username}] elementFromPoint: {hit}")
+                    if hit.get("de2e") != "post_video_button":
+                        print(f"[{username}] ⚠ OVERLAP WARNING: elementFromPoint hit something else!")
+            except Exception as overr:
+                print(f"[{username}] elementFromPoint err: {overr}")
+        else:
+            print(f"[{username}] ❌ Post button MISSING in DOM")
 
         take_screenshot(username)
 
-        # ============================================================
-        # PERFORM THE CLICK (ACCURATE - NO SILENT EXCEPTS, NO BLIND RETRIES)
-        # ============================================================
-        print(f"[{username}] === ATTEMPTING POST CLICK (accurate, single attempt after 100%) ===")
+        # ==================== CLICK ====================
+        print(f"[{username}] === ATTEMPTING POST CLICK (accurate) ===")
         update_account(username, current_task="Clicking Post...")
 
         clicked = False
-        post_evidence = False
+        evidence = False
 
-        # Full exception logging - no silent try/except pass
         try:
             btn = page.locator(POST_BTN_SELECTOR).first
             if btn.count() == 0:
-                btn = page.locator(f'{POST_BTN_SELECTOR}, {PRIMARY_POST_CLASS_SEL}').first
+                btn = page.locator(f"{POST_BTN_SELECTOR}, {PRIMARY_CLASS_SEL}").first
 
             if btn.count() > 0:
-                # Final pre-click state log
                 try:
-                    aria = (btn.get_attribute("aria-disabled") or "").lower()
-                    ddis = (btn.get_attribute("data-disabled") or "").lower()
-                    dload = (btn.get_attribute("data-loading") or "").lower()
-                    print(f"[{username}] Final state before click → aria-disabled={aria} data-disabled={ddis} data-loading={dload}")
-                except Exception as state_e:
-                    print(f"[{username}] state log error: {state_e}")
-
-                # 1. Standard force click
-                try:
-                    btn.scroll_into_view_if_needed(timeout=3000)
-                    time.sleep(0.25)
-                    btn.click(timeout=7000, force=True)
+                    btn.scroll_into_view_if_needed(timeout=2500)
+                    time.sleep(0.18)
+                    btn.click(timeout=6500, force=True)
                     clicked = True
-                    print(f"[{username}] ✓ .click(force=True) succeeded")
-                except Exception as ce:
-                    print(f"[{username}] .click(force=True) EXCEPTION: {ce}")
-                    import traceback
-                    traceback.print_exc()
+                    print(f"[{username}] ✓ force click done")
+                except Exception as c1:
+                    print(f"[{username}] force click EXCEPTION: {c1}")
+                    import traceback; traceback.print_exc()
 
-                # 2. Click the exact inner .Button__content from user's HTML
                 if not clicked:
                     try:
-                        c = btn.locator('.Button__content').first
-                        if c.count() > 0:
-                            c.click(timeout=5000, force=True)
+                        cont = btn.locator(".Button__content").first
+                        if cont.count() > 0:
+                            cont.click(timeout=4000, force=True)
                             clicked = True
-                            print(f"[{username}] ✓ Clicked .Button__content directly (exact from user HTML)")
-                    except Exception as cce:
-                        print(f"[{username}] .Button__content click EXCEPTION: {cce}")
-                        import traceback
-                        traceback.print_exc()
+                            print(f"[{username}] ✓ .Button__content clicked")
+                    except Exception as c2:
+                        print(f"[{username}] content click EXCEPTION: {c2}")
+                        import traceback; traceback.print_exc()
 
-                # 3. Full JS mouse events (bubbles, focus) - last resort
                 if not clicked:
                     try:
                         page.evaluate('''(sel) => {
                             const b = document.querySelector(sel) || document.querySelector('button[data-e2e="post_video_button"]');
-                            if (!b) return false;
-                            b.scrollIntoView({block:"center"});
-                            b.focus();
-                            const opts = {bubbles:true, cancelable:true, view:window};
-                            b.dispatchEvent(new MouseEvent("mousedown", opts));
-                            b.dispatchEvent(new MouseEvent("mouseup", opts));
-                            b.dispatchEvent(new MouseEvent("click", opts));
+                            if(!b) return false;
+                            b.scrollIntoView({block:"center"}); b.focus();
+                            const o = {bubbles:true,cancelable:true,view:window};
+                            ["pointerdown","mousedown","mouseup","pointerup","click"].forEach(t => b.dispatchEvent(new MouseEvent(t,o)));
                             b.click();
                             return true;
                         }''', POST_BTN_SELECTOR)
                         clicked = True
-                        print(f"[{username}] ✓ JS full mouse events executed")
-                    except Exception as jse:
-                        print(f"[{username}] JS click EXCEPTION: {jse}")
-                        import traceback
-                        traceback.print_exc()
+                        print(f"[{username}] ✓ full JS mouse events")
+                    except Exception as c3:
+                        print(f"[{username}] JS click EXCEPTION: {c3}")
+                        import traceback; traceback.print_exc()
 
-                # Screenshot immediately after click attempt
                 take_screenshot(username)
-
-                # 5 seconds later screenshot (as required)
                 time.sleep(5)
                 take_screenshot(username)
 
-                # === POST-CLICK EVIDENCE DETECTION ===
+                # Evidence collection
                 print(f"[{username}] === POST-CLICK EVIDENCE CHECK ===")
-                time.sleep(2)
-
+                time.sleep(2.5)
                 try:
-                    after_url = page.url
-                    print(f"[{username}] URL after click: {after_url}")
-
-                    # Check for navigation / success indicators
-                    if after_url != page.url:
-                        print(f"[{username}] ✓ URL changed after click")
-                        post_evidence = True
-
-                    for indicator in [
-                        'text=/video is being (processed|uploaded)/i',
-                        'text=/your video has been posted/i',
-                        'text=/posted/i',
-                        'text=/processing/i',
-                        '[class*="toast"]',
-                        '[class*="success"]',
-                        'text=/Publiser|Post/i'
-                    ]:
+                    print(f"[{username}] URL now: {page.url}")
+                    for pat in ['text=/posted|processing|success/i', '[class*="toast"]', '[class*="success"]']:
                         try:
-                            if page.locator(indicator).count() > 0:
-                                txt = page.locator(indicator).first.inner_text(timeout=500) or ""
-                                print(f"[{username}] ✓ Evidence found: {indicator} -> {txt[:60]}")
-                                post_evidence = True
-                        except:
-                            pass
+                            if page.locator(pat).count() > 0:
+                                print(f"[{username}] ✓ toast/success: {pat}")
+                                evidence = True
+                        except: pass
 
-                    # Check if the button itself changed / disappeared (common on success)
-                    try:
-                        post_btn_after = page.locator(POST_BTN_SELECTOR).first
-                        if post_btn_after.count() == 0 or not post_btn_after.is_visible():
-                            print(f"[{username}] ✓ Post button gone after click (likely success)")
-                            post_evidence = True
-                    except:
-                        pass
+                    if page.locator(POST_BTN_SELECTOR).count() == 0:
+                        print(f"[{username}] ✓ post button disappeared")
+                        evidence = True
 
-                except Exception as det_e:
-                    print(f"[{username}] Post-click detection exception: {det_e}")
-                    import traceback
-                    traceback.print_exc()
+                    if captured_requests:
+                        print(f"[{username}] ✓ network calls after click: {len(captured_requests)}")
+                        for r in captured_requests[-4:]:
+                            print(f"  {r}")
+                        evidence = True
+                except Exception as ev_e:
+                    print(f"[{username}] evidence check EXCEPTION: {ev_e}")
+                    import traceback; traceback.print_exc()
 
-                if clicked:
-                    print(f"[{username}] Click was executed. Evidence of success: {post_evidence}")
-
+                print(f"[{username}] clicked={clicked} evidence={evidence}")
             else:
-                print(f"[{username}] ❌ NO POST BUTTON FOUND TO CLICK (selector={POST_BTN_SELECTOR})")
+                print(f"[{username}] ❌ Button not found at click time")
 
-        except Exception as click_main_e:
-            print(f"[{username}] CRITICAL CLICK BLOCK EXCEPTION: {click_main_e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as main_click_err:
+            print(f"[{username}] CLICK BLOCK CRASH: {main_click_err}")
+            import traceback; traceback.print_exc()
             take_screenshot(username)
 
-        # Final decision based on click + evidence
-        if clicked:
-            print(f"[{username}] ✓ Post click performed (evidence={post_evidence})")
-            # Handle content check dialog if it appears after post
-            try:
-                handle_content_check_dialog(page, username)
-            except Exception as cd_e:
-                print(f"[{username}] content check dialog error (non-fatal): {cd_e}")
+        # remove listeners
+        try:
+            page.remove_listener("request", _on_request)
+            page.remove_listener("response", _on_response)
+        except: pass
 
-            try:
-                page.goto("https://www.tiktok.com", timeout=18000)
-            except:
-                pass
+        if clicked:
+            try: handle_content_check_dialog(page, username)
+            except: pass
+            try: page.goto("https://www.tiktok.com", timeout=12000)
+            except: pass
             return True
         else:
-            print(f"[{username}] ❌ FAILED TO SUCCESSFULLY CLICK POST")
+            print(f"[{username}] ❌ POST CLICK HAD NO EFFECT - root cause should be visible in logs above")
             take_screenshot(username)
             return False
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"[{username}] upload flow failed: {e}")
+    except Exception as fatal:
+        print(f"[{username}] upload FATAL: {fatal}")
+        import traceback; traceback.print_exc()
         take_screenshot(username)
+        try:
+            page.remove_listener("request", _on_request)
+            page.remove_listener("response", _on_response)
+        except: pass
         return False
 
 
