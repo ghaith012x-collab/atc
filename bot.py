@@ -2060,9 +2060,73 @@ def logout_account(username):
     return True
 
 
-def _gclick(page, username, labels, timeout=8000):
-    """Click the first visible button/link whose text contains any label
-    (case-insensitive substring). Resilient to TikTok/Google UI changes."""
+def login_with_qr(username):
+    account = get_account(username)
+    if not account:
+        return False
+
+    update_account(username, status="QR login", current_task="Starting browser...")
+    try:
+        pw = sync_playwright().start()
+        browser = pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+        )
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="en-US",
+        )
+        page = context.new_page()
+        browser_sessions[username] = {"pw": pw, "browser": browser, "context": context, "page": page}
+        log(f"[{username}] QR login: browser ready")
+
+        page.goto("https://www.tiktok.com/login", timeout=30000)
+        time.sleep(3)
+        take_screenshot(username)
+
+        update_account(username, current_task="Opening QR code...")
+        _click_text(page, ["use qr code", "qr code", "scan to log in", "scan"])
+        time.sleep(3)
+        take_screenshot(username)
+
+        update_account(username, status="QR login", current_task="Scan QR code with your phone...")
+
+        logged_in = False
+        for _ in range(300):
+            try:
+                if page.locator('[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]').count() > 0:
+                    logged_in = True
+                    break
+                if "/login" not in page.url and page.locator('[data-e2e="top-login-button"], a[href*="/login"]').count() == 0:
+                    logged_in = True
+                    break
+            except Exception:
+                pass
+            time.sleep(5)
+
+        if logged_in:
+            cookies = context.cookies()
+            update_account(username, session_data=json.dumps(cookies), connected=1,
+                          status="Connected", current_task="Ready")
+            log(f"[{username}] QR login SUCCESS")
+            return True
+        else:
+            update_account(username, status="QR login failed",
+                          current_task="Timed out waiting for QR scan")
+            return False
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        update_account(username, status="QR login error",
+                      current_task=f"Error: {str(e)[:60]}")
+        return False
+
+
+def _click_text(page, labels, timeout=8000):
     norm = [l.lower().strip() for l in labels if l]
     try:
         page.wait_for_load_state("domcontentloaded", timeout=5000)
@@ -2086,178 +2150,6 @@ def _gclick(page, username, labels, timeout=8000):
     return False
 
 
-def login_with_google(username):
-    """Log into TikTok via Google SSO, including the phone-recovery + manual
-    trust-confirm steps. Best-effort: depends on TikTok/Google's live UI and
-    may need selector tuning."""
-    account = get_account(username)
-    if not account:
-        return False
-    gmail = (account.get("gmail") or "").strip().lower()
-    if not gmail.endswith("@gmail.com"):
-        update_account(username, status="Need Gmail", current_task="Enter a @gmail.com address first")
-        return False
-
-    update_account(username, status="Google login", current_task="Starting browser...", google_trust=0)
-    try:
-        pw = sync_playwright().start()
-        browser = pw.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-        )
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            locale="en-US",
-        )
-        page = context.new_page()
-        browser_sessions[username] = {"pw": pw, "browser": browser, "context": context, "page": page}
-        log(f"[{username}] Google login: browser ready")
-
-        # 1) TikTok login page (fresh context = not logged in)
-        page.goto("https://www.tiktok.com/login", timeout=30000)
-        time.sleep(3)
-        take_screenshot(username)
-
-        # 2) Click "Use Google" / "Continue with Google"
-        update_account(username, current_task="Clicking Google...")
-        _gclick(page, username, ["use google", "continue with google", "google"])
-        time.sleep(3)
-        take_screenshot(username)
-
-        # 3) Type the Gmail on the Google account chooser
-        update_account(username, current_task="Typing Gmail...")
-        _glogin_type_email(page, gmail, username)
-        take_screenshot(username)
-
-        # 4) Recovery path -> reach the "Log in with phone" option
-        update_account(username, current_task="Navigating recovery to phone...")
-        _glogin_recovery(page, username)
-        take_screenshot(username)
-
-        # 5) Wait for the human to confirm trust on Gmail
-        update_account(username, status="Waiting for trust",
-                       current_task="Go to Gmail, confirm trust/device, then click 'Confirm trust'")
-        _glogin_wait_trust(username)
-        take_screenshot(username)
-
-        # 6) Finalize (click Continue/next) and land on TikTok
-        update_account(username, current_task="Finalizing login...")
-        _glogin_finalize(page, username)
-        take_screenshot(username)
-
-        # 7) Verify + save cookies
-        logged_in, tunk = _glogin_verify(page, username)
-        if logged_in:
-            cookies = context.cookies()
-            update_account(username, session_data=json.dumps(cookies), connected=1,
-                          status="Connected", current_task="Ready", google_trust=0)
-            log(f"[{username}] Google login SUCCESS as {tunk}")
-            return True
-        else:
-            update_account(username, status="Google login failed",
-                          current_task="Not logged in after flow", google_trust=0)
-            return False
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        update_account(username, status="Google login error",
-                      current_task=f"Error: {str(e)[:60]}", google_trust=0)
-        return False
-
-
-def _glogin_type_email(page, gmail, username):
-    try:
-        sel = 'input[type="email"], input[name="identifier"], input[type="text"]'
-        el = page.locator(sel).first
-        el.wait_for(state="visible", timeout=10000)
-        el.fill(gmail)
-        time.sleep(1)
-        _gclick(page, username, ["next", "continue", "submit", "forward"])
-        time.sleep(2)
-        log(f"[{username}] Google login: typed gmail + Next")
-    except Exception as e:
-        log(f"[{username}] type email err: {e}")
-
-
-def _glogin_recovery(page, username):
-    for i in range(10):
-        try:
-            body = page.inner_text("body", timeout=2000) or ""
-        except Exception:
-            body = ""
-        if re.search(r"phone|log in with phone|enter your phone|verification code|recovery", body, re.I):
-            log(f"[{username}] recovery: phone/recovery option reached")
-            return True
-        if _gclick(page, username, ["forgot password", "forgot your password", "need help", "trouble logging in", "forgot"]):
-            log(f"[{username}] recovery: clicked forgot/help ({i})")
-            time.sleep(2)
-        if _gclick(page, username, ["try another way", "try another method", "another way", "more options", "use another account"]):
-            log(f"[{username}] recovery: clicked try another way ({i})")
-            time.sleep(2)
-        take_screenshot(username)
-    return False
-
-
-def _glogin_wait_trust(username):
-    for _ in range(180):  # up to ~15 min for the human to confirm
-        acc = get_account(username)
-        if acc and acc.get("google_trust"):
-            log(f"[{username}] trust confirmed via dashboard")
-            return True
-        time.sleep(5)
-    log(f"[{username}] trust wait timed out")
-    return False
-
-
-def _glogin_finalize(page, username):
-    for _ in range(6):
-        if _gclick(page, username, ["continue", "next", "allow", "confirm", "done", "got it", "turn on"]):
-            log(f"[{username}] finalize: clicked continue/next")
-            time.sleep(3)
-        else:
-            break
-    try:
-        page.goto("https://www.tiktok.com/login", timeout=25000)
-    except Exception:
-        pass
-    time.sleep(4)
-
-
-def _glogin_verify(page, username):
-    logged_in = False
-    tunk = ""
-    try:
-        page.wait_for_selector(
-            '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]',
-            timeout=12000,
-        )
-        logged_in = True
-    except Exception:
-        pass
-    if not logged_in:
-        try:
-            if page.locator('[data-e2e="top-login-button"], a[href*="/login"]').count() == 0:
-                logged_in = True
-        except Exception:
-            pass
-    if logged_in:
-        try:
-            page.goto("https://www.tiktok.com/profile", timeout=15000)
-            time.sleep(2)
-            if "/@" in page.url:
-                tunk = page.url.split("/@")[-1].split("?")[0]
-        except Exception:
-            pass
-    return logged_in, tunk
-
-
-def confirm_google_trust(username):
-    update_account(username, google_trust=1)
-    return True
 
 
 def delete_account_session(username):

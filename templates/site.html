@@ -42,12 +42,6 @@
         .btn-delete { background: #444; color: #ccc; }
         .btn-delete-session { background: #2a1a1a; color: #ff5252; border: 1px solid #ff5252; }
         .btn-logout { background: #1a2740; color: #4fa3ff; border: 1px solid #4fa3ff; }
-        .gmail-row { display: flex; gap: 10px; margin-bottom: 16px; }
-        .gmail-row input { flex: 1; background: #222; border: 1px solid #444; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
-        .gmail-row input:focus { outline: none; border-color: #00f2ea; }
-        .btn-google { background: #ffffff; color: #222; }
-        .btn-google:hover { opacity: .9; }
-        .btn-confirm-trust { background: #ffa726; color: #222; border: 1px solid #ffa726; }
         .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
 
         /* Session paste panel */
@@ -142,12 +136,6 @@
             </div>
         </div>
 
-        <!-- Gmail (required for "Login with Google") -->
-        <div class="gmail-row">
-            <input type="text" id="gmail-{{ acc.username }}" value="{{ acc.gmail or '' }}" placeholder="you@gmail.com">
-            <button class="btn-primary" onclick="saveGmail('{{ acc.username }}')">Save Gmail</button>
-        </div>
-
         <!-- Session Panel (disconnected) -->
         {% if not acc.connected %}
         <div class="session-panel" id="session-panel-{{ acc.username }}">
@@ -176,8 +164,7 @@
                 <button class="btn-delete-session" onclick="deleteSession('{{ acc.username }}')">Delete Session</button>
                 <button class="btn-logout" onclick="logoutAccount('{{ acc.username }}')">Log out</button>
             {% endif %}
-            <button class="btn-google" onclick="loginGoogle('{{ acc.username }}')">Login with Google</button>
-            <button class="btn-confirm-trust" id="trust-{{ acc.username }}" onclick="confirmTrust('{{ acc.username }}')" style="display:none;">Confirm trust on Gmail</button>
+            <button class="btn-google" onclick="loginQR('{{ acc.username }}')">Login with QR</button>
             <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
         </div>
     </div>
@@ -311,36 +298,12 @@
             .then(() => { showToast('Logged out', 'success'); setTimeout(() => location.reload(), 800); });
         }
 
-        function saveGmail(username) {
-            const gmail = document.getElementById('gmail-' + username).value.trim();
-            if (!gmail) { showToast('Enter a Gmail address', 'error'); return; }
-            fetch('/api/gmail/' + username, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({gmail})
-            })
+        function loginQR(username) {
+            fetch('/api/login_qr/' + username, {method: 'POST'})
             .then(r => r.json())
             .then(d => {
-                if (d.success) { showToast('Gmail saved', 'success'); }
-                else { showToast(d.error || 'Failed to save Gmail', 'error'); }
-            });
-        }
-
-        function loginGoogle(username) {
-            fetch('/api/login_google/' + username, {method: 'POST'})
-            .then(r => r.json())
-            .then(d => {
-                if (d.success) { showToast('Google login started...', 'success'); }
-                else { showToast(d.error || 'Failed to start Google login', 'error'); }
-            });
-        }
-
-        function confirmTrust(username) {
-            fetch('/api/confirm_trust/' + username, {method: 'POST'})
-            .then(r => r.json())
-            .then(d => {
-                if (d.success) { showToast('Trust confirmed — waiting for flow to finish...', 'success'); }
-                else { showToast('Failed to confirm trust', 'error'); }
+                if (d.success) { showToast('QR login started — scan the code with your phone...', 'success'); }
+                else { showToast(d.error || 'Failed to start QR login', 'error'); }
             });
         }
 
@@ -366,12 +329,6 @@
 
                     // Cache the absolute next-post timestamp for the live countdown
                     nextTs[acc.username] = acc.next_post_ts || 0;
-
-                    // Show "Confirm trust" button when waiting for trust
-                    const trustBtn = document.getElementById('trust-' + acc.username);
-                    if (trustBtn) {
-                        trustBtn.style.display = (acc.status === 'Waiting for trust') ? 'inline-block' : 'none';
-                    }
 
                     // Auto-reload page if account became connected but buttons aren't showing
                     const startBtn = document.querySelector('.btn-start');

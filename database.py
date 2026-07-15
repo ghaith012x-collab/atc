@@ -23,21 +23,14 @@ def init_db():
             last_post TEXT,
             next_post TEXT,
             next_post_ts INTEGER,
-            gmail TEXT,
-            google_trust INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     # Idempotently add new columns for existing databases.
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(accounts)").fetchall()]
-        for col, ctype in [
-            ("next_post_ts", "INTEGER"),
-            ("gmail", "TEXT"),
-            ("google_trust", "INTEGER"),
-        ]:
-            if col not in cols:
-                conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} {ctype}")
+        if "next_post_ts" not in cols:
+            conn.execute("ALTER TABLE accounts ADD COLUMN next_post_ts INTEGER")
     except Exception:
         pass
     conn.commit()

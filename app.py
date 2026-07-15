@@ -5,7 +5,7 @@ from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
     connect_account, start_automation, stop_automation,
-    delete_account_session, logout_account, login_with_google, confirm_google_trust,
+    delete_account_session, logout_account, login_with_qr,
     screenshots, browser_sessions, take_screenshot
 )
 
@@ -124,30 +124,10 @@ def api_logout(username):
     return jsonify({"success": True})
 
 
-@app.route("/api/gmail/<path:username>", methods=["POST"])
-def api_gmail(username):
-    data = request.get_json(silent=True) or {}
-    gmail = (data.get("gmail") or "").strip().lower()
-    if not gmail.endswith("@gmail.com"):
-        return jsonify({"success": False, "error": "Gmail must end with @gmail.com"})
-    update_account(username, gmail=gmail)
-    return jsonify({"success": True})
-
-
-@app.route("/api/login_google/<path:username>", methods=["POST"])
-def api_login_google(username):
-    account = get_account(username)
-    gmail = (account.get("gmail") or "").strip().lower() if account else ""
-    if not gmail.endswith("@gmail.com"):
-        return jsonify({"success": False, "error": "Enter a valid @gmail.com address first"})
-    threading.Thread(target=login_with_google, args=(username,), daemon=True).start()
-    return jsonify({"success": True, "message": "Google login started..."})
-
-
-@app.route("/api/confirm_trust/<path:username>", methods=["POST"])
-def api_confirm_trust(username):
-    confirm_google_trust(username)
-    return jsonify({"success": True})
+@app.route("/api/login_qr/<path:username>", methods=["POST"])
+def api_login_qr(username):
+    threading.Thread(target=login_with_qr, args=(username,), daemon=True).start()
+    return jsonify({"success": True, "message": "QR login started..."})
 
 
 @app.route("/live/<path:username>")
