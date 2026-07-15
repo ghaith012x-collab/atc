@@ -2279,18 +2279,22 @@ def _click_text(page, labels, timeout=8000):
         page.wait_for_load_state("domcontentloaded", timeout=5000)
     except Exception:
         pass
-    for sel in ['button', 'a', '[role="button"]', '[role="link"]']:
+    for sel in ['button', 'a', '[role="button"]', '[role="link"]', 'div', 'span']:
         try:
             els = page.locator(sel).all()
         except Exception:
             continue
-        for el in els[:200]:
+        for el in els[:300]:
             try:
-                if not el.is_visible(timeout=500):
+                if not el.is_visible(timeout=800):
                     continue
-                txt = (el.inner_text(timeout=500) or "").strip().lower()
+                txt = (el.inner_text(timeout=800) or "").strip().lower()
                 if any(n in txt for n in norm):
-                    el.click(timeout=5000)
+                    try:
+                        el.scroll_into_view_if_needed(timeout=2000)
+                    except Exception:
+                        pass
+                    el.click(timeout=6000)
                     page.wait_for_load_state("domcontentloaded", timeout=5000)
                     return True
             except Exception:
@@ -2298,9 +2302,11 @@ def _click_text(page, labels, timeout=8000):
     try:
         for label in norm:
             try:
-                page.locator(f'text="{label}"').first.click(timeout=4000)
-                page.wait_for_load_state("domcontentloaded", timeout=5000)
-                return True
+                loc = page.locator(f'text="{label}"').first
+                if loc.count() > 0 and loc.is_visible(timeout=2000):
+                    loc.click(timeout=5000)
+                    page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    return True
             except Exception:
                 continue
     except Exception:
