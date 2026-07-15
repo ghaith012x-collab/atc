@@ -2060,7 +2060,7 @@ def logout_account(username):
     return True
 
 
-def _must_click(page, labels_or_selectors, task="", max_attempts=8):
+def _must_click(page, labels_or_selectors, task="", max_attempts=8, verify_opened=None):
     norm = [l.lower().strip() for l in labels_or_selectors if l and not l.startswith(('[', 'button:', 'a:', 'input[', 'div[', 'span[', '#', '.'))]
     selectors = [s for s in labels_or_selectors if s and (s.startswith('[') or s.startswith('button:') or s.startswith('a:') or s.startswith('input[') or s.startswith('div[') or s.startswith('span[') or s.startswith('#') or s.startswith('.'))]
     
@@ -2074,12 +2074,12 @@ def _must_click(page, labels_or_selectors, task="", max_attempts=8):
                     if el.is_visible(timeout=2000):
                         el.scroll_into_view_if_needed(timeout=2000)
                         try:
-                            el.click(timeout=6000, force=True)
+                            page.evaluate("""(el) => el.click()""", el)
                             clicked = True
                             break
                         except Exception:
                             try:
-                                page.evaluate("""(el) => el.click()""", el)
+                                el.click(timeout=6000, force=True)
                                 clicked = True
                                 break
                             except Exception:
@@ -2101,11 +2101,11 @@ def _must_click(page, labels_or_selectors, task="", max_attempts=8):
                         if any(n in txt for n in norm):
                             el.scroll_into_view_if_needed(timeout=2000)
                             try:
-                                el.click(timeout=6000, force=True)
+                                page.evaluate("""(el) => el.click()""", el)
                                 clicked = True
                             except Exception:
                                 try:
-                                    page.evaluate("""(el) => el.click()""", el)
+                                    el.click(timeout=6000, force=True)
                                     clicked = True
                                 except Exception:
                                     continue
@@ -2117,15 +2117,25 @@ def _must_click(page, labels_or_selectors, task="", max_attempts=8):
                     break
         
         if clicked:
+            time.sleep(1)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=8000)
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
             except Exception:
                 pass
-            time.sleep(2)
-            log(f"[{task}] Clicked '{labels_or_selectors[0]}' on attempt {attempt+1}")
-            return True
+            time.sleep(1)
+            
+            if verify_opened:
+                try:
+                    if verify_opened(page):
+                        log(f"[{task}] Clicked '{labels_or_selectors[0]}' and verified opened on attempt {attempt+1}")
+                        return True
+                except Exception:
+                    pass
+            else:
+                log(f"[{task}] Clicked '{labels_or_selectors[0]}' on attempt {attempt+1}")
+                return True
         
-        log(f"[{task}] Attempt {attempt+1}/{max_attempts}: click not registered yet, retrying...")
+        log(f"[{task}] Attempt {attempt+1}/{max_attempts}: click not registered or page didn't open, retrying...")
         time.sleep(2)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=5000)
@@ -2179,7 +2189,11 @@ def login_with_google(username, email=""):
             'button:has-text("Log in with phone or email")',
             'a:has-text("Log in")',
             "log in", "login", "sign in"
-        ], task=username)
+        ], task=username, max_attempts=10, verify_opened=lambda p: (
+            p.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"]').count() > 0 or
+            "/login" in p.url or
+            p.locator('[data-e2e="google-login-button"], [data-e2e="channel-item"], a[href*="google"]').count() > 0
+        ))
         time.sleep(3)
         take_screenshot(username)
 
@@ -2191,7 +2205,10 @@ def login_with_google(username, email=""):
             'button:has-text("Continue with Google")',
             'button:has-text("Use Google")',
             "continue with google", "use google", "google"
-        ], task=username)
+        ], task=username, max_attempts=10, verify_opened=lambda p: (
+            "accounts.google.com" in p.url or
+            p.locator('input[type="email"], input[name="identifier"]').count() > 0
+        ))
         time.sleep(3)
         take_screenshot(username)
 
