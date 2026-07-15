@@ -132,6 +132,10 @@
                 <div class="info-label">NEXT POST</div>
                 <div class="info-value" id="next-{{ acc.username }}">{{ acc.next_post or '—' }}</div>
             </div>
+            <div class="info-item">
+                <div class="info-label">NEXT POST IN</div>
+                <div class="info-value" id="countdown-{{ acc.username }}" style="color:#00f2ea;font-variant-numeric:tabular-nums;">—</div>
+            </div>
         </div>
 
         <!-- Session Panel (disconnected) -->
@@ -288,6 +292,9 @@
             .then(() => location.reload());
         }
 
+        // Cache of absolute next-post timestamps (epoch seconds) keyed by username
+        const nextTs = {};
+
         // ==================== LIVE REFRESH ====================
         function refreshCams() {
             document.querySelectorAll('[id^="cam-"]').forEach(img => {
@@ -307,7 +314,10 @@
                     if (statusEl) statusEl.textContent = acc.status || '';
                     const nextEl = document.getElementById('next-' + acc.username);
                     if (nextEl) nextEl.textContent = acc.next_post || '—';
-                    
+
+                    // Cache the absolute next-post timestamp for the live countdown
+                    nextTs[acc.username] = acc.next_post_ts || 0;
+
                     // Auto-reload page if account became connected but buttons aren't showing
                     const startBtn = document.querySelector('.btn-start');
                     const sessionPanel = document.getElementById('session-panel-' + acc.username);
@@ -316,11 +326,29 @@
                         location.reload();
                     }
                 });
+                tickCountdowns();
             });
+        }
+
+        // Accurate, self-ticking live countdown to the next post.
+        function tickCountdowns() {
+            const now = Math.floor(Date.now() / 1000);
+            for (const username in nextTs) {
+                const el = document.getElementById('countdown-' + username);
+                if (!el) continue;
+                const ts = nextTs[username] || 0;
+                if (!ts) { el.textContent = '—'; continue; }
+                let rem = ts - now;
+                if (rem <= 0) { el.textContent = 'Posting now…'; continue; }
+                const m = Math.floor(rem / 60);
+                const s = rem % 60;
+                el.textContent = m + ':' + String(s).padStart(2, '0');
+            }
         }
 
         setInterval(refreshCams, 1000);
         setInterval(updateInfo, 4000);
+        setInterval(tickCountdowns, 1000);
     </script>
 </body>
 </html>

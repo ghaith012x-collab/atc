@@ -1816,6 +1816,7 @@ def automation_worker(username):
                     username,
                     last_post=now.strftime("%Y-%m-%d %H:%M"),
                     next_post=next_dt.strftime("%H:%M"),
+                    next_post_ts=int(post_cycle_start) + POST_INTERVAL_SECONDS,
                     current_task=f"Posted! Going to For You Page..."
                 )
 

@@ -22,9 +22,17 @@ def init_db():
             current_task TEXT DEFAULT 'Idle',
             last_post TEXT,
             next_post TEXT,
+            next_post_ts INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Idempotently add the next_post_ts column for existing databases.
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(accounts)").fetchall()]
+        if "next_post_ts" not in cols:
+            conn.execute("ALTER TABLE accounts ADD COLUMN next_post_ts INTEGER")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
