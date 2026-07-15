@@ -1283,7 +1283,7 @@ def upload_video_to_tiktok(username, file_path, caption):
         # Most reliable selector from real TikTok automation repos (wkaisertexas, selenium examples, SO)
         # Exact button user provided: data-e2e="post_video_button" + aria-disabled="false" + data-disabled="false" + data-loading="false"
         # Text = "Publiser" (Norwegian) or "Post"
-        # === EXACT BUTTON FROM USER HTML ===
+        # === EXACT BUTTON FROM USER HTML (Norwegian "Publiser") ===
         # <button role="button" type="button"
         #   class="Button__root Button__root--shape-default Button__root--size-large Button__root--type-primary"
         #   aria-disabled="false" data-disabled="false" data-loading="false"
@@ -1291,7 +1291,7 @@ def upload_video_to_tiktok(username, file_path, caption):
         #   ...
         #   <div class="Button__content ...">Publiser</div>
         # </button>
-        primary_post_selector = 'button[data-e2e="post_video_button"][class*="Button__root--type-primary"]'
+        primary_post_selector = 'button[data-e2e="post_video_button"].Button__root--type-primary, button[data-e2e="post_video_button"][class*="Button__root--type-primary"]'
 
         def _debug_post_dom(page, note=""):
             try:
