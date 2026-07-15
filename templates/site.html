@@ -41,6 +41,7 @@
         .btn-stop { background: #ff5252; color: white; }
         .btn-delete { background: #444; color: #ccc; }
         .btn-delete-session { background: #2a1a1a; color: #ff5252; border: 1px solid #ff5252; }
+        .btn-logout { background: #1a2740; color: #4fa3ff; border: 1px solid #4fa3ff; }
         .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
 
         /* Session paste panel */
@@ -79,13 +80,13 @@
         <div class="row">
             <input type="text" id="new-username" placeholder="@username" style="flex:1;min-width:160px;">
             <select id="new-category">
-                <option value="dance">Dance</option>
-                <option value="horror">Horror</option>
-                <option value="story">Story Animation</option>
-                <option value="memes">Funny Videos</option>
-                <option value="comedy">Gin Stories</option>
-                <option value="gaming">Scary facts</option>
-                <option value="predator">Predator Catches</option>
+                <option value="Dance">Dance</option>
+                <option value="Horror">Horror</option>
+                <option value="Story Animation">Story Animation</option>
+                <option value="Funny Videos">Funny Videos</option>
+                <option value="Gin Stories">Gin Stories</option>
+                <option value="Scary facts">Scary facts</option>
+                <option value="Predator Catches">Predator Catches</option>
             </select>
             <button class="btn-primary" onclick="addAccount()">Add Account</button>
         </div>
@@ -161,6 +162,7 @@
                 <button class="btn-start" onclick="startAutomation('{{ acc.username }}')">&#9654; Start Automation</button>
                 <button class="btn-stop" onclick="stopAutomation('{{ acc.username }}')">&#9632; Stop</button>
                 <button class="btn-delete-session" onclick="deleteSession('{{ acc.username }}')">Delete Session</button>
+                <button class="btn-logout" onclick="logoutAccount('{{ acc.username }}')">Log out</button>
             {% endif %}
             <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
         </div>
@@ -287,6 +289,12 @@
             if (!confirm('Permanently delete account ' + username + '?')) return;
             fetch('/api/delete/' + username, {method: 'POST'})
             .then(() => location.reload());
+        }
+
+        function logoutAccount(username) {
+            if (!confirm('Log out ' + username + '? This ends the TikTok session.')) return;
+            fetch('/api/logout/' + username, {method: 'POST'})
+            .then(() => { showToast('Logged out', 'success'); setTimeout(() => location.reload(), 800); });
         }
 
         // Cache of absolute next-post timestamps (epoch seconds) keyed by username

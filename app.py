@@ -5,7 +5,7 @@ from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
     connect_account, start_automation, stop_automation,
-    delete_account_session, screenshots, browser_sessions, take_screenshot
+    delete_account_session, logout_account, screenshots, browser_sessions, take_screenshot
 )
 
 app = Flask(__name__)
@@ -114,6 +114,12 @@ def delete(username):
 @app.route("/api/delete_session/<path:username>", methods=["POST"])
 def api_delete_session(username):
     delete_account_session(username)
+    return jsonify({"success": True})
+
+
+@app.route("/api/logout/<path:username>", methods=["POST"])
+def api_logout(username):
+    logout_account(username)
     return jsonify({"success": True})
 
 

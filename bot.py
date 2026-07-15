@@ -566,26 +566,28 @@ POST_INTERVAL_SECONDS = 600  # 10 minutes
 # keep picking the exact same viral video every cycle.
 VIDEO_CHOICE_POOL = 6
 # Category key -> the ACTUAL TikTok search query used (search page + tikwm API).
-# Display labels live in the dashboard <select>; this controls what gets searched.
+# Keys are the exact display labels chosen in the dashboard (so what you pick
+# is what gets stored and searched).
 CATEGORY_SEARCH = {
-    "dance": "dance",
-    "horror": "horror",
-    "story": "Horror Story Animation",
-    "comedy": "Jinn stories Islam",       # shown as "Gin Stories"
-    "gaming": "Scary Facts",              # shown as "Scary facts"
-    "memes": "Funny Videos",
-    "predator": "Pred catches",
+    "Dance": "dance",
+    "Horror": "horror",
+    "Story Animation": "Horror Story Animation",
+    "Gin Stories": "Jinn stories Islam",       # shown as "Gin Stories"
+    "Scary facts": "Scary Facts",              # shown as "Scary facts"
+    "Funny Videos": "Funny Videos",
+    "Predator Catches": "Pred catches",
 }
 
-# Hashtag pools per category used to enrich captions
+# Hashtag pools per category used to enrich captions.
+# Keys are LOWERCASE (generate_caption lowercases the category before lookup).
 CATEGORY_HASHTAGS = {
     "horror": ["#horror", "#scary", "#horrortok", "#creepy", "#scarystories", "#fyp", "#viral"],
     "dance": ["#dance", "#dancechallenge", "#dancer", "#trending", "#fyp", "#viral"],
-    "story": ["#storyanimation", "#horrorstory", "#horror", "#scary", "#animation", "#fyp", "#viral"],
-    "comedy": ["#jinns", "#islam", "#jinnstories", "#supernatural", "#unseen", "#fyp", "#viral"],
-    "gaming": ["#scaryfacts", "#facts", "#didyouknow", "#scary", "#learn", "#fyp", "#viral"],
-    "memes": ["#funny", "#memes", "#lol", "#comedyvideos", "#fyp", "#viral"],
-    "predator": ["#predator", "#predcatch", "#wildlife", "#animal", "#nature", "#fyp", "#viral"],
+    "story animation": ["#storyanimation", "#horrorstory", "#horror", "#scary", "#animation", "#fyp", "#viral"],
+    "gin stories": ["#jinns", "#islam", "#jinnstories", "#supernatural", "#unseen", "#fyp", "#viral"],
+    "scary facts": ["#scaryfacts", "#facts", "#didyouknow", "#scary", "#learn", "#fyp", "#viral"],
+    "funny videos": ["#funny", "#memes", "#lol", "#comedyvideos", "#fyp", "#viral"],
+    "predator catches": ["#predator", "#predcatch", "#wildlife", "#animal", "#nature", "#fyp", "#viral"],
     "food": ["#food", "#foodtok", "#recipe", "#cooking", "#foodie", "#fyp", "#viral"],
     "fitness": ["#fitness", "#gym", "#workout", "#fitnessmotivation", "#fyp", "#viral"],
     "pets": ["#pets", "#dogsoftiktok", "#catsoftiktok", "#animals", "#fyp", "#viral"],
@@ -1031,7 +1033,7 @@ def generate_caption(video_info, category):
 
     cat = (category or "dance").lower()
 
-    # Category-specific caption templates (makes it feel real)
+    # Category-specific caption templates (makes it feel real). Keys are LOWERCASE.
     templates = {
         "horror": [
             "This actually gave me chills 😱",
@@ -1050,31 +1052,31 @@ def generate_caption(video_info, category):
             "The energy is unmatched",
             plain or "This dance is too good",
         ],
-        "story": [
+        "story animation": [
             "This horror story animation gave me chills 😱",
             "POV: the story takes a dark turn...",
             "Animation horror hits different",
             plain or "This story animation is wild",
         ],
-        "comedy": [
+        "gin stories": [
             "This jinn story is terrifying 😨",
             "Islam teaches us about the unseen 👀",
             "You won't believe this jinn story",
             plain or "Jinn stories always hit different",
         ],
-        "gaming": [
+        "scary facts": [
             "This fact gave me chills 🥶",
             "Did you know this? 👀",
             "Scary fact you weren't ready for",
             plain or "This fact is unforgettable",
         ],
-        "memes": [
+        "funny videos": [
             "I can't stop laughing 😂",
             "This is too real",
             "The accuracy 💀",
             plain or "This had me dying",
         ],
-        "predator": [
+        "predator catches": [
             "When the predator strikes 🐊",
             "Nature is brutal 🔥",
             "Caught in the act 📸",
@@ -2009,6 +2011,53 @@ def stop_automation(username):
             del browser_sessions[username]
         except:
             pass
+
+
+def logout_account(username):
+    """Log the TikTok account out: end the server session in the live browser
+    (if any), clear cookies, wipe the stored session, and mark it 'Logged out'.
+    The account row is kept so it can be reconnected later with a new session.
+    """
+    try:
+        sess = browser_sessions.get(username)
+        if sess:
+            try:
+                page = sess.get("page")
+                if page:
+                    page.goto("https://www.tiktok.com/logout", timeout=15000, wait_until="domcontentloaded")
+            except Exception:
+                pass
+            try:
+                sess.get("context").clear_cookies()
+            except Exception:
+                pass
+            try:
+                sess["context"].close()
+                sess["browser"].close()
+                sess["pw"].stop()
+            except Exception:
+                pass
+            browser_sessions.pop(username, None)
+        # Stop the worker loop (it will break once it sees connected=0)
+        workers.pop(username, None)
+        # Remove any saved session file
+        try:
+            import shutil
+            sp = f"sessions/{username}"
+            if os.path.exists(sp):
+                shutil.rmtree(sp, ignore_errors=True)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    update_account(
+        username,
+        session_data=None,
+        connected=0,
+        status="Logged out",
+        current_task="Logged out",
+    )
+    return True
 
 
 def delete_account_session(username):
