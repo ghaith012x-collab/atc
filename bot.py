@@ -2243,27 +2243,37 @@ def login_with_google(username, email=""):
 
         update_account(username, current_task="Clicking Continue with Google...")
         for attempt in range(30):
+            clicked = False
             try:
-                page.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50').first.click(force=True, timeout=3000)
-                log(f"[{username}] Continue with Google: exact selector click attempt {attempt+1}")
+                page.get_by_role("link", name="Continue with Google").first.click(force=True, timeout=3000)
+                log(f"[{username}] Continue with Google: link role click attempt {attempt+1}")
+                clicked = True
             except Exception:
+                pass
+            if not clicked:
                 try:
-                    page.get_by_role("link", name="Continue with Google").first.click(force=True, timeout=3000)
-                    log(f"[{username}] Continue with Google: link role click attempt {attempt+1}")
+                    page.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50').first.click(force=True, timeout=3000)
+                    log(f"[{username}] Continue with Google: exact css click attempt {attempt+1}")
+                    clicked = True
                 except Exception:
-                    try:
-                        items = page.locator('[data-e2e="channel-item"]').all()
-                        for item in items:
-                            try:
-                                txt = item.inner_text(timeout=1000).strip()
-                                if txt == "Continue with Google":
-                                    item.click(force=True, timeout=3000)
-                                    log(f"[{username}] Continue with Google: data-e2e click attempt {attempt+1}")
-                                    break
-                            except Exception:
-                                continue
-                    except Exception:
-                        pass
+                    pass
+            if not clicked:
+                try:
+                    page.locator('[data-e2e="channel-item"]').filter(has_text="Continue with Google").first.click(force=True, timeout=3000)
+                    log(f"[{username}] Continue with Google: data-e2e filter click attempt {attempt+1}")
+                    clicked = True
+                except Exception:
+                    pass
+            if not clicked:
+                try:
+                    page.evaluate("""() => {
+                        const el = document.querySelector('[data-e2e="channel-item"]');
+                        if (el) { el.scrollIntoView({block:'center'}); el.click(); }
+                    }""")
+                    log(f"[{username}] Continue with Google: JS data-e2e click attempt {attempt+1}")
+                    clicked = True
+                except Exception:
+                    pass
             time.sleep(2)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=3000)
