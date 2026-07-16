@@ -2244,36 +2244,51 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Continue with Google...")
         for attempt in range(30):
             clicked = False
+            
             try:
-                page.get_by_role("link", name="Continue with Google").first.click(force=True, timeout=3000)
-                log(f"[{username}] Continue with Google: link role click attempt {attempt+1}")
-                clicked = True
+                btn = page.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50')
+                if btn.count() > 0:
+                    btn.first.click(force=True, timeout=3000)
+                    time.sleep(0.3)
+                    btn.first.click(force=True, timeout=3000)
+                    log(f"[{username}] Continue with Google: double-click attempt {attempt+1}")
+                    clicked = True
             except Exception:
                 pass
+            
             if not clicked:
                 try:
-                    page.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50').first.click(force=True, timeout=3000)
-                    log(f"[{username}] Continue with Google: exact css click attempt {attempt+1}")
+                    btn = page.get_by_role("link", name="Continue with Google").first
+                    btn.click(force=True, timeout=3000)
+                    time.sleep(0.3)
+                    btn.click(force=True, timeout=3000)
+                    log(f"[{username}] Continue with Google: link double-click attempt {attempt+1}")
                     clicked = True
                 except Exception:
                     pass
-            if not clicked:
-                try:
-                    page.locator('[data-e2e="channel-item"]').filter(has_text="Continue with Google").first.click(force=True, timeout=3000)
-                    log(f"[{username}] Continue with Google: data-e2e filter click attempt {attempt+1}")
-                    clicked = True
-                except Exception:
-                    pass
+            
             if not clicked:
                 try:
                     page.evaluate("""() => {
-                        const el = document.querySelector('[data-e2e="channel-item"]');
-                        if (el) { el.scrollIntoView({block:'center'}); el.click(); }
+                        const btn = document.querySelector('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50');
+                        if (btn) {
+                            btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                            btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                            btn.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                            setTimeout(() => {
+                                btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                                btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                                btn.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                            }, 300);
+                            return 'hold_clicked';
+                        }
+                        return 'not_found';
                     }""")
-                    log(f"[{username}] Continue with Google: JS data-e2e click attempt {attempt+1}")
+                    log(f"[{username}] Continue with Google: JS hold/click attempt {attempt+1}")
                     clicked = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    log(f"[{username}] Continue with Google: hold/click failed attempt {attempt+1}: {e}")
+            
             time.sleep(2)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=3000)
@@ -2283,6 +2298,8 @@ def login_with_google(username, email=""):
                 log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
                 break
             take_screenshot(username)
+        time.sleep(3)
+        take_screenshot(username)
         time.sleep(3)
         take_screenshot(username)
 
