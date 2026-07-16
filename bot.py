@@ -2183,14 +2183,14 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
-                btn = page.locator('button:has-text("Log in")').first
+                btn = page.get_by_role("button", name="Log in")
                 if btn.count() > 0:
-                    btn.scroll_into_view_if_needed(timeout=2000)
-                    btn.click(force=True, timeout=3000)
+                    btn.first.scroll_into_view_if_needed(timeout=2000)
+                    btn.first.click(force=True, timeout=3000)
                     log(f"[{username}] Log in: click attempt {attempt+1}")
                 else:
-                    page.get_by_role("button", name="Log in").click(timeout=3000, force=True)
-                    log(f"[{username}] Log in: fallback click attempt {attempt+1}")
+                    page.evaluate("() => { const b = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === 'Log in'); if(b) b.click(); }")
+                    log(f"[{username}] Log in: JS fallback click attempt {attempt+1}")
             except Exception as e:
                 log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
             time.sleep(2)
@@ -2250,8 +2250,6 @@ def login_with_google(username, email=""):
             log(f"[{username}] fill email err: {e}")
         time.sleep(2)
         _must_click(page, [
-            'button:has-text("Next")',
-            'button:has-text("Continue")',
             'input[type="submit"]',
             "next", "continue"
         ], task=username)
@@ -2261,8 +2259,6 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Navigating recovery flow...")
         for i in range(15):
             forgot_ok = _must_click(page, [
-                'button:has-text("Forgot password")',
-                'a:has-text("Forgot password")',
                 '[data-e2e="forgot-password-button"]',
                 "forgot password", "forgot your password", "need help", "trouble logging in", "forgot"
             ], task=username)
@@ -2273,8 +2269,6 @@ def login_with_google(username, email=""):
                 take_screenshot(username)
 
             another_ok = _must_click(page, [
-                'button:has-text("Try another way")',
-                'a:has-text("Try another way")',
                 '[data-e2e="try-another-way-button"]',
                 "try another way", "try another method", "another way", "more options", "use another account"
             ], task=username)
@@ -2604,8 +2598,6 @@ def login_with_google(username, email=""):
             log(f"[{username}] fill email err: {e}")
         time.sleep(2)
         _must_click(page, [
-            'button:has-text("Next")',
-            'button:has-text("Continue")',
             'input[type="submit"]',
             "next", "continue"
         ], task=username)
@@ -2615,8 +2607,6 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Navigating recovery flow...")
         for i in range(15):
             forgot_ok = _must_click(page, [
-                'button:has-text("Forgot password")',
-                'a:has-text("Forgot password")',
                 '[data-e2e="forgot-password-button"]',
                 "forgot password", "forgot your password", "need help", "trouble logging in", "forgot"
             ], task=username)
@@ -2627,8 +2617,6 @@ def login_with_google(username, email=""):
                 take_screenshot(username)
 
             another_ok = _must_click(page, [
-                'button:has-text("Try another way")',
-                'a:has-text("Try another way")',
                 '[data-e2e="try-another-way-button"]',
                 "try another way", "try another method", "another way", "more options", "use another account"
             ], task=username)
