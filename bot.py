@@ -2244,17 +2244,30 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Continue with Google...")
         for attempt in range(30):
             try:
-                page.evaluate("""() => {
-                    const normalize = (s) => (s || '').replace(/\\s+/g, ' ').trim();
-                    let btn = [...document.querySelectorAll('button')].find(el => normalize(el.textContent) === 'Continue with Google');
-                    if (!btn) btn = [...document.querySelectorAll('[data-e2e="channel-item"]')].find(el => normalize(el.textContent) === 'Continue with Google');
-                    if (!btn) btn = [...document.querySelectorAll('div, span, a, [role="button"]')].find(el => normalize(el.textContent) === 'Continue with Google');
-                    if (!btn) return 'not_found';
-                    btn.scrollIntoView({block: 'center'});
-                    btn.click();
-                    return 'clicked';
-                }""")
-                log(f"[{username}] Continue with Google: JS click attempt {attempt+1}")
+                page.get_by_role("button", name="Continue with Google").first.click(force=True, timeout=3000)
+                log(f"[{username}] Continue with Google: get_by_role click attempt {attempt+1}")
+            except Exception:
+                try:
+                    page.locator('button:has-text("Continue with Google")').first.click(force=True, timeout=3000)
+                    log(f"[{username}] Continue with Google: has-text click attempt {attempt+1}")
+                except Exception:
+                    try:
+                        page.evaluate("""() => {
+                            const normalize = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                            let btn = [...document.querySelectorAll('button')].find(el => normalize(el.textContent) === 'Continue with Google');
+                            if (!btn) btn = [...document.querySelectorAll('[data-e2e="channel-item"]')].find(el => normalize(el.textContent) === 'Continue with Google');
+                            if (!btn) btn = [...document.querySelectorAll('div, span, a, [role="button"]')].find(el => normalize(el.textContent) === 'Continue with Google');
+                            if (!btn) return 'not_found';
+                            btn.scrollIntoView({block: 'center'});
+                            btn.click();
+                            return 'clicked';
+                        }""")
+                        log(f"[{username}] Continue with Google: JS fallback click attempt {attempt+1}")
+                    except Exception as e:
+                        log(f"[{username}] Continue with Google: all methods failed attempt {attempt+1}: {e}")
+                        time.sleep(2)
+                        take_screenshot(username)
+                        continue
                 
                 time.sleep(2)
                 try:
@@ -2265,8 +2278,6 @@ def login_with_google(username, email=""):
                 if "accounts.google.com" in page.url or page.locator('input[type="email"], input[name="identifier"]').count() > 0:
                     log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
                     break
-            except Exception as e:
-                log(f"[{username}] Continue with Google err attempt {attempt+1}: {e}")
             time.sleep(2)
             take_screenshot(username)
         time.sleep(3)
