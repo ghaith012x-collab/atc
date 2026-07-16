@@ -2211,6 +2211,170 @@ def login_with_google(username, email=""):
         ))
         time.sleep(3)
         take_screenshot(username)
+        if not on_google:
+            update_account(username, current_task="Waiting for login modal...")
+            login_frame = None
+            for _ in range(45):
+                try:
+                    frames = page.frames
+                    for frame in frames:
+                        try:
+                            if frame.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"], button:has-text("Continue with Google")').count() > 0:
+                                login_frame = frame
+                                log(f"[{username}] Found login modal in iframe: {frame.name}")
+                                break
+                        except Exception:
+                            continue
+                    if login_frame:
+                        break
+                    if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url or "accounts.google.com" in page.url:
+                        break
+                except Exception:
+                    pass
+                time.sleep(1)
+            time.sleep(3)
+            take_screenshot(username)
+
+            update_account(username, current_task="Clicking Continue with Google...")
+            target = login_frame or page
+            for attempt in range(30):
+                clicked = False
+                
+                try:
+                    btn = target.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50')
+                    if btn.count() > 0:
+                        btn.first.scroll_into_view_if_needed(timeout=2000)
+                        btn.first.hover(timeout=2000)
+                        time.sleep(2)
+                        box = btn.first.bounding_box(timeout=2000)
+                        log(f"[{username}] exact selector bbox: {box}")
+                        if box:
+                            x = box['x'] + box['width'] / 2
+                            y = box['y'] + box['height'] / 2
+                            page.mouse.click(x, y)
+                            log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
+                        else:
+                            btn.first.evaluate("""(el) => {
+                                el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                                el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                                el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                            }""")
+                            log(f"[{username}] Continue with Google: JS events attempt {attempt+1}")
+                        clicked = True
+                except Exception as e:
+                    log(f"[{username}] exact selector err: {e}")
+                
+                if not clicked:
+                    try:
+                        btn = target.get_by_role("link", name="Continue with Google").first
+                        btn.scroll_into_view_if_needed(timeout=2000)
+                        btn.hover(timeout=2000)
+                        time.sleep(2)
+                        box = btn.bounding_box(timeout=2000)
+                        log(f"[{username}] link role bbox: {box}")
+                        if box:
+                            x = box['x'] + box['width'] / 2
+                            y = box['y'] + box['height'] / 2
+                            page.mouse.click(x, y)
+                            log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
+                        else:
+                            btn.evaluate("""(el) => {
+                                el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                                el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                                el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                            }""")
+                            log(f"[{username}] Continue with Google: link JS events attempt {attempt+1}")
+                        clicked = True
+                    except Exception as e:
+                        log(f"[{username}] link role err: {e}")
+                
+                if not clicked:
+                    try:
+                        items = target.locator('[data-e2e="channel-item"]').all()
+                        log(f"[{username}] channel-item count: {len(items)}")
+                        for item in items:
+                            try:
+                                txt = item.inner_text(timeout=1000).strip()
+                                if "Continue with Google" in txt:
+                                    item.scroll_into_view_if_needed(timeout=2000)
+                                    item.hover(timeout=2000)
+                                    time.sleep(2)
+                                    box = item.bounding_box(timeout=2000)
+                                    log(f"[{username}] channel-item bbox: {box}")
+                                    if box:
+                                        x = box['x'] + box['width'] / 2
+                                        y = box['y'] + box['height'] / 2
+                                        page.mouse.click(x, y)
+                                        log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
+                                    else:
+                                        item.evaluate("""(el) => {
+                                            el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                                            el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                                            el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                        }""")
+                                        log(f"[{username}] Continue with Google: channel JS events attempt {attempt+1}")
+                                    clicked = True
+                                    break
+                            except Exception:
+                                continue
+                    except Exception as e:
+                        log(f"[{username}] channel-item err: {e}")
+                
+                if not clicked:
+                    try:
+                        target.evaluate("""() => {
+                            const btn = document.querySelector('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50');
+                            if (btn) {
+                                btn.scrollIntoView({block: 'center'});
+                                btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                                btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                                btn.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                return 'clicked';
+                            }
+                            const items = [...document.querySelectorAll('[data-e2e="channel-item"]')];
+                            const googleBtn = items.find(el => el.textContent.includes('Continue with Google'));
+                            if (googleBtn) {
+                                googleBtn.scrollIntoView({block: 'center'});
+                                googleBtn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                                googleBtn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                                googleBtn.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                return 'clicked_channel';
+                            }
+                            return 'not_found';
+                        }""")
+                        log(f"[{username}] Continue with Google: JS fallback click attempt {attempt+1}")
+                        clicked = True
+                    except Exception as e:
+                        log(f"[{username}] JS fallback err attempt {attempt+1}: {e}")
+                
+                if not clicked:
+                    try:
+                        btn = target.get_by_role("link", name="Continue with Google").first
+                        btn.focus(timeout=2000)
+                        page.keyboard.press("Enter")
+                        log(f"[{username}] Continue with Google: focus+Enter attempt {attempt+1}")
+                        clicked = True
+                    except Exception as e:
+                        log(f"[{username}] focus+Enter err attempt {attempt+1}: {e}")
+                
+                time.sleep(4)
+                try:
+                    target.wait_for_load_state("domcontentloaded", timeout=8000)
+                except Exception:
+                    pass
+                try:
+                    current_url = page.url
+                except Exception:
+                    current_url = "unknown"
+                log(f"[{username}] Page URL after click: {current_url}")
+                if "accounts.google.com" in current_url or target.locator('input[type="email"], input[name="identifier"]').count() > 0:
+                    log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
+                    break
+                take_screenshot(username)
+            time.sleep(4)
+            take_screenshot(username)
+            time.sleep(3)
+            take_screenshot(username)
 
         update_account(username, current_task="Typing Gmail...")
         try:
