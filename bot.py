@@ -2241,34 +2241,36 @@ def login_with_google(username, email=""):
             time.sleep(2)
             take_screenshot(username)
 
-            if "accounts.google.com" not in page.url:
-                update_account(username, current_task="Clicking Continue with Google...")
-                for attempt in range(30):
-                    try:
-                        page.evaluate("""() => {
-                            const btn = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === 'Continue with Google');
-                            if (!btn) return 'not_found';
-                            btn.scrollIntoView({block: 'center'});
-                            btn.click();
-                            return 'clicked';
-                        }""")
-                        log(f"[{username}] Continue with Google: JS click attempt {attempt+1}")
-                        
-                        time.sleep(2)
-                        try:
-                            page.wait_for_load_state("domcontentloaded", timeout=3000)
-                        except Exception:
-                            pass
-                        
-                        if "accounts.google.com" in page.url or page.locator('input[type="email"], input[name="identifier"]').count() > 0:
-                            log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
-                            break
-                    except Exception as e:
-                        log(f"[{username}] Continue with Google err attempt {attempt+1}: {e}")
-                    time.sleep(2)
-                    take_screenshot(username)
-                time.sleep(3)
-                take_screenshot(username)
+        update_account(username, current_task="Clicking Continue with Google...")
+        for attempt in range(30):
+            try:
+                page.evaluate("""() => {
+                    const normalize = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                    let btn = [...document.querySelectorAll('button')].find(el => normalize(el.textContent) === 'Continue with Google');
+                    if (!btn) btn = [...document.querySelectorAll('[data-e2e="channel-item"]')].find(el => normalize(el.textContent) === 'Continue with Google');
+                    if (!btn) btn = [...document.querySelectorAll('div, span, a, [role="button"]')].find(el => normalize(el.textContent) === 'Continue with Google');
+                    if (!btn) return 'not_found';
+                    btn.scrollIntoView({block: 'center'});
+                    btn.click();
+                    return 'clicked';
+                }""")
+                log(f"[{username}] Continue with Google: JS click attempt {attempt+1}")
+                
+                time.sleep(2)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=3000)
+                except Exception:
+                    pass
+                
+                if "accounts.google.com" in page.url or page.locator('input[type="email"], input[name="identifier"]').count() > 0:
+                    log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
+                    break
+            except Exception as e:
+                log(f"[{username}] Continue with Google err attempt {attempt+1}: {e}")
+            time.sleep(2)
+            take_screenshot(username)
+        time.sleep(3)
+        take_screenshot(username)
 
         update_account(username, current_task="Typing Gmail...")
         try:
