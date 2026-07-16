@@ -2224,7 +2224,7 @@ def login_with_google(username, email=""):
         if not on_google:
             update_account(username, current_task="Waiting for login modal...")
             login_frame = None
-            for _ in range(30):
+            for _ in range(45):
                 try:
                     frames = page.frames
                     for frame in frames:
@@ -2242,7 +2242,7 @@ def login_with_google(username, email=""):
                 except Exception:
                     pass
                 time.sleep(1)
-            time.sleep(2)
+            time.sleep(3)
             take_screenshot(username)
 
             update_account(username, current_task="Clicking Continue with Google...")
@@ -2255,7 +2255,7 @@ def login_with_google(username, email=""):
                     if btn.count() > 0:
                         btn.first.scroll_into_view_if_needed(timeout=2000)
                         btn.first.hover(timeout=2000)
-                        time.sleep(0.5)
+                        time.sleep(1)
                         btn.first.click(force=True, timeout=3000)
                         log(f"[{username}] Continue with Google: exact selector click attempt {attempt+1}")
                         clicked = True
@@ -2267,7 +2267,7 @@ def login_with_google(username, email=""):
                         btn = target.get_by_role("link", name="Continue with Google").first
                         btn.scroll_into_view_if_needed(timeout=2000)
                         btn.hover(timeout=2000)
-                        time.sleep(0.5)
+                        time.sleep(1)
                         btn.click(force=True, timeout=3000)
                         log(f"[{username}] Continue with Google: link role click attempt {attempt+1}")
                         clicked = True
@@ -2283,7 +2283,7 @@ def login_with_google(username, email=""):
                                 if "Continue with Google" in txt:
                                     item.scroll_into_view_if_needed(timeout=2000)
                                     item.hover(timeout=2000)
-                                    time.sleep(0.5)
+                                    time.sleep(1)
                                     item.click(force=True, timeout=3000)
                                     log(f"[{username}] Continue with Google: channel-item click attempt {attempt+1}")
                                     clicked = True
@@ -2340,6 +2340,8 @@ def login_with_google(username, email=""):
                     log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
                     break
                 take_screenshot(username)
+            time.sleep(4)
+            take_screenshot(username)
             time.sleep(3)
             take_screenshot(username)
 
