@@ -631,14 +631,8 @@ def take_screenshot(username):
                 return
         img = page.screenshot(type="png")
         screenshots[username] = img
-    except Exception:
-        pass
-        screenshot_bytes = page.screenshot(timeout=8000)
-        img = Image.open(io.BytesIO(screenshot_bytes))
-        screenshots[username] = img
     except Exception as e:
         err = str(e).split("\n")[0][:60]
-        # Keep the last good frame instead of replacing it with an error card
         if username not in screenshots:
             screenshots[username] = create_placeholder(username, f"Screenshot error: {err}")
         print(f"[{username}] screenshot error: {err}")
