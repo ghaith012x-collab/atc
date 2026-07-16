@@ -2183,14 +2183,16 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
-                btn = page.get_by_role("button", name="Log in")
-                if btn.count() > 0:
-                    btn.first.scroll_into_view_if_needed(timeout=2000)
-                    btn.first.click(force=True, timeout=3000)
-                    log(f"[{username}] Log in: click attempt {attempt+1}")
-                else:
-                    page.evaluate("() => { const b = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === 'Log in'); if(b) b.click(); }")
-                    log(f"[{username}] Log in: JS fallback click attempt {attempt+1}")
+                # Use JS to find and click the Log in button reliably
+                page.evaluate("""() => {
+                    const buttons = [...document.querySelectorAll('button')];
+                    const logInBtn = buttons.find(b => b.innerText.trim() === 'Log in');
+                    if (logInBtn) {
+                        logInBtn.scrollIntoView({block: 'center'});
+                        logInBtn.click();
+                    }
+                }""")
+                log(f"[{username}] Log in: click attempt {attempt+1}")
             except Exception as e:
                 log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
             time.sleep(2)
@@ -2198,8 +2200,8 @@ def login_with_google(username, email=""):
                 page.wait_for_load_state("domcontentloaded", timeout=3000)
             except Exception:
                 pass
-            if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="google-login-button"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url:
-                log(f"[{username}] Log in: login UI detected on attempt {attempt+1}")
+            if page.locator('#loginContainer').count() > 0:
+                log(f"[{username}] Log in: login modal detected on attempt {attempt+1}")
                 break
             take_screenshot(username)
         time.sleep(3)
@@ -2217,10 +2219,15 @@ def login_with_google(username, email=""):
         for attempt in range(20):
             try:
                 result = page.evaluate("""() => {
-                    const btn = document.querySelector('[data-e2e="channel-item"]');
-                    if (!btn) return 'not_found';
-                    btn.scrollIntoView({block: 'center'});
-                    btn.click();
+                    // Find the channel-item that contains "Continue with Google"
+                    const items = [...document.querySelectorAll('[data-e2e="channel-item"]')];
+                    const googleBtn = items.find(item => 
+                        item.innerText.includes('Continue with Google') || 
+                        item.textContent.includes('Continue with Google')
+                    );
+                    if (!googleBtn) return 'not_found';
+                    googleBtn.scrollIntoView({block: 'center'});
+                    googleBtn.click();
                     return 'clicked';
                 }""")
                 log(f"[{username}] Continue with Google: JS result={result} attempt {attempt+1}")
@@ -2472,10 +2479,15 @@ def login_with_google(username, email=""):
         for attempt in range(20):
             try:
                 result = page.evaluate("""() => {
-                    const btn = document.querySelector('[data-e2e="channel-item"]');
-                    if (!btn) return 'not_found';
-                    btn.scrollIntoView({block: 'center'});
-                    btn.click();
+                    // Find the channel-item that contains "Continue with Google"
+                    const items = [...document.querySelectorAll('[data-e2e="channel-item"]')];
+                    const googleBtn = items.find(item => 
+                        item.innerText.includes('Continue with Google') || 
+                        item.textContent.includes('Continue with Google')
+                    );
+                    if (!googleBtn) return 'not_found';
+                    googleBtn.scrollIntoView({block: 'center'});
+                    googleBtn.click();
                     return 'clicked';
                 }""")
                 log(f"[{username}] Continue with Google: JS result={result} attempt {attempt+1}")
