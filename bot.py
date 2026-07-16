@@ -2216,17 +2216,28 @@ def login_with_google(username, email=""):
                 log(f"[{username}] Log in: JS click attempt {attempt+1}")
             except Exception as e:
                 log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
-            time.sleep(2)
+            if not clicked:
+                try:
+                    page.keyboard.press("Tab")
+                    time.sleep(0.5)
+                    page.keyboard.press("Enter")
+                    log(f"[{username}] Continue with Google: keyboard Tab+Enter attempt {attempt+1}")
+                    clicked = True
+                except Exception as e:
+                    log(f"[{username}] keyboard err attempt {attempt+1}: {e}")
+            
+            time.sleep(3)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=3000)
+                target.wait_for_load_state("domcontentloaded", timeout=5000)
             except Exception:
                 pass
-            if "accounts.google.com" in page.url:
-                log(f"[{username}] Log in: redirected to Google on attempt {attempt+1}")
-                on_google = True
-                break
-            if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url:
-                log(f"[{username}] Log in: login UI detected on attempt {attempt+1}")
+            try:
+                current_url = page.url
+            except Exception:
+                current_url = "unknown"
+            log(f"[{username}] Page URL after click: {current_url}")
+            if "accounts.google.com" in current_url or target.locator('input[type="email"], input[name="identifier"]').count() > 0:
+                log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
                 break
             take_screenshot(username)
         time.sleep(3)
