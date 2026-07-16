@@ -2248,18 +2248,22 @@ def login_with_google(username, email=""):
                 log(f"[{username}] Continue with Google: exact selector click attempt {attempt+1}")
             except Exception:
                 try:
-                    items = page.locator('[data-e2e="channel-item"]').all()
-                    for item in items:
-                        try:
-                            txt = item.inner_text(timeout=1000).strip()
-                            if txt == "Continue with Google":
-                                item.click(force=True, timeout=3000)
-                                log(f"[{username}] Continue with Google: data-e2e click attempt {attempt+1}")
-                                break
-                        except Exception:
-                            continue
+                    page.get_by_role("link", name="Continue with Google").first.click(force=True, timeout=3000)
+                    log(f"[{username}] Continue with Google: link role click attempt {attempt+1}")
                 except Exception:
-                    pass
+                    try:
+                        items = page.locator('[data-e2e="channel-item"]').all()
+                        for item in items:
+                            try:
+                                txt = item.inner_text(timeout=1000).strip()
+                                if txt == "Continue with Google":
+                                    item.click(force=True, timeout=3000)
+                                    log(f"[{username}] Continue with Google: data-e2e click attempt {attempt+1}")
+                                    break
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
             time.sleep(2)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=3000)
