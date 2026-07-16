@@ -2250,6 +2250,16 @@ def login_with_google(username, email=""):
             for attempt in range(30):
                 clicked = False
                 
+                target.evaluate("""() => {
+                    document.querySelectorAll('[role="dialog"], .modal, .overlay, [class*="cookie"], [class*="consent"], [class*="age-gate"], [class*="login-modal"], [class*="modal"], [aria-modal="true"]').forEach(el => {
+                        el.style.display = 'none';
+                        el.style.visibility = 'hidden';
+                        el.style.opacity = '0';
+                        el.setAttribute('aria-hidden', 'true');
+                    });
+                }""")
+                time.sleep(1)
+                
                 try:
                     btn = target.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50')
                     if btn.count() > 0:
@@ -2283,10 +2293,14 @@ def login_with_google(username, email=""):
                         box = btn.bounding_box(timeout=2000)
                         log(f"[{username}] link role bbox: {box}")
                         if box:
-                            x = box['x'] + box['width'] / 2
-                            y = box['y'] + box['height'] / 2
-                            page.mouse.click(x, y)
-                            log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
+                            try:
+                                btn.click(force=True, timeout=3000)
+                                log(f"[{username}] Continue with Google: native link click attempt {attempt+1}")
+                            except Exception:
+                                x = box['x'] + box['width'] / 2
+                                y = box['y'] + box['height'] / 2
+                                page.mouse.click(x, y)
+                                log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
                         else:
                             btn.evaluate("""(el) => {
                                 el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
@@ -2382,8 +2396,6 @@ def login_with_google(username, email=""):
                     break
                 take_screenshot(username)
             time.sleep(4)
-            take_screenshot(username)
-            time.sleep(3)
             take_screenshot(username)
 
         update_account(username, current_task="Typing Gmail...")
