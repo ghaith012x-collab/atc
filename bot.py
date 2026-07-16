@@ -2255,13 +2255,20 @@ def login_with_google(username, email=""):
                     if btn.count() > 0:
                         btn.first.scroll_into_view_if_needed(timeout=2000)
                         btn.first.hover(timeout=2000)
-                        time.sleep(1)
-                        btn.first.evaluate("""(el) => {
-                            el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                            el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                            el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                        }""")
-                        log(f"[{username}] Continue with Google: exact selector JS click attempt {attempt+1}")
+                        time.sleep(2)
+                        box = btn.first.bounding_box(timeout=2000)
+                        if box:
+                            x = box['x'] + box['width'] / 2
+                            y = box['y'] + box['height'] / 2
+                            page.mouse.click(x, y)
+                            log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
+                        else:
+                            btn.first.evaluate("""(el) => {
+                                el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                                el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                                el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                            }""")
+                            log(f"[{username}] Continue with Google: JS events attempt {attempt+1}")
                         clicked = True
                 except Exception as e:
                     log(f"[{username}] exact selector err: {e}")
@@ -2271,13 +2278,20 @@ def login_with_google(username, email=""):
                         btn = target.get_by_role("link", name="Continue with Google").first
                         btn.scroll_into_view_if_needed(timeout=2000)
                         btn.hover(timeout=2000)
-                        time.sleep(1)
-                        btn.evaluate("""(el) => {
-                            el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                            el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                            el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                        }""")
-                        log(f"[{username}] Continue with Google: link role JS click attempt {attempt+1}")
+                        time.sleep(2)
+                        box = btn.bounding_box(timeout=2000)
+                        if box:
+                            x = box['x'] + box['width'] / 2
+                            y = box['y'] + box['height'] / 2
+                            page.mouse.click(x, y)
+                            log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
+                        else:
+                            btn.evaluate("""(el) => {
+                                el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                                el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                                el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                            }""")
+                            log(f"[{username}] Continue with Google: link JS events attempt {attempt+1}")
                         clicked = True
                     except Exception as e:
                         log(f"[{username}] link role err: {e}")
@@ -2291,13 +2305,20 @@ def login_with_google(username, email=""):
                                 if "Continue with Google" in txt:
                                     item.scroll_into_view_if_needed(timeout=2000)
                                     item.hover(timeout=2000)
-                                    time.sleep(1)
-                                    item.evaluate("""(el) => {
-                                        el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                                        el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                                        el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                                    }""")
-                                    log(f"[{username}] Continue with Google: channel-item JS click attempt {attempt+1}")
+                                    time.sleep(2)
+                                    box = item.bounding_box(timeout=2000)
+                                    if box:
+                                        x = box['x'] + box['width'] / 2
+                                        y = box['y'] + box['height'] / 2
+                                        page.mouse.click(x, y)
+                                        log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
+                                    else:
+                                        item.evaluate("""(el) => {
+                                            el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                                            el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                                            el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                        }""")
+                                        log(f"[{username}] Continue with Google: channel JS events attempt {attempt+1}")
                                     clicked = True
                                     break
                             except Exception:
@@ -2334,13 +2355,13 @@ def login_with_google(username, email=""):
                 
                 if not clicked:
                     try:
-                        page.keyboard.press("Tab")
-                        time.sleep(0.3)
+                        btn = target.get_by_role("link", name="Continue with Google").first
+                        btn.focus(timeout=2000)
                         page.keyboard.press("Enter")
-                        log(f"[{username}] Continue with Google: keyboard Tab+Enter attempt {attempt+1}")
+                        log(f"[{username}] Continue with Google: focus+Enter attempt {attempt+1}")
                         clicked = True
                     except Exception as e:
-                        log(f"[{username}] keyboard err attempt {attempt+1}: {e}")
+                        log(f"[{username}] focus+Enter err attempt {attempt+1}: {e}")
                 
                 time.sleep(4)
                 try:
