@@ -2183,14 +2183,14 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
-                btn = page.locator('#top-right-login-button, #top-right-action-bar-login-button, #header-login-button').first
+                btn = page.locator('button:has-text("Log in")').first
                 if btn.count() > 0:
-                    btn.first.scroll_into_view_if_needed(timeout=2000)
-                    page.evaluate("""(el) => el.click()""", btn.first)
-                    log(f"[{username}] Log in: JS click attempt {attempt+1}")
+                    btn.scroll_into_view_if_needed(timeout=2000)
+                    btn.click(force=True, timeout=3000)
+                    log(f"[{username}] Log in: click attempt {attempt+1}")
                 else:
                     page.get_by_role("button", name="Log in").click(timeout=3000, force=True)
-                    log(f"[{username}] Log in: text click attempt {attempt+1}")
+                    log(f"[{username}] Log in: fallback click attempt {attempt+1}")
             except Exception as e:
                 log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
             time.sleep(2)
@@ -2217,12 +2217,10 @@ def login_with_google(username, email=""):
         for attempt in range(20):
             try:
                 result = page.evaluate("""() => {
-                    const nodes = [...document.querySelectorAll('button, [role=\"button\"], a, div')];
-                    const btn = nodes.find(el => /continue\s+with\s+google/i.test((el.innerText || el.textContent || '').trim()) && el.getClientRects().length);
+                    const btn = document.querySelector('[data-e2e="channel-item"]');
                     if (!btn) return 'not_found';
-                    const target = btn.closest('button, [role=\"button\"], a') || btn;
-                    target.scrollIntoView({block: 'center'});
-                    target.click();
+                    btn.scrollIntoView({block: 'center'});
+                    btn.click();
                     return 'clicked';
                 }""")
                 log(f"[{username}] Continue with Google: JS result={result} attempt {attempt+1}")
@@ -2446,14 +2444,14 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
-                btn = page.locator('#top-right-login-button, #top-right-action-bar-login-button, #header-login-button').first
+                btn = page.locator('button:has-text("Log in")').first
                 if btn.count() > 0:
-                    btn.first.scroll_into_view_if_needed(timeout=2000)
-                    page.evaluate("""(el) => el.click()""", btn.first)
-                    log(f"[{username}] Log in: JS click attempt {attempt+1}")
+                    btn.scroll_into_view_if_needed(timeout=2000)
+                    btn.click(force=True, timeout=3000)
+                    log(f"[{username}] Log in: click attempt {attempt+1}")
                 else:
                     page.get_by_role("button", name="Log in").click(timeout=3000, force=True)
-                    log(f"[{username}] Log in: text click attempt {attempt+1}")
+                    log(f"[{username}] Log in: fallback click attempt {attempt+1}")
             except Exception as e:
                 log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
             time.sleep(2)
@@ -2480,12 +2478,10 @@ def login_with_google(username, email=""):
         for attempt in range(20):
             try:
                 result = page.evaluate("""() => {
-                    const nodes = [...document.querySelectorAll('button, [role=\"button\"], a, div')];
-                    const btn = nodes.find(el => /continue\s+with\s+google/i.test((el.innerText || el.textContent || '').trim()) && el.getClientRects().length);
+                    const btn = document.querySelector('[data-e2e="channel-item"]');
                     if (!btn) return 'not_found';
-                    const target = btn.closest('button, [role=\"button\"], a') || btn;
-                    target.scrollIntoView({block: 'center'});
-                    target.click();
+                    btn.scrollIntoView({block: 'center'});
+                    btn.click();
                     return 'clicked';
                 }""")
                 log(f"[{username}] Continue with Google: JS result={result} attempt {attempt+1}")
@@ -2528,14 +2524,14 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
-                btn = page.locator('#top-right-login-button, #top-right-action-bar-login-button, #header-login-button').first
+                btn = page.locator('button:has-text("Log in")').first
                 if btn.count() > 0:
-                    btn.first.scroll_into_view_if_needed(timeout=2000)
-                    page.evaluate("""(el) => el.click()""", btn.first)
-                    log(f"[{username}] Log in: JS click attempt {attempt+1}")
+                    btn.scroll_into_view_if_needed(timeout=2000)
+                    btn.click(force=True, timeout=3000)
+                    log(f"[{username}] Log in: click attempt {attempt+1}")
                 else:
                     page.get_by_role("button", name="Log in").click(timeout=3000, force=True)
-                    log(f"[{username}] Log in: text click attempt {attempt+1}")
+                    log(f"[{username}] Log in: fallback click attempt {attempt+1}")
             except Exception as e:
                 log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
             time.sleep(2)
