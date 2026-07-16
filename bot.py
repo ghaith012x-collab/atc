@@ -2257,6 +2257,7 @@ def login_with_google(username, email=""):
                         btn.first.hover(timeout=2000)
                         time.sleep(2)
                         box = btn.first.bounding_box(timeout=2000)
+                        log(f"[{username}] exact selector bbox: {box}")
                         if box:
                             x = box['x'] + box['width'] / 2
                             y = box['y'] + box['height'] / 2
@@ -2280,6 +2281,7 @@ def login_with_google(username, email=""):
                         btn.hover(timeout=2000)
                         time.sleep(2)
                         box = btn.bounding_box(timeout=2000)
+                        log(f"[{username}] link role bbox: {box}")
                         if box:
                             x = box['x'] + box['width'] / 2
                             y = box['y'] + box['height'] / 2
@@ -2299,6 +2301,7 @@ def login_with_google(username, email=""):
                 if not clicked:
                     try:
                         items = target.locator('[data-e2e="channel-item"]').all()
+                        log(f"[{username}] channel-item count: {len(items)}")
                         for item in items:
                             try:
                                 txt = item.inner_text(timeout=1000).strip()
@@ -2307,6 +2310,7 @@ def login_with_google(username, email=""):
                                     item.hover(timeout=2000)
                                     time.sleep(2)
                                     box = item.bounding_box(timeout=2000)
+                                    log(f"[{username}] channel-item bbox: {box}")
                                     if box:
                                         x = box['x'] + box['width'] / 2
                                         y = box['y'] + box['height'] / 2
