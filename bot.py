@@ -2234,19 +2234,35 @@ def login_with_google(username, email=""):
 
         if not on_google:
             update_account(username, current_task="Waiting for login modal...")
+            login_frame = None
             for _ in range(30):
-                if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url or "accounts.google.com" in page.url:
-                    break
+                try:
+                    frames = page.frames
+                    for frame in frames:
+                        try:
+                            if frame.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"], button:has-text("Continue with Google")').count() > 0:
+                                login_frame = frame
+                                log(f"[{username}] Found login modal in iframe: {frame.name}")
+                                break
+                        except Exception:
+                            continue
+                    if login_frame:
+                        break
+                    if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url or "accounts.google.com" in page.url:
+                        break
+                except Exception:
+                    pass
                 time.sleep(1)
             time.sleep(2)
             take_screenshot(username)
 
-        update_account(username, current_task="Clicking Continue with Google...")
-        for attempt in range(30):
+            update_account(username, current_task="Clicking Continue with Google...")
+            target = login_frame or page
+            for attempt in range(30):
             clicked = False
             
             try:
-                btn = page.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50')
+                btn = target.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50')
                 if btn.count() > 0:
                     btn.first.scroll_into_view_if_needed(timeout=2000)
                     btn.first.click(force=True, timeout=3000)
@@ -2257,7 +2273,7 @@ def login_with_google(username, email=""):
             
             if not clicked:
                 try:
-                    btn = page.get_by_role("link", name="Continue with Google").first
+                    btn = target.get_by_role("link", name="Continue with Google").first
                     btn.scroll_into_view_if_needed(timeout=2000)
                     btn.click(force=True, timeout=3000)
                     log(f"[{username}] Continue with Google: link role click attempt {attempt+1}")
@@ -2267,7 +2283,7 @@ def login_with_google(username, email=""):
             
             if not clicked:
                 try:
-                    items = page.locator('[data-e2e="channel-item"]').all()
+                    items = target.locator('[data-e2e="channel-item"]').all()
                     for item in items:
                         try:
                             txt = item.inner_text(timeout=1000).strip()
@@ -2284,7 +2300,7 @@ def login_with_google(username, email=""):
             
             if not clicked:
                 try:
-                    page.evaluate("""() => {
+                    target.evaluate("""() => {
                         const btn = document.querySelector('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50');
                         if (btn) {
                             btn.scrollIntoView({block: 'center'});
@@ -2307,14 +2323,16 @@ def login_with_google(username, email=""):
             
             time.sleep(2)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=3000)
+                target.wait_for_load_state("domcontentloaded", timeout=3000)
             except Exception:
                 pass
             log(f"[{username}] Page URL after click: {page.url}")
-            if "accounts.google.com" in page.url or page.locator('input[type="email"], input[name="identifier"]').count() > 0:
+            if "accounts.google.com" in page.url or target.locator('input[type="email"], input[name="identifier"]').count() > 0:
                 log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
                 break
             take_screenshot(username)
+        time.sleep(3)
+        take_screenshot(username)
         time.sleep(3)
         take_screenshot(username)
         time.sleep(3)
