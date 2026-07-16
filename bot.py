@@ -2183,7 +2183,7 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
-                btn = page.locator('#top-right-action-bar-login-button')
+                btn = page.locator('#top-right-login-button, #top-right-action-bar-login-button, #header-login-button').first
                 if btn.count() > 0:
                     btn.first.scroll_into_view_if_needed(timeout=2000)
                     page.evaluate("""(el) => el.click()""", btn.first)
@@ -2217,10 +2217,12 @@ def login_with_google(username, email=""):
         for attempt in range(20):
             try:
                 result = page.evaluate("""() => {
-                    const btn = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === 'Continue with Google');
+                    const nodes = [...document.querySelectorAll('button, [role=\"button\"], a, div')];
+                    const btn = nodes.find(el => /continue\s+with\s+google/i.test((el.innerText || el.textContent || '').trim()) && el.getClientRects().length);
                     if (!btn) return 'not_found';
-                    btn.scrollIntoView({block: 'center'});
-                    btn.click();
+                    const target = btn.closest('button, [role=\"button\"], a') || btn;
+                    target.scrollIntoView({block: 'center'});
+                    target.click();
                     return 'clicked';
                 }""")
                 log(f"[{username}] Continue with Google: JS result={result} attempt {attempt+1}")
@@ -2444,7 +2446,7 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
-                btn = page.locator('#top-right-action-bar-login-button')
+                btn = page.locator('#top-right-login-button, #top-right-action-bar-login-button, #header-login-button').first
                 if btn.count() > 0:
                     btn.first.scroll_into_view_if_needed(timeout=2000)
                     page.evaluate("""(el) => el.click()""", btn.first)
@@ -2478,10 +2480,12 @@ def login_with_google(username, email=""):
         for attempt in range(20):
             try:
                 result = page.evaluate("""() => {
-                    const btn = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === 'Continue with Google');
+                    const nodes = [...document.querySelectorAll('button, [role=\"button\"], a, div')];
+                    const btn = nodes.find(el => /continue\s+with\s+google/i.test((el.innerText || el.textContent || '').trim()) && el.getClientRects().length);
                     if (!btn) return 'not_found';
-                    btn.scrollIntoView({block: 'center'});
-                    btn.click();
+                    const target = btn.closest('button, [role=\"button\"], a') || btn;
+                    target.scrollIntoView({block: 'center'});
+                    target.click();
                     return 'clicked';
                 }""")
                 log(f"[{username}] Continue with Google: JS result={result} attempt {attempt+1}")
@@ -2504,7 +2508,9 @@ def login_with_google(username, email=""):
 
         update_account(username, current_task="Clicking Log in...")
         _must_click(page, [
+            '#top-right-login-button',
             '#top-right-action-bar-login-button',
+            '#header-login-button',
             'a[href*="/login"]',
             '[data-e2e="top-login-button"]',
             'button:has-text("Log in")',
@@ -2522,7 +2528,7 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Clicking Log in...")
         for attempt in range(12):
             try:
-                btn = page.locator('#top-right-action-bar-login-button')
+                btn = page.locator('#top-right-login-button, #top-right-action-bar-login-button, #header-login-button').first
                 if btn.count() > 0:
                     btn.first.scroll_into_view_if_needed(timeout=2000)
                     page.evaluate("""(el) => el.click()""", btn.first)
@@ -2554,8 +2560,8 @@ def login_with_google(username, email=""):
 
         update_account(username, current_task="Clicking Continue with Google...")
         _must_click(page, [
-            '#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50',
             '[data-e2e="google-login-button"]',
+            '[data-e2e="channel-item"]',
             'a[href*="google"]',
             'button:has-text("Continue with Google")',
             'button:has-text("Use Google")',
@@ -2567,10 +2573,12 @@ def login_with_google(username, email=""):
         for attempt in range(20):
             try:
                 result = page.evaluate("""() => {
-                    const btn = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === 'Continue with Google');
+                    const nodes = [...document.querySelectorAll('button, [role=\"button\"], a, div')];
+                    const btn = nodes.find(el => /continue\s+with\s+google/i.test((el.innerText || el.textContent || '').trim()) && el.getClientRects().length);
                     if (!btn) return 'not_found';
-                    btn.scrollIntoView({block: 'center'});
-                    btn.click();
+                    const target = btn.closest('button, [role=\"button\"], a') || btn;
+                    target.scrollIntoView({block: 'center'});
+                    target.click();
                     return 'clicked';
                 }""")
                 log(f"[{username}] Continue with Google: JS result={result} attempt {attempt+1}")
