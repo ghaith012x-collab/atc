@@ -618,7 +618,6 @@ def take_screenshot(username):
     try:
         page = session.get("page")
         if page is None or page.is_closed():
-            # Try to recover another open page from the same context
             try:
                 ctx_pages = session["context"].pages
                 if ctx_pages:
@@ -630,6 +629,10 @@ def take_screenshot(username):
             except Exception:
                 screenshots[username] = create_placeholder(username, "Browser closed")
                 return
+        img = page.screenshot(type="png")
+        screenshots[username] = img
+    except Exception:
+        pass
         screenshot_bytes = page.screenshot(timeout=8000)
         img = Image.open(io.BytesIO(screenshot_bytes))
         screenshots[username] = img
@@ -2263,9 +2266,6 @@ def login_with_google(username, email=""):
                 try:
                     btn = target.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50')
                     if btn.count() > 0:
-                        btn.first.scroll_into_view_if_needed(timeout=2000)
-                        btn.first.hover(timeout=2000)
-                        time.sleep(2)
                         box = btn.first.bounding_box(timeout=2000)
                         log(f"[{username}] exact selector bbox: {box}")
                         if box:
@@ -2273,42 +2273,21 @@ def login_with_google(username, email=""):
                             y = box['y'] + box['height'] / 2
                             page.mouse.click(x, y)
                             log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
-                        else:
-                            btn.first.evaluate("""(el) => {
-                                el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                                el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                                el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                            }""")
-                            log(f"[{username}] Continue with Google: JS events attempt {attempt+1}")
-                        clicked = True
+                            clicked = True
                 except Exception as e:
                     log(f"[{username}] exact selector err: {e}")
                 
                 if not clicked:
                     try:
                         btn = target.get_by_role("link", name="Continue with Google").first
-                        btn.scroll_into_view_if_needed(timeout=2000)
-                        btn.hover(timeout=2000)
-                        time.sleep(2)
                         box = btn.bounding_box(timeout=2000)
                         log(f"[{username}] link role bbox: {box}")
                         if box:
-                            try:
-                                btn.click(force=True, timeout=3000)
-                                log(f"[{username}] Continue with Google: native link click attempt {attempt+1}")
-                            except Exception:
-                                x = box['x'] + box['width'] / 2
-                                y = box['y'] + box['height'] / 2
-                                page.mouse.click(x, y)
-                                log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
-                        else:
-                            btn.evaluate("""(el) => {
-                                el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                                el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                                el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                            }""")
-                            log(f"[{username}] Continue with Google: link JS events attempt {attempt+1}")
-                        clicked = True
+                            x = box['x'] + box['width'] / 2
+                            y = box['y'] + box['height'] / 2
+                            page.mouse.click(x, y)
+                            log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
+                            clicked = True
                     except Exception as e:
                         log(f"[{username}] link role err: {e}")
                 
@@ -2320,9 +2299,6 @@ def login_with_google(username, email=""):
                             try:
                                 txt = item.inner_text(timeout=1000).strip()
                                 if "Continue with Google" in txt:
-                                    item.scroll_into_view_if_needed(timeout=2000)
-                                    item.hover(timeout=2000)
-                                    time.sleep(2)
                                     box = item.bounding_box(timeout=2000)
                                     log(f"[{username}] channel-item bbox: {box}")
                                     if box:
@@ -2330,15 +2306,8 @@ def login_with_google(username, email=""):
                                         y = box['y'] + box['height'] / 2
                                         page.mouse.click(x, y)
                                         log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
-                                    else:
-                                        item.evaluate("""(el) => {
-                                            el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                                            el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                                            el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                                        }""")
-                                        log(f"[{username}] Continue with Google: channel JS events attempt {attempt+1}")
-                                    clicked = True
-                                    break
+                                        clicked = True
+                                        break
                             except Exception:
                                 continue
                     except Exception as e:
@@ -2391,7 +2360,9 @@ def login_with_google(username, email=""):
                 except Exception:
                     current_url = "unknown"
                 log(f"[{username}] Page URL after click: {current_url}")
-                if "accounts.google.com" in current_url or target.locator('input[type="email"], input[name="identifier"]').count() > 0:
+                if ("accounts.google.com" in current_url or 
+                    target.locator('input[type="email"], input[name="identifier"]').count() > 0 or
+                    target.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"]').count() > 0):
                     log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
                     break
                 take_screenshot(username)
