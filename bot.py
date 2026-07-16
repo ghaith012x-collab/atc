@@ -2180,15 +2180,37 @@ def login_with_google(username, email=""):
         time.sleep(3)
         take_screenshot(username)
 
+        update_account(username, current_task="Dismissing popups...")
+        for _ in range(5):
+            try:
+                page.keyboard.press("Escape")
+                page.evaluate("""() => {
+                    document.querySelectorAll('[role="dialog"], .modal, .overlay, [class*="cookie"], [class*="consent"], [class*="age-gate"]').forEach(el => {
+                        el.remove();
+                    });
+                }""")
+            except Exception:
+                pass
+            time.sleep(1)
+
         update_account(username, current_task="Clicking Log in...")
-        for attempt in range(20):
+        for attempt in range(30):
             try:
                 page.evaluate("""() => {
                     const btn = document.getElementById('top-right-action-bar-login-button');
                     if (btn) {
                         btn.scrollIntoView({block: 'center'});
                         btn.click();
+                        return 'clicked_id';
                     }
+                    const buttons = [...document.querySelectorAll('button, a, [role="button"]')];
+                    const loginBtn = buttons.find(el => el.textContent.trim().toLowerCase() === 'log in');
+                    if (loginBtn) {
+                        loginBtn.scrollIntoView({block: 'center'});
+                        loginBtn.click();
+                        return 'clicked_text';
+                    }
+                    return 'not_found';
                 }""")
                 log(f"[{username}] Log in: JS click attempt {attempt+1}")
             except Exception as e:
@@ -2198,15 +2220,15 @@ def login_with_google(username, email=""):
                 page.wait_for_load_state("domcontentloaded", timeout=3000)
             except Exception:
                 pass
-            if page.locator('#loginContainer').count() > 0 or "/login" in page.url:
-                log(f"[{username}] Log in: login modal detected on attempt {attempt+1}")
+            if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url:
+                log(f"[{username}] Log in: login UI detected on attempt {attempt+1}")
                 break
             take_screenshot(username)
         time.sleep(3)
         take_screenshot(username)
 
         update_account(username, current_task="Waiting for login modal...")
-        for _ in range(20):
+        for _ in range(30):
             if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url:
                 break
             time.sleep(1)
@@ -2214,13 +2236,14 @@ def login_with_google(username, email=""):
         take_screenshot(username)
 
         update_account(username, current_task="Clicking Continue with Google...")
-        for attempt in range(20):
+        for attempt in range(30):
             try:
                 page.evaluate("""() => {
                     const btn = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === 'Continue with Google');
-                    if (!btn) return;
+                    if (!btn) return 'not_found';
                     btn.scrollIntoView({block: 'center'});
                     btn.click();
+                    return 'clicked';
                 }""")
                 log(f"[{username}] Continue with Google: JS click attempt {attempt+1}")
                 
@@ -2249,6 +2272,8 @@ def login_with_google(username, email=""):
             log(f"[{username}] fill email err: {e}")
         time.sleep(2)
         _must_click(page, [
+            'button:has-text("Next")',
+            'button:has-text("Continue")',
             'input[type="submit"]',
             "next", "continue"
         ], task=username)
@@ -2258,6 +2283,8 @@ def login_with_google(username, email=""):
         update_account(username, current_task="Navigating recovery flow...")
         for i in range(15):
             forgot_ok = _must_click(page, [
+                'button:has-text("Forgot password")',
+                'a:has-text("Forgot password")',
                 '[data-e2e="forgot-password-button"]',
                 "forgot password", "forgot your password", "need help", "trouble logging in", "forgot"
             ], task=username)
@@ -2268,6 +2295,8 @@ def login_with_google(username, email=""):
                 take_screenshot(username)
 
             another_ok = _must_click(page, [
+                'button:has-text("Try another way")',
+                'a:has-text("Try another way")',
                 '[data-e2e="try-another-way-button"]',
                 "try another way", "try another method", "another way", "more options", "use another account"
             ], task=username)
