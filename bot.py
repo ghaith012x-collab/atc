@@ -2256,85 +2256,86 @@ def login_with_google(username, email=""):
             time.sleep(2)
             take_screenshot(username)
 
-            update_account(username, current_task="Clicking Continue with Google...")
-            target = login_frame or page
-            for attempt in range(30):
-                clicked = False
+        update_account(username, current_task="Clicking Continue with Google...")
+        for attempt in range(30):
+            clicked = False
             
+            try:
+                btn = target.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50')
+                if btn.count() > 0:
+                    btn.first.scroll_into_view_if_needed(timeout=2000)
+                    btn.first.hover(timeout=2000)
+                    time.sleep(0.5)
+                    btn.first.click(force=True, timeout=3000)
+                    log(f"[{username}] Continue with Google: exact selector click attempt {attempt+1}")
+                    clicked = True
+            except Exception as e:
+                log(f"[{username}] exact selector err: {e}")
+            
+            if not clicked:
                 try:
-                    btn = target.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50')
-                    if btn.count() > 0:
-                        btn.first.scroll_into_view_if_needed(timeout=2000)
-                        btn.first.click(force=True, timeout=3000)
-                        log(f"[{username}] Continue with Google: exact selector click attempt {attempt+1}")
-                        clicked = True
+                    btn = target.get_by_role("link", name="Continue with Google").first
+                    btn.scroll_into_view_if_needed(timeout=2000)
+                    btn.hover(timeout=2000)
+                    time.sleep(0.5)
+                    btn.click(force=True, timeout=3000)
+                    log(f"[{username}] Continue with Google: link role click attempt {attempt+1}")
+                    clicked = True
                 except Exception as e:
-                    log(f"[{username}] exact selector err: {e}")
+                    log(f"[{username}] link role err: {e}")
             
-                if not clicked:
-                    try:
-                        btn = target.get_by_role("link", name="Continue with Google").first
-                        btn.scroll_into_view_if_needed(timeout=2000)
-                        btn.click(force=True, timeout=3000)
-                        log(f"[{username}] Continue with Google: link role click attempt {attempt+1}")
-                        clicked = True
-                    except Exception as e:
-                        log(f"[{username}] link role err: {e}")
-            
-                if not clicked:
-                    try:
-                        items = target.locator('[data-e2e="channel-item"]').all()
-                        for item in items:
-                            try:
-                                txt = item.inner_text(timeout=1000).strip()
-                                if "Continue with Google" in txt:
-                                    item.scroll_into_view_if_needed(timeout=2000)
-                                    item.click(force=True, timeout=3000)
-                                    log(f"[{username}] Continue with Google: channel-item click attempt {attempt+1}")
-                                    clicked = True
-                                    break
-                            except Exception:
-                                continue
-                    except Exception as e:
-                        log(f"[{username}] channel-item err: {e}")
-            
-                if not clicked:
-                    try:
-                        target.evaluate("""() => {
-                            const btn = document.querySelector('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50');
-                            if (btn) {
-                                btn.scrollIntoView({block: 'center'});
-                                btn.click();
-                                return 'clicked';
-                            }
-                            const items = [...document.querySelectorAll('[data-e2e="channel-item"]')];
-                            const googleBtn = items.find(el => el.textContent.includes('Continue with Google'));
-                            if (googleBtn) {
-                                googleBtn.scrollIntoView({block: 'center'});
-                                googleBtn.click();
-                                return 'clicked_channel';
-                            }
-                            return 'not_found';
-                        }""")
-                        log(f"[{username}] Continue with Google: JS fallback click attempt {attempt+1}")
-                        clicked = True
-                    except Exception as e:
-                        log(f"[{username}] JS fallback err attempt {attempt+1}: {e}")
-            
-                time.sleep(2)
+            if not clicked:
                 try:
-                    target.wait_for_load_state("domcontentloaded", timeout=3000)
-                except Exception:
-                    pass
-                log(f"[{username}] Page URL after click: {page.url}")
-                if "accounts.google.com" in page.url or target.locator('input[type="email"], input[name="identifier"]').count() > 0:
-                    log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
-                    break
-                take_screenshot(username)
+                    items = target.locator('[data-e2e="channel-item"]').all()
+                    for item in items:
+                        try:
+                            txt = item.inner_text(timeout=1000).strip()
+                            if "Continue with Google" in txt:
+                                item.scroll_into_view_if_needed(timeout=2000)
+                                item.hover(timeout=2000)
+                                time.sleep(0.5)
+                                item.click(force=True, timeout=3000)
+                                log(f"[{username}] Continue with Google: channel-item click attempt {attempt+1}")
+                                clicked = True
+                                break
+                        except Exception:
+                            continue
+                except Exception as e:
+                    log(f"[{username}] channel-item err: {e}")
+            
+            if not clicked:
+                try:
+                    target.evaluate("""() => {
+                        const btn = document.querySelector('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50');
+                        if (btn) {
+                            btn.scrollIntoView({block: 'center'});
+                            btn.click();
+                            return 'clicked';
+                        }
+                        const items = [...document.querySelectorAll('[data-e2e="channel-item"]')];
+                        const googleBtn = items.find(el => el.textContent.includes('Continue with Google'));
+                        if (googleBtn) {
+                            googleBtn.scrollIntoView({block: 'center'});
+                            googleBtn.click();
+                            return 'clicked_channel';
+                        }
+                        return 'not_found';
+                    }""")
+                    log(f"[{username}] Continue with Google: JS fallback click attempt {attempt+1}")
+                    clicked = True
+                except Exception as e:
+                    log(f"[{username}] JS fallback err attempt {attempt+1}: {e}")
+            
             time.sleep(3)
+            try:
+                target.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+            log(f"[{username}] Page URL after click: {page.url}")
+            if "accounts.google.com" in page.url or target.locator('input[type="email"], input[name="identifier"]').count() > 0:
+                log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
+                break
             take_screenshot(username)
-        time.sleep(3)
-        take_screenshot(username)
         time.sleep(3)
         take_screenshot(username)
 
