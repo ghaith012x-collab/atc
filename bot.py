@@ -2199,17 +2199,17 @@ def login_with_google(username, email=""):
 
         update_account(username, current_task="Clicking Continue with Google...")
         _must_click(page, [
-            '#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-98y45w-5b89d02d--DivBoxContainer.e17788p50',
-            '[data-e2e="google-login-button"]',
+            '#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50',
+            '[data-e2e="channel-item"]',
             'a[href*="google"]',
             'button:has-text("Continue with Google")',
             'button:has-text("Use Google")',
             "continue with google", "use google", "google"
-        ], task=username, max_attempts=10, verify_opened=lambda p: (
+        ], task=username, max_attempts=15, verify_opened=lambda p: (
             "accounts.google.com" in p.url or
             p.locator('input[type="email"], input[name="identifier"]').count() > 0
         ))
-        time.sleep(3)
+        time.sleep(4)
         take_screenshot(username)
 
         update_account(username, current_task="Typing Gmail...")
@@ -2290,104 +2290,6 @@ def login_with_google(username, email=""):
                       current_task=f"Error: {str(e)[:60]}")
         return False
 
-    email_to_use = (email or account.get("gmail") or "").strip().lower()
-    if not email_to_use.endswith("@gmail.com"):
-        update_account(username, status="Need Gmail", current_task="Enter a @gmail.com address")
-        return False
-
-    update_account(username, status="Google login", current_task="Starting browser...")
-    try:
-        pw = sync_playwright().start()
-        browser = pw.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-        )
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            locale="en-US",
-        )
-        page = context.new_page()
-        browser_sessions[username] = {"pw": pw, "browser": browser, "context": context, "page": page}
-        log(f"[{username}] Google login: browser ready")
-
-        page.goto("https://www.tiktok.com", timeout=30000)
-        time.sleep(3)
-        take_screenshot(username)
-
-        update_account(username, current_task="Clicking Log in...")
-        _click_text(page, ["log in", "login", "sign in"])
-        time.sleep(4)
-        take_screenshot(username)
-
-        update_account(username, current_task="Clicking Continue with Google...")
-        _click_text(page, ["continue with google", "use google", "google"])
-        time.sleep(4)
-        take_screenshot(username)
-
-        update_account(username, current_task="Typing Gmail...")
-        try:
-            page.locator('input[type="email"], input[name="identifier"], input[type="text"]').first.fill(email_to_use, timeout=10000)
-            log(f"[{username}] Google login: filled email")
-        except Exception as e:
-            log(f"[{username}] fill email err: {e}")
-        time.sleep(2)
-        _click_text(page, ["next", "continue"])
-        time.sleep(4)
-        take_screenshot(username)
-
-        update_account(username, current_task="Navigating recovery flow...")
-        clicked_forgot = False
-        clicked_another = False
-        for i in range(10):
-            if not clicked_forgot:
-                if _click_text(page, ["forgot password", "forgot your password", "need help", "trouble logging in", "forgot"]):
-                    log(f"[{username}] Google login: clicked forgot ({i})")
-                    clicked_forgot = True
-                    time.sleep(3)
-            if clicked_forgot and not clicked_another:
-                if _click_text(page, ["try another way", "try another method", "another way", "more options", "use another account"]):
-                    log(f"[{username}] Google login: clicked try another way ({i})")
-                    clicked_another = True
-                    time.sleep(3)
-            take_screenshot(username)
-            if re.search(r"gmail|approve|verify.*device|enter.*code|1\s*[-–]\s*99", page.content(), re.I):
-                break
-
-        update_account(username, status="Google login", current_task="Waiting for you to approve on your phone...")
-
-        logged_in = False
-        for _ in range(300):
-            try:
-                if page.locator('[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]').count() > 0:
-                    logged_in = True
-                    break
-                if "/login" not in page.url and page.locator('[data-e2e="top-login-button"], a[href*="/login"]').count() == 0:
-                    logged_in = True
-                    break
-            except Exception:
-                pass
-            time.sleep(5)
-
-        if logged_in:
-            cookies = context.cookies()
-            update_account(username, session_data=json.dumps(cookies), connected=1,
-                          status="Connected", current_task="Ready")
-            log(f"[{username}] Google login SUCCESS")
-            return True
-        else:
-            update_account(username, status="Google login failed",
-                          current_task="Timed out waiting for approval")
-            return False
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        update_account(username, status="Google login error",
-                      current_task=f"Error: {str(e)[:60]}")
-        return False
 
 
 def delete_account_session(username):
