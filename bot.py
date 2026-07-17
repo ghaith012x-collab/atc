@@ -2199,7 +2199,13 @@ def _click_dialog_button_js(page, container, label):
             return null;
         };
         const b = findInner(root);
-        if (b && !b.disabled) { b.click(); return true; }
+        if (b && !b.disabled) {
+            const r = b.getBoundingClientRect();
+            const cx = r.x + r.width/2, cy = r.y + r.height/2;
+            b.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, isTrusted:true, detail:1}));
+            try { b.click(); } catch(e){}
+            return true;
+        }
         return false;
     }""", [container, label])
 
@@ -2232,215 +2238,131 @@ def _handle_youtube_auth_dialog(page, username=""):
       "needs_code" -> dialog still open but Next is disabled (waiting for user input)
     """
     try:
-        dialog = page.locator('ytcp-auth-confirmation-dialog').first
-        if dialog.count() == 0:
-            return False
-        if not dialog.is_visible():
+        # Detect the dialog by its primary action button #confirm-button (text
+        # 'Next'). We do NOT rely on a flaky is_visible()/tag check — the dialog IS
+        # present whenever this button exists in the DOM.
+        dlg_present = page.evaluate("""() => {
+            const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+            if (!b) return false;
+            const t = (b.textContent || '').trim().toLowerCase();
+            return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
+        }""")
+        if not dlg_present:
+            # also accept the literal upload-step dialog that reuses #confirm-button
             return False
         print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected")
 
-        # Inspect the dialog's primary Next button (enabled or disabled?).
-        info = page.evaluate("""() => {
-            const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-            if (!dlg) return {present:false};
-            const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
-                || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
-                    .find(el => (el.textContent||'').trim().toLowerCase() === 'next');
-            if (!b) return {present:true, hasNext:false};
-            const r = b.getBoundingClientRect();
-            return {present:true, hasNext:true, id:b.id||'',
-                    text:(b.textContent||'').trim().slice(0,30),
-                    disabled: !!b.disabled,
-                    cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
-        }""")
+        # Resolve the dialog's primary Next/Continue button. The real clickable
+        # target is the INNER <button> inside the <ytcp-button> shadow DOM. We click
+        # that inner <button> directly with Playwright (force=True bypasses the
+        # dialog backdrop hit-test). This is what actually fires Polymer's handler —
+        # clicking the wrapper (or page.mouse at its center) misses the inner
+        # control and lands on the backdrop, which drags a text selection across
+        # the whole page instead of advancing.
+        inner_btn = page.locator(
+            'ytcp-auth-confirmation-dialog #confirm-button button, '
+            '#confirm-button button'
+        ).first
+        clicked = False
+        disabled = False
+        if inner_btn.count() > 0:
+            if inner_btn.is_disabled():
+                disabled = True
+            else:
+                try:
+                    inner_btn.click(timeout=5000, force=True, no_wait_after=True)
+                    clicked = True
+                except Exception as e:
+                    print(f"[{username}] verify inner-button click failed: {str(e)[:60]}")
+        if not clicked:
+            # Fallback: trusted JS click on #confirm-button's inner <button>.
+            try:
+                res = page.evaluate("""() => {
+                    const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+                    if (!b) return {ok:false, reason:'no-confirm'};
+                    if (b.disabled) return {ok:false, disabled:true};
+                    const inner = b.shadowRoot && b.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
+                    const target = inner || b;
+                    const r = target.getBoundingClientRect();
+                    const cx = r.x + r.width/2, cy = r.y + r.height/2;
+                    target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, isTrusted:true, detail:1}));
+                    try { target.click(); } catch(e){}
+                    return {ok:true, tag:target.tagName, id:b.id||'', cx:Math.round(cx), cy:Math.round(cy)};
+                }""")
+                if res and res.get("disabled"):
+                    disabled = True
+                elif res and res.get("ok"):
+                    clicked = True
+                    print(f"[{username}] verify Next clicked (JS) <#{res.get('id')}> at ({res.get('cx')},{res.get('cy')})")
+            except Exception as e:
+                print(f"[{username}] verify JS fallback err: {e}")
+        _clear_text_selection(page)
 
-        if not info or not info.get("present"):
-            return False
-
-        if not info.get("hasNext"):
-            print(f"[{username}] ⚠ verify dialog has no Next button — may need a code")
-            update_account(username, current_task="Verify that it's you — enter code in live cam")
-            return "needs_code"
-
-        if info.get("disabled"):
-            # Button is disabled => waiting for the user to enter a code/phone.
-            # STOP here; do NOT click. Clear any stray selection.
-            _clear_text_selection(page)
-            print(f"[{username}] ⚠ verify Next <#{info['id']}> is DISABLED — waiting for code (user action needed)")
+        if disabled:
+            print(f"[{username}] ⚠ verify Next is DISABLED — waiting for code/method (user action needed)")
             update_account(username, current_task="Verify that it's you — enter the code in live cam")
             return "needs_code"
-
-        # Enabled Next -> click exactly once. The reliable approach:
-        #   1) Find the REAL inner clickable node (recurse shadow DOM; the
-        #      <ytcp-button> wrapper DOES NOT receive the click — its inner
-        #      <button>/<tp-yt-paper-button> does).
-        #   2) Dispatch a TRUSTED click event directly on that node via JS.
-        #      A trusted MouseEvent makes Polymer's handler fire for real
-        #      (element.click() is untrusted and is silently ignored by
-        #      YouTube's dialog, which is why it never advanced and instead
-        #      the stray mousedown on the backdrop selected the whole page).
-        pick = page.evaluate("""() => {
-            const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-            if (!dlg) return {found:false};
-            const findInner = (root, txt) => {
-                const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"], a')];
-                let hit = els.find(el => (el.textContent||'').trim().toLowerCase()===txt && !el.disabled);
-                if (hit) {
-                    const inner = hit.shadowRoot
-                        && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
-                    return inner || hit;
-                }
-                for (const el of els) { if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; } }
-                return null;
-            };
-            let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
-            if (!b) b = findInner(dlg, 'next');
-            if (!b) return {found:false};
-            const r = b.getBoundingClientRect();
-            const cx = Math.round(r.x + r.width/2), cy = Math.round(r.y + r.height/2);
-            // What is actually on top at the button's center? If it's NOT the
-            // button (or a descendant), an overlay is stealing the click.
-            const top = document.elementFromPoint(cx, cy);
-            const topInfo = top ? (top.tagName + (top.id?'#'+top.id:'') + (top.className&&typeof top.className==='string'?'.'+top.className.split(' ').join('.'):'')) : 'none';
-            const inside = !!(top && (top === b || b.contains(top) || (top.contains && top.contains(b))));
-            // Walk from the topmost element down to the button to pick the
-            // best clickable ancestor/descendant we can find.
-            return {found:true, id:b.id||'', tag:b.tagName,
-                    text:(b.textContent||'').trim().slice(0,30),
-                    cx, cy, vw:window.innerWidth, vh:window.innerHeight,
-                    top:topInfo, topIsButton:inside};
-        }""")
-        if not (pick and pick.get("found")):
-            print(f"[{username}] ⚠ verify Next not found to click")
+        if not clicked:
+            print(f"[{username}] ⚠ verify Next not clickable")
             update_account(username, current_task="Verify that it's you — enter code in live cam")
             return "needs_code"
-        print(f"[{username}] verify Next at ({pick['cx']},{pick['cy']}) tag={pick['tag']}#{pick['id']} topElement={pick['top']} topIsButton={pick['topIsButton']}")
-        _clear_text_selection(page)
-        res = {"ok": False}
-        try:
-            page.evaluate("""(args) => {
-                const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-                if (!dlg) return;
-                const findInner = (root, txt) => {
-                    const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"], a')];
-                    let hit = els.find(el => (el.textContent||'').trim().toLowerCase()===txt && !el.disabled);
-                    if (hit) {
-                        const inner = hit.shadowRoot
-                            && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
-                        return inner || hit;
-                    }
-                    for (const el of els) { if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; } }
-                    return null;
-                };
-                let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
-                if (!b) b = findInner(dlg, 'next');
-                if (!b) return;
-                // Dispatch a TRUSTED click so Polymer's handler actually fires.
-                const ev = new MouseEvent('click', {bubbles:true, cancelable:true, view:window,
-                    clientX:args.cx, clientY:args.cy, screenX:args.cx, screenY:args.cy,
-                    isTrusted:true, detail:1});
-                b.dispatchEvent(ev);
-                // Fallback to native .click() in case dispatch was swallowed.
-                try { b.click(); } catch (e) {}
-            }""", {"cx": pick["cx"], "cy": pick["cy"]})
-            res = {"ok": True, "id": pick["id"], "cx": pick["cx"], "cy": pick["cy"]}
-        except Exception as e:
-            print(f"[{username}] verify trusted-click err: {str(e)[:80]}")
-        if not res.get("ok"):
-            # Last-resort: try clicking the visible element actually on top at the
-            # button's center (an overlay may be the real target), then the inner
-            # button, with a trusted MouseEvent.
-            try:
-                page.evaluate("""(args) => {
-                    const cx = args.cx, cy = args.cy;
-                    const top = document.elementFromPoint(cx, cy);
-                    const fire = (el) => {
-                        if (!el || el.disabled) return false;
-                        el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, isTrusted:true}));
-                        try { el.click(); } catch(e){}
-                        return true;
-                    };
-                    const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-                    const findInner = (root, txt) => {
-                        const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"], a')];
-                        let hit = els.find(el => (el.textContent||'').trim().toLowerCase()===txt && !el.disabled);
-                        if (hit) { const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]'); return inner || hit; }
-                        for (const el of els) { if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; } }
-                        return null;
-                    };
-                    if (top && top !== dlg && fire(top)) return;
-                    let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
-                    if (!b) b = findInner(dlg, 'next');
-                    if (b) fire(b);
-                }""", {"cx": pick["cx"], "cy": pick["cy"]})
-                res = {"ok": True, "id": pick["id"], "cx": pick["cx"], "cy": pick["cy"]}
-            except Exception:
-                pass
-        if res and res.get("ok"):
-            print(f"[{username}] ✓ clicked verify-dialog Next <#{res['id']}> at ({res['cx']},{res['cy']})")
-            _log_event(username, "Verify dialog: clicked Next")
-            update_account(username, current_task="Verify that it's you — clicked Next, waiting...")
-            time.sleep(3)
+
+        print(f"[{username}] ✓ clicked verify-dialog Next")
+        _log_event(username, "Verify dialog: clicked Next")
+        update_account(username, current_task="Verify that it's you — clicked Next, waiting...")
+        time.sleep(3)
+        take_screenshot(username)
+
+        # Poll up to ~5 min. If a 6-digit code is supplied via the dashboard,
+        # type it into the dialog and submit; otherwise wait for the user.
+        deadline = time.time() + 300
+        while time.time() < deadline:
             take_screenshot(username)
-            # Poll up to ~5 min. If a 6-digit code is supplied via the dashboard,
-            # type it into the dialog and submit; otherwise wait for the user.
-            deadline = time.time() + 300
-            while time.time() < deadline:
-                take_screenshot(username)
+            # Dialog dismissed? Its #confirm-button (text 'Next') is gone.
+            still = page.evaluate("""() => {
+                const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+                if (!b) return false;
+                const t = (b.textContent || '').trim().toLowerCase();
+                return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
+            }""")
+            if not still:
+                print(f"[{username}] ✓ verify dialog dismissed")
+                _log_event(username, "Verify dialog: dismissed")
+                return "advanced"
+            code = get_verify_code(username)
+            if code:
                 try:
-                    d2 = page.locator('ytcp-auth-confirmation-dialog').first
-                    if d2.count() == 0 or not d2.is_visible():
-                        print(f"[{username}] ✓ verify dialog dismissed")
-                        _log_event(username, "Verify dialog: dismissed")
-                        return "advanced"
-                except Exception:
-                    pass
-                code = get_verify_code(username)
-                if code:
-                    try:
-                        filled = page.evaluate("""(c) => {
-                            const d = document.querySelector('ytcp-auth-confirmation-dialog');
-                            if (!d) return false;
-                            const inp = d.querySelector('input[type=\"text\"], input[type=\"tel\"], input[type=\"number\"], input:not([type]), textarea');
-                            if (!inp) return false;
-                            const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                            if (set) { set.call(inp, c); inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                            else { inp.value = c; inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                            return true;
-                        }""", code)
-                        if filled:
-                            _log_event(username, f"Verify dialog: typed code {code}")
-                            clear_verify_code(username)
-                            try:
-                                page.evaluate("""() => {
-                                    const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-                                    if (!dlg) return;
-                                    const findInner = (root, txt) => {
-                                        const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"], a')];
-                                        let hit = els.find(el => (el.textContent||'').trim().toLowerCase()===txt && !el.disabled);
-                                        if (hit) { const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]'); return inner || hit; }
-                                        for (const el of els) { if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; } }
-                                        return null;
-                                    };
-                                    let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
-                                    if (!b) b = findInner(dlg, 'next') || findInner(dlg, 'submit') || findInner(dlg, 'verify');
-                                    if (b) {
-                                        const r = b.getBoundingClientRect();
-                                        const cx = r.x + r.width/2, cy = r.y + r.height/2;
-                                        b.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, isTrusted:true}));
-                                        try { b.click(); } catch(e){}
-                                    }
-                                }""")
-                            except Exception:
-                                pass
-                    except Exception as ce:
-                        _log_event(username, f"Verify code entry err: {ce}")
-                update_account(username, current_task="Verify that it's you — waiting for your code/method in live cam")
-                time.sleep(5)
-            _log_event(username, "Verify dialog: timed out waiting for code — continuing")
-            return "advanced"
-        print(f"[{username}] ⚠ verify-dialog Next click failed: {res}")
-        return "needs_code"
+                    filled = page.evaluate("""(c) => {
+                        const d = document.querySelector('ytcp-auth-confirmation-dialog') || document;
+                        const inp = d.querySelector('input[type="text"], input[type="tel"], input[type="number"], input:not([type]), textarea');
+                        if (!inp) return false;
+                        const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        if (set) { set.call(inp, c); inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                        else { inp.value = c; inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                        return true;
+                    }""", code)
+                    if filled:
+                        _log_event(username, f"Verify dialog: typed code {code}")
+                        clear_verify_code(username)
+                        try:
+                            page.evaluate("""() => {
+                                const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+                                if (!b || b.disabled) return;
+                                const inner = b.shadowRoot && b.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
+                                const target = inner || b;
+                                const r = target.getBoundingClientRect();
+                                const cx = r.x + r.width/2, cy = r.y + r.height/2;
+                                target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, isTrusted:true}));
+                                try { target.click(); } catch(e){}
+                            }""")
+                        except Exception:
+                            pass
+                except Exception as ce:
+                    _log_event(username, f"Verify code entry err: {ce}")
+            update_account(username, current_task="Verify that it's you — waiting for your code/method in live cam")
+            time.sleep(5)
+        _log_event(username, "Verify dialog: timed out waiting for code — continuing")
+        return "advanced"
     except Exception as e:
         print(f"[{username}] verify dialog handling err: {e}")
         return False
@@ -2453,10 +2375,18 @@ def _click_youtube_next(page):
     real (enabled) Next was clicked.
     """
     # 0) If the verify dialog is up, let the dedicated handler deal with it
-    #    (it correctly skips disabled buttons). Return whether it advanced.
+    #    (it clicks the real inner Next button). The dialog blocks the upload
+    #    form's #next-button, so we must NOT fall through to clicking that.
     try:
-        if page.locator('ytcp-auth-confirmation-dialog').count() > 0:
+        if page.evaluate("""() => {
+            const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+            if (!b) return false;
+            const t = (b.textContent || '').trim().toLowerCase();
+            return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
+        }"""):
             res = _handle_youtube_auth_dialog(page, "")
+            # "advanced" => dialog gone, let the upload Next run on the next call.
+            # "needs_code"/False => dialog still up; do not click the upload Next.
             return res == "advanced"
     except Exception:
         pass
@@ -2509,10 +2439,13 @@ def _click_youtube_next(page):
             const next = findInner(document);
             if (next) {
                 const r = next.getBoundingClientRect();
-                next.click();
+                const cx = r.x + r.width/2, cy = r.y + r.height/2;
+                // Trusted MouseEvent so Polymer's handler actually fires.
+                next.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, isTrusted:true, detail:1}));
+                try { next.click(); } catch(e){}
                 return {clicked: true, tag: next.tagName.toLowerCase(), id: next.id || '',
                          text: (next.textContent||'').trim().slice(0,40),
-                         cx: Math.round(r.x + r.width/2), cy: Math.round(r.y + r.height/2)};
+                         cx: Math.round(cx), cy: Math.round(cy)};
             }
             return {clicked: false};
         }""")
@@ -2751,10 +2684,12 @@ def upload_video_to_youtube(username, file_path, caption, title):
                             && !el.disabled && el.offsetParent !== null);
                         if (p) {
                             const r = p.getBoundingClientRect();
-                            p.click();
+                            const cx = r.x + r.width/2, cy = r.y + r.height/2;
+                            p.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, isTrusted:true, detail:1}));
+                            try { p.click(); } catch(e){}
                             return {ok:true, tag:p.tagName.toLowerCase(), id:p.id||'',
                                     text:(p.textContent||'').trim().slice(0,40),
-                                    cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
+                                    cx:Math.round(cx), cy:Math.round(cy)};
                         }
                         return {ok:false};
                     }""")
