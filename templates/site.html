@@ -73,6 +73,38 @@
         .toast.show { opacity: 1; }
         .toast.success { border-left-color: #00c853; }
         .toast.error { border-left-color: #ff5252; }
+
+        /* Logs button + modal */
+        .btn-logs { background: #1a2740; color: #4fa3ff; border: 1px solid #4fa3ff; }
+        .logs-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,.7);
+            display: none; align-items: center; justify-content: center; z-index: 10000; padding: 20px;
+        }
+        .logs-overlay.show { display: flex; }
+        .logs-modal {
+            background: #141414; border: 1px solid #333; border-radius: 14px;
+            width: 100%; max-width: 820px; max-height: 85vh; display: flex; flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,.6);
+        }
+        .logs-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 16px 20px; border-bottom: 1px solid #2a2a2a;
+        }
+        .logs-title { font-size: 16px; font-weight: 600; }
+        .logs-title span { color: #4fa3ff; }
+        .logs-close {
+            background: transparent; border: none; color: #aaa; font-size: 20px; cursor: pointer; padding: 0 6px;
+        }
+        .logs-close:hover { color: #fff; }
+        .logs-body {
+            padding: 16px 20px; overflow: auto; flex: 1;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12.5px; line-height: 1.55; color: #c9d1d9; white-space: pre-wrap; word-break: break-word;
+        }
+        .logs-footer {
+            display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid #2a2a2a;
+        }
+        .logs-status { color: #888; font-size: 12px; margin-right: auto; }
     </style>
 </head>
 <body>
@@ -185,10 +217,27 @@
                 <button class="btn-delete-session" onclick="deleteSession('{{ acc.username }}')">Delete Session</button>
                 <button class="btn-logout" onclick="logoutAccount('{{ acc.username }}')">Log out</button>
             {% endif %}
+            <button class="btn-logs" onclick="openLogs('{{ acc.username }}')">&#128221; Logs</button>
             <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
         </div>
     </div>
     {% endfor %}
+
+    <!-- Logs Modal -->
+    <div class="logs-overlay" id="logs-overlay" onclick="if(event.target===this)closeLogs()">
+        <div class="logs-modal">
+            <div class="logs-header">
+                <div class="logs-title">Logs: <span id="logs-username"></span></div>
+                <button class="logs-close" onclick="closeLogs()">&#10005;</button>
+            </div>
+            <div class="logs-body" id="logs-body">Loading…</div>
+            <div class="logs-footer">
+                <span class="logs-status" id="logs-status"></span>
+                <button class="btn-logs" onclick="refreshLogs()">&#8635; Refresh</button>
+                <button class="btn-logs" onclick="copyLogs()">&#128203; Copy</button>
+            </div>
+        </div>
+    </div>
 
     {% if not accounts %}
     <div style="text-align:center;padding:60px 20px;color:#555;">
@@ -395,6 +444,63 @@
         setInterval(refreshCams, 1000);
         setInterval(updateInfo, 4000);
         setInterval(tickCountdowns, 1000);
+
+        // ==================== LOGS MODAL ====================
+        let logsUsername = null;
+        let logsTimer = null;
+
+        function openLogs(username) {
+            logsUsername = username;
+            document.getElementById('logs-username').textContent = username;
+            document.getElementById('logs-overlay').classList.add('show');
+            refreshLogs();
+            // Auto-refresh every 3s while open
+            if (logsTimer) clearInterval(logsTimer);
+            logsTimer = setInterval(refreshLogs, 3000);
+        }
+
+        function closeLogs() {
+            document.getElementById('logs-overlay').classList.remove('show');
+            logsUsername = null;
+            if (logsTimer) { clearInterval(logsTimer); logsTimer = null; }
+        }
+
+        function refreshLogs() {
+            if (!logsUsername) return;
+            fetch('/api/logs/' + encodeURIComponent(logsUsername))
+            .then(r => r.json())
+            .then(d => {
+                const body = document.getElementById('logs-body');
+                const logs = (d.logs || '').trim();
+                if (!logs) {
+                    body.textContent = '(no logs yet — start automation or trigger an action to see events here)';
+                } else {
+                    body.textContent = logs;
+                }
+                body.scrollTop = body.scrollHeight;  // stick to bottom
+                const now = new Date();
+                document.getElementById('logs-status').textContent = 'updated ' + now.toLocaleTimeString();
+            })
+            .catch(err => {
+                document.getElementById('logs-status').textContent = 'refresh failed';
+            });
+        }
+
+        function copyLogs() {
+            const body = document.getElementById('logs-body');
+            const txt = body.textContent || '';
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(txt).then(
+                    () => showToast('Logs copied to clipboard', 'success'),
+                    () => showToast('Copy failed', 'error')
+                );
+            }
+        }
+
+        // Close modal on Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && logsUsername) closeLogs();
+        });
     </script>
 </body>
 </html>

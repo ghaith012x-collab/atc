@@ -34,6 +34,7 @@ def init_db():
             ("next_post_ts", "ALTER TABLE accounts ADD COLUMN next_post_ts INTEGER"),
             ("platform", "ALTER TABLE accounts ADD COLUMN platform TEXT DEFAULT 'TikTok'"),
             ("logged_in_as", "ALTER TABLE accounts ADD COLUMN logged_in_as TEXT"),
+            ("logs", "ALTER TABLE accounts ADD COLUMN logs TEXT"),
         ]:
             if col not in cols:
                 conn.execute(sql)
@@ -80,3 +81,30 @@ def delete_account(username):
     conn.execute("DELETE FROM accounts WHERE username = ?", (username,))
     conn.commit()
     conn.close()
+
+
+def append_log(username, message):
+    """Append a timestamped line to the account's rolling log (max ~500 lines)."""
+    try:
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{ts}] {message}"
+        conn = get_db()
+        row = conn.execute("SELECT logs FROM accounts WHERE username = ?", (username,)).fetchone()
+        existing = (row["logs"] if row and row["logs"] else "")
+        lines = [l for l in existing.split("\n") if l.strip()]
+        lines.append(line)
+        if len(lines) > 500:
+            lines = lines[-500:]
+        conn.execute("UPDATE accounts SET logs = ? WHERE username = ?", ("\n".join(lines), username))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def get_logs(username):
+    conn = get_db()
+    row = conn.execute("SELECT logs FROM accounts WHERE username = ?", (username,)).fetchone()
+    conn.close()
+    return row["logs"] if row and row["logs"] else ""

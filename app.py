@@ -2,7 +2,7 @@ import os
 import json
 import threading
 from flask import Flask, render_template, jsonify, request, Response
-from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
+from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account, get_logs
 from bot import (
     connect_account, start_automation, stop_automation,
     delete_account_session, logout_account,
@@ -125,6 +125,12 @@ def api_delete_session(username):
 def api_logout(username):
     logout_account(username)
     return jsonify({"success": True})
+
+
+@app.route("/api/logs/<path:username>")
+def api_logs(username):
+    logs = get_logs(username)
+    return jsonify({"success": True, "username": username, "logs": logs or ""})
 
 
 @app.route("/live/<path:username>")
