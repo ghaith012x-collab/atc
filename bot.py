@@ -2179,13 +2179,32 @@ def _click_dialog_button_js(page, container, label):
     }""", [container, label])
 
 
+def _clear_text_selection(page):
+    """Clear any accidental text selection (so the live preview doesn't show the
+    whole page highlighted/blue after a click)."""
+    try:
+        page.evaluate("() => { window.getSelection() && window.getSelection().removeAllRanges(); }")
+    except Exception:
+        pass
+
+
 def _handle_youtube_auth_dialog(page, username=""):
     """Handle YouTube Studio's 'Verify that it's you' (ytcp-auth-confirmation-dialog).
 
     This dialog intercepts ALL clicks on the upload form, so it MUST be resolved
     first. Its primary action button is #confirm-button (text 'Next'); we click it
     via a DIRECT DOM click (JS) because Playwright's actionability check is blocked
-    by the dialog's own overlay backdrop. Returns True if the dialog was present.
+    by the dialog's own overlay backdrop.
+
+    IMPORTANT: we NEVER click a DISABLED button. When the dialog has advanced to a
+    step that waits for a verification code/phone (the Next button is disabled), we
+    STOP and let the user finish it in the live cam — we do NOT hammer it (which
+    previously dragged a text selection across the page).
+
+    Returns:
+      False  -> no dialog present
+      "advanced" -> we clicked the enabled Next and the dialog moved on
+      "needs_code" -> dialog still open but Next is disabled (waiting for user input)
     """
     try:
         dialog = page.locator('ytcp-auth-confirmation-dialog').first
@@ -2194,79 +2213,101 @@ def _handle_youtube_auth_dialog(page, username=""):
         if not dialog.is_visible():
             return False
         print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected")
-        update_account(username, current_task="Verify that it's you — clicking Next...")
 
-        # Click the dialog's primary Next (#confirm-button / #next-button) via JS,
-        # bypassing the overlay. Report exactly what we clicked.
-        res = page.evaluate("""() => {
+        # Inspect the dialog's primary Next button (enabled or disabled?).
+        info = page.evaluate("""() => {
             const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-            if (!dlg) return {ok:false, reason:'no dialog'};
-            const cands = [
-                dlg.querySelector('#confirm-button'),
-                dlg.querySelector('#next-button'),
-                dlg.querySelector('ytcp-button#confirm-button'),
-                dlg.querySelector('ytcp-button#next-button'),
-                [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
-                    .find(el => (el.textContent||'').trim().toLowerCase() === 'next' && !el.disabled),
-            ].filter(Boolean);
-            const b = cands[0];
-            if (!b) return {ok:false, reason:'no button'};
+            if (!dlg) return {present:false};
+            const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
+                || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
+                    .find(el => (el.textContent||'').trim().toLowerCase() === 'next');
+            if (!b) return {present:true, hasNext:false};
             const r = b.getBoundingClientRect();
-            b.click();
-            return {ok:true, id:b.id||'', text:(b.textContent||'').trim().slice(0,30),
+            return {present:true, hasNext:true, id:b.id||'',
+                    text:(b.textContent||'').trim().slice(0,30),
+                    disabled: !!b.disabled,
                     cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
         }""")
-        if res and res.get("ok"):
-            print(f"[{username}] ✓ clicked verify-dialog Next <#{res['id']}> text='{res['text']}' at ({res['cx']},{res['cy']})")
-        else:
-            print(f"[{username}] ⚠ verify-dialog Next click failed: {res}")
 
-        time.sleep(3)
-        take_screenshot(username)
-        for _ in range(10):
-            try:
-                if dialog.count() == 0 or not dialog.is_visible():
-                    print(f"[{username}] ✓ verify dialog dismissed")
-                    return True
-            except Exception:
-                pass
-            time.sleep(2)
-        print(f"[{username}] ⚠ verify dialog still present — may need a code in live cam")
-        return True
+        if not info or not info.get("present"):
+            return False
+
+        if not info.get("hasNext"):
+            print(f"[{username}] ⚠ verify dialog has no Next button — may need a code")
+            update_account(username, current_task="Verify that it's you — enter code in live cam")
+            return "needs_code"
+
+        if info.get("disabled"):
+            # Button is disabled => waiting for the user to enter a code/phone.
+            # STOP here; do NOT click. Clear any stray selection.
+            _clear_text_selection(page)
+            print(f"[{username}] ⚠ verify Next <#{info['id']}> is DISABLED — waiting for code (user action needed)")
+            update_account(username, current_task="Verify that it's you — enter the code in live cam")
+            return "needs_code"
+
+        # Enabled Next -> click exactly once (overlay-proof JS click).
+        res = page.evaluate("""() => {
+            const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+            const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
+                || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
+                    .find(el => (el.textContent||'').trim().toLowerCase()==='next' && !el.disabled);
+            if (!b || b.disabled) return {ok:false, reason:'no enabled button'};
+            const r = b.getBoundingClientRect();
+            b.click();
+            return {ok:true, id:b.id||'', cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
+        }""")
+        _clear_text_selection(page)
+        if res and res.get("ok"):
+            print(f"[{username}] ✓ clicked verify-dialog Next <#{res['id']}> at ({res['cx']},{res['cy']})")
+            update_account(username, current_task="Verify that it's you — clicked Next, waiting...")
+            time.sleep(3)
+            take_screenshot(username)
+            # Wait to see if the dialog advances / closes.
+            for _ in range(8):
+                try:
+                    d2 = page.locator('ytcp-auth-confirmation-dialog').first
+                    if d2.count() == 0 or not d2.is_visible():
+                        print(f"[{username}] ✓ verify dialog dismissed")
+                        return "advanced"
+                except Exception:
+                    pass
+                time.sleep(2)
+            # Still open: check if it's now waiting for a code (disabled).
+            info2 = page.evaluate("""() => {
+                const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+                if (!dlg) return {open:false};
+                const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
+                    || [...dlg.querySelectorAll('ytcp-button, button')].find(el => (el.textContent||'').trim().toLowerCase()==='next');
+                return {open:true, disabled: !!(b && b.disabled)};
+            }""")
+            if info2.get("open") and info2.get("disabled"):
+                print(f"[{username}] ⚠ verify advanced to code-entry step — waiting for user")
+                update_account(username, current_task="Verify that it's you — enter the code in live cam")
+                return "needs_code"
+            return "advanced"
+        print(f"[{username}] ⚠ verify-dialog Next click failed: {res}")
+        return "needs_code"
     except Exception as e:
         print(f"[{username}] verify dialog handling err: {e}")
         return False
 
 
 def _click_youtube_next(page):
-    """Click YouTube Studio's Next button.
-
-    CRITICAL: if the 'Verify that it's you' dialog (ytcp-auth-confirmation-dialog)
-    is open, its Next button (#confirm-button) is what actually advances the flow —
-    the main form's #next-button is blocked behind the overlay. So we PREFER the
-    dialog's Next when the dialog is present, and only fall back to the main form
-    Next otherwise. Uses force=True + JS fallback (overlay-proof).
+    """Click YouTube Studio's Next button — but NEVER a disabled one, and only
+    ONCE. If the 'Verify that it's you' dialog is open, we hand off to
+    _handle_youtube_auth_dialog (which skips disabled buttons). Returns True if a
+    real (enabled) Next was clicked.
     """
-    # 0) If the verify dialog is up, click its Next first.
+    # 0) If the verify dialog is up, let the dedicated handler deal with it
+    #    (it correctly skips disabled buttons). Return whether it advanced.
     try:
         if page.locator('ytcp-auth-confirmation-dialog').count() > 0:
-            res = page.evaluate("""() => {
-                const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-                if (!dlg) return {ok:false};
-                const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
-                    || [...dlg.querySelectorAll('ytcp-button, button')].find(el => (el.textContent||'').trim().toLowerCase()==='next' && !el.disabled);
-                if (!b) return {ok:false};
-                const r = b.getBoundingClientRect();
-                b.click();
-                return {ok:true, id:b.id||'', cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
-            }""")
-            if res and res.get("ok"):
-                print(f"[NEXT] ✓ clicked verify-dialog Next <#{res['id']}> at ({res['cx']},{res['cy']})")
-                return True
-    except Exception as e:
-        print(f"[NEXT] verify-dialog Next err: {e}")
+            res = _handle_youtube_auth_dialog(page, "")
+            return res == "advanced"
+    except Exception:
+        pass
 
-    # 1) Try Playwright locators with force=True (bypasses overlay/actionability).
+    # 1) Try Playwright locators with force=True. Skip disabled buttons.
     selectors = [
         'ytcp-button#next-button',
         '#next-button',
@@ -2279,6 +2320,9 @@ def _click_youtube_next(page):
         try:
             b = page.locator(sel).first
             if b.count() > 0 and b.is_visible():
+                if b.is_disabled():
+                    print(f"[NEXT] skipping DISABLED Next '{sel}'")
+                    continue
                 box = b.bounding_box()
                 cx = cy = None
                 if box:
@@ -2286,13 +2330,13 @@ def _click_youtube_next(page):
                     cy = round(box["y"] + box["height"] / 2)
                 print(f"[NEXT] clicking selector='{sel}' box={box} center=({cx},{cy})")
                 b.click(timeout=4000, force=True, no_wait_after=True)
+                _clear_text_selection(page)
                 print(f"[NEXT] ✓ clicked via Playwright selector '{sel}' at ({cx},{cy})")
                 return True
         except Exception as e:
             print(f"[NEXT] selector '{sel}' failed: {e}")
             continue
-    # 2) JS fallback: click any visible element whose text is exactly "Next".
-    #    Also report the center coordinates so we know exactly where.
+    # 2) JS fallback: click a visible, ENABLED element whose text is exactly "Next".
     try:
         res = page.evaluate("""() => {
             const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
@@ -2307,10 +2351,11 @@ def _click_youtube_next(page):
             }
             return {clicked: false};
         }""")
+        _clear_text_selection(page)
         if res and res.get("clicked"):
             print(f"[NEXT] ✓ clicked via JS <{res['tag']}#{res['id']}> text='{res['text']}' at ({res['cx']},{res['cy']})")
             return True
-        print(f"[NEXT] no clickable 'Next' element found")
+        print(f"[NEXT] no enabled 'Next' element found")
         return False
     except Exception as e:
         print(f"[NEXT] JS fallback err: {e}")
