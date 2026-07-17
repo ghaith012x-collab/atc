@@ -125,7 +125,6 @@
         </div>
         <div class="row" style="margin-top:10px;">
             <input type="email" id="new-email" placeholder="Gmail (for YouTube Google login)" style="flex:1;min-width:200px;">
-            <input type="password" id="new-password" placeholder="Password (optional)" style="flex:1;min-width:160px;">
             <select id="new-login-method">
                 <option value="cookie">Login: Cookie session</option>
                 <option value="google">Login: Google (email)</option>
@@ -194,7 +193,6 @@
             <h4 style="margin-top:16px;">Google Login (YouTube)</h4>
             <div class="row" style="flex-direction:column;align-items:stretch;gap:8px;">
                 <input type="email" id="gl-email-{{ acc.username }}" placeholder="Gmail" style="width:100%;">
-                <input type="password" id="gl-password-{{ acc.username }}" placeholder="Password (optional)" style="width:100%;">
             </div>
             <div class="btn-row">
                 <button class="btn-primary" onclick="googleLogin('{{ acc.username }}')">Google Login</button>
@@ -267,13 +265,12 @@
             const category = document.getElementById('new-category').value;
             const platform = document.getElementById('new-platform').value;
             const email = document.getElementById('new-email').value.trim();
-            const password = document.getElementById('new-password').value.trim();
             const login_method = document.getElementById('new-login-method').value;
             if (!username) { showToast('Enter a username', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, category, platform, email, password, login_method})
+                body: JSON.stringify({username, category, platform, email, login_method})
             })
             .then(r => r.json())
             .then(d => {
@@ -299,13 +296,12 @@
             }
 
             const email = (document.getElementById('new-email') || {}).value || '';
-            const password = (document.getElementById('new-password') || {}).value || '';
             const login_method = (document.getElementById('new-login-method') || {}).value || 'cookie';
             showToast('Saving and verifying session...', '');
             fetch('/api/session/' + username, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session: raw, email, password, login_method})
+                body: JSON.stringify({session: raw, email, login_method})
             })
             .then(r => r.json())
             .then(d => {
@@ -322,13 +318,12 @@
         // ==================== GOOGLE LOGIN (YouTube) ====================
         function googleLogin(username) {
             const email = document.getElementById('gl-email-' + username).value.trim();
-            const password = document.getElementById('gl-password-' + username).value.trim();
             if (!email) { showToast('Enter the Gmail address', 'error'); return; }
             showToast('Starting Google login...', '');
             fetch('/api/google_login/' + encodeURIComponent(username), {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({email, password})
+                body: JSON.stringify({email})
             })
             .then(r => r.json())
             .then(d => {

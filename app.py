@@ -56,10 +56,9 @@ def add_new_account():
     if add_account(username, category, platform):
         # Store optional Google login credentials if provided.
         email = (data.get("email") or "").strip()
-        password = (data.get("password") or "").strip()
         login_method = (data.get("login_method") or "cookie").strip()
-        if email or password:
-            update_account(username, email=email, password=password, login_method=login_method)
+        if email:
+            update_account(username, email=email, login_method=login_method)
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Account already exists"})
 
@@ -86,10 +85,9 @@ def save_session(username):
             
         # Save to DB
         email = (data.get("email") or "").strip()
-        password = (data.get("password") or "").strip()
         kwargs = dict(session_data=session_json, status="Session saved", current_task="Ready to connect")
-        if email or password:
-            kwargs.update(email=email, password=password, login_method=(data.get("login_method") or "cookie").strip())
+        if email:
+            kwargs.update(email=email, login_method=(data.get("login_method") or "cookie").strip())
         update_account(username, **kwargs)
         
         # Connect to verify
@@ -107,7 +105,6 @@ def save_session(username):
 def google_login(username):
     data = request.json or {}
     email = (data.get("email") or "").strip()
-    password = (data.get("password") or "").strip()
 
     account = get_account(username)
     if not account:
@@ -117,7 +114,7 @@ def google_login(username):
         account["platform"] = "YouTube"
 
     # Persist credentials and mark login method.
-    update_account(username, email=email, password=password, login_method="google",
+    update_account(username, email=email, login_method="google",
                    status="Google login", current_task="Starting Google login...")
     if not email:
         return jsonify({"success": False, "error": "Enter the Gmail address"})

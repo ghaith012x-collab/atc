@@ -1067,7 +1067,6 @@ def google_login_youtube(username):
         return False
 
     email = (account.get("email") or "").strip()
-    password = (account.get("password") or "").strip()
     if not email:
         update_account(username, status="Google login failed", current_task="No Gmail set — add it in the dashboard")
         print(f"[{username}] google_login_youtube: no email configured")
@@ -1083,8 +1082,22 @@ def google_login_youtube(username):
         page = session["page"]
         context = session["context"]
 
-        # 1) Load YouTube.
-        page.goto("https://www.youtube.com", timeout=45000, wait_until="domcontentloaded")
+        # 1) Load YouTube (with no-proxy fallback if a proxy times out).
+        try:
+            page.goto("https://www.youtube.com", timeout=45000, wait_until="domcontentloaded")
+        except Exception as ge:
+            if ("TIMED_OUT" in str(ge) or "net::" in str(ge)) and _get_proxy(account):
+                print(f"[{username}] google login goto timed out ({ge}); retrying WITHOUT proxy")
+                try:
+                    context.close(); session["browser"].close(); session["pw"].stop()
+                except Exception:
+                    pass
+                browser_sessions.pop(username, None)
+                session = _start_browser_session(username, account, no_proxy=True)
+                page = session["page"]; context = session["context"]
+                page.goto("https://www.youtube.com", timeout=45000, wait_until="domcontentloaded")
+            else:
+                raise
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
@@ -1167,10 +1180,6 @@ def google_login_youtube(username):
         if has_password:
             print(f"[{username}] Google login: password step detected")
             update_account(username, current_task="Password step — clicking 'Forgot password'")
-            # Type the password if we have one (some recovery flows need it),
-            # then click "Forgot password".
-            if password:
-                _glogin_fill(page, password_selectors, password, timeout=8000)
             forgot = _glogin_click(page, [
                 'button:has-text("Forgot password")',
                 'div:has-text("Forgot password")',
