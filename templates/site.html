@@ -1,17 +1,13 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>TikTok &amp; YouTube Auto Poster</title>
+    <title>TikTok Auto Poster</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         *, *::before, *::after { box-sizing: border-box; }
         body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f0f; color: #fff; margin: 0; padding: 20px; }
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
         h1 { background: linear-gradient(90deg, #ff0050, #00f2ea); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }
-        .platform-toggle { display: inline-flex; border: 1px solid #444; border-radius: 9999px; overflow: hidden; }
-        .platform-toggle button { border: none; border-radius: 0; background: #222; color: #aaa; padding: 8px 18px; }
-        .platform-toggle button.active { background: #ff0050; color: #fff; }
-        .platform-toggle button.yt.active { background: #ff0000; color: #fff; }
 
         .add-form { background: #1a1a1a; padding: 20px; border-radius: 16px; margin-bottom: 30px; border: 1px solid #333; }
         .add-form h3 { margin: 0 0 15px 0; }
@@ -76,10 +72,6 @@
         .logs-footer { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid #2a2a2a; }
         .logs-status { color: #888; font-size: 12px; margin-right: auto; }
         .btn-delete-session { background: #2a1a1a; color: #ff5252; border: 1px solid #ff5252; }
-        .btn-logout { background: #1a2740; color: #4fa3ff; border: 1px solid #4fa3ff; }
-        .password-row { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
-        .password-row input { flex: 1; background: #222; border: 1px solid #444; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; min-width: 160px; }
-        .password-row input:focus { outline: none; border-color: #00f2ea; }
         .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
 
         /* Session paste panel */
@@ -108,7 +100,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>TikTok &amp; YouTube Auto Poster</h1>
+        <h1>TikTok Auto Poster</h1>
         <div style="color:#888;">{{ accounts|length }} Account{{ 's' if accounts|length != 1 else '' }}</div>
     </div>
 
@@ -117,22 +109,28 @@
         <h3>Add New Account</h3>
         <div class="row">
             <input type="text" id="new-username" placeholder="@username" style="flex:1;min-width:160px;">
-            <div class="platform-toggle" id="new-platform-toggle">
-                <button type="button" class="active" id="btn-tiktok" onclick="selectPlatform('TikTok')">TikTok</button>
-                <button type="button" class="yt" id="btn-youtube" onclick="selectPlatform('YouTube')">YouTube</button>
-            </div>
             <select id="new-category">
-                <option value="Dance">Dance</option>
-                <option value="Horror">Horror</option>
-                <option value="Story Animation">Story Animation</option>
-                <option value="Funny Videos">Funny Videos</option>
-                <option value="Gin Stories">Gin Stories</option>
-                <option value="Scary facts">Scary facts</option>
-                <option value="Predator Catches">Predator Catches</option>
+                <option value="dance">Dance</option>
+                <option value="comedy">Comedy</option>
+                <option value="gaming">Gaming</option>
+                <option value="horror">Horror</option>
+                <option value="story">Story Animation</option>
+                <option value="memes">Memes</option>
+            </select>
+            <select id="new-platform">
+                <option value="TikTok">TikTok</option>
+                <option value="YouTube">YouTube</option>
             </select>
             <button class="btn-primary" onclick="addAccount()">Add Account</button>
         </div>
-        <div class="hint" style="font-size:11px;color:#666;margin-top:8px;">Tip: choose the platform first — the category list updates. YouTube always searches TikTok for clips, then posts them as Shorts.</div>
+        <div class="row" style="margin-top:10px;">
+            <input type="email" id="new-email" placeholder="Gmail (for YouTube Google login)" style="flex:1;min-width:200px;">
+            <input type="password" id="new-password" placeholder="Password (optional)" style="flex:1;min-width:160px;">
+            <select id="new-login-method">
+                <option value="cookie">Login: Cookie session</option>
+                <option value="google">Login: Google (email)</option>
+            </select>
+        </div>
     </div>
 
     <!-- Account Cards -->
@@ -140,7 +138,6 @@
     <div class="account-card" id="card-{{ acc.username }}">
         <div class="card-header">
             <div class="card-username">{{ acc.username }}</div>
-            <span class="status-badge {{ 'status-connected' if acc.platform == 'YouTube' else 'status-pending' }}" style="{{ 'border-color:#ff0000;color:#ff5252;' if acc.platform == 'YouTube' else 'border-color:#00f2ea;color:#00f2ea;' }}">{{ acc.platform }}</span>
             {% if acc.connected %}
                 <span class="status-badge status-connected">Connected</span>
             {% elif acc.status in ['Session saved', 'Connecting', 'Verifying session...'] %}
@@ -163,10 +160,6 @@
                 <div class="info-value">{{ acc.category }}</div>
             </div>
             <div class="info-item">
-                <div class="info-label">LOGGED IN AS</div>
-                <div class="info-value" id="loginas-{{ acc.username }}" style="color:#00f2ea;">{{ acc.logged_in_as or '—' }}</div>
-            </div>
-            <div class="info-item">
                 <div class="info-label">STATUS</div>
                 <div class="info-value" id="status-{{ acc.username }}">{{ acc.status }}</div>
             </div>
@@ -179,32 +172,39 @@
                 <div class="info-value">{{ acc.last_post or '—' }}</div>
             </div>
             <div class="info-item">
-                <div class="info-label">NEXT POST IN</div>
-                <div class="info-value" id="countdown-{{ acc.username }}" style="color:#00f2ea;font-variant-numeric:tabular-nums;">—</div>
+                <div class="info-label">NEXT POST</div>
+                <div class="info-value" id="next-{{ acc.username }}">{{ acc.next_post or '—' }}</div>
+                <div style="font-size:11px;color:#888;margin-top:1px;" id="countdown-{{ acc.username }}">—</div>
             </div>
         </div>
 
         <!-- Session Panel (disconnected) -->
         {% if not acc.connected %}
         <div class="session-panel" id="session-panel-{{ acc.username }}">
-            <h4>Paste {{ acc.platform }} Session Cookies</h4>
+            <h4>Paste {{ 'YouTube' if acc.platform == 'YouTube' else 'TikTok' }} Session (optional)</h4>
             <textarea
                 id="session-input-{{ acc.username }}"
-                placeholder='[{"name":"sessionid","value":"...","domain":".{{ acc.platform.lower() }}.com"},...]'
+                placeholder='[{"name":"sessionid","value":"...","domain":".{{ "youtube.com" if acc.platform == "YouTube" else "tiktok.com" }}"},...]'
             ></textarea>
-            <div class="hint">
-                Export cookies from your browser using an extension like "EditThisCookie" or "Cookie-Editor"
-                while logged in to <b>{{ acc.platform }}</b>, then paste the JSON here. We login with these
-                session cookies (no Google login).
-            </div>
+            <div class="hint">Export cookies from your browser (EditThisCookie / Cookie-Editor) and paste the JSON here. For YouTube you can instead use Google login below.</div>
             <div class="btn-row">
                 <button class="btn-primary" onclick="saveSession('{{ acc.username }}')">Save Session</button>
             </div>
+
+            <h4 style="margin-top:16px;">Google Login (YouTube)</h4>
+            <div class="row" style="flex-direction:column;align-items:stretch;gap:8px;">
+                <input type="email" id="gl-email-{{ acc.username }}" placeholder="Gmail" style="width:100%;">
+                <input type="password" id="gl-password-{{ acc.username }}" placeholder="Password (optional)" style="width:100%;">
+            </div>
+            <div class="btn-row">
+                <button class="btn-primary" onclick="googleLogin('{{ acc.username }}')">Google Login</button>
+            </div>
+            <div class="hint">Loads YouTube, clicks Sign in, types your Gmail, clicks Log in, then "Forgot password" → "Try another way". Finish recovery in the live cam.</div>
         </div>
         {% else %}
         <!-- Connected panel -->
         <div class="session-verified">
-            {{ acc.platform }} session verified &mdash; account is connected and ready.
+            Session verified &mdash; account is connected and ready.
         </div>
         {% endif %}
 
@@ -214,7 +214,6 @@
                 <button class="btn-start" onclick="startAutomation('{{ acc.username }}')">&#9654; Start Automation</button>
                 <button class="btn-stop" onclick="stopAutomation('{{ acc.username }}')">&#9632; Stop</button>
                 <button class="btn-delete-session" onclick="deleteSession('{{ acc.username }}')">Delete Session</button>
-                <button class="btn-logout" onclick="logoutAccount('{{ acc.username }}')">Log out</button>
             {% endif %}
             <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
             <button class="btn-logs" onclick="openLogs('{{ acc.username }}')">&#128221; Logs</button>
@@ -253,7 +252,7 @@
     <!-- Toast notification -->
     <div class="toast" id="toast"></div>
 
-        <script>
+    <script>
         // ==================== TOAST ====================
         function showToast(msg, type) {
             const t = document.getElementById('toast');
@@ -262,36 +261,19 @@
             setTimeout(() => { t.className = 'toast'; }, 3000);
         }
 
-        // ==================== PLATFORM + CATEGORY ====================
-        let selectedPlatform = 'TikTok';
-        const CATEGORIES = {
-            'TikTok': ['Dance', 'Horror', 'Story Animation', 'Funny Videos', 'Gin Stories', 'Scary facts', 'Predator Catches'],
-            'YouTube': ['Viral Clips', 'Funny Clips', 'Scary Story Animation', 'Fruit Story Animation', 'Horror Animations', 'Edits']
-        };
-
-        function selectPlatform(platform) {
-            selectedPlatform = platform;
-            document.getElementById('btn-tiktok').classList.toggle('active', platform === 'TikTok');
-            document.getElementById('btn-youtube').classList.toggle('active', platform === 'YouTube');
-            const sel = document.getElementById('new-category');
-            sel.innerHTML = '';
-            CATEGORIES[platform].forEach(cat => {
-                const opt = document.createElement('option');
-                opt.value = cat; opt.textContent = cat;
-                sel.appendChild(opt);
-            });
-        }
-
         // ==================== ADD ACCOUNT ====================
         function addAccount() {
             const username = document.getElementById('new-username').value.trim();
             const category = document.getElementById('new-category').value;
-            const platform = selectedPlatform;
+            const platform = document.getElementById('new-platform').value;
+            const email = document.getElementById('new-email').value.trim();
+            const password = document.getElementById('new-password').value.trim();
+            const login_method = document.getElementById('new-login-method').value;
             if (!username) { showToast('Enter a username', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, category, platform})
+                body: JSON.stringify({username, category, platform, email, password, login_method})
             })
             .then(r => r.json())
             .then(d => {
@@ -316,11 +298,14 @@
                 return;
             }
 
+            const email = (document.getElementById('new-email') || {}).value || '';
+            const password = (document.getElementById('new-password') || {}).value || '';
+            const login_method = (document.getElementById('new-login-method') || {}).value || 'cookie';
             showToast('Saving and verifying session...', '');
             fetch('/api/session/' + username, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session: raw})
+                body: JSON.stringify({session: raw, email, password, login_method})
             })
             .then(r => r.json())
             .then(d => {
@@ -331,6 +316,24 @@
                 } else {
                     showToast(d.error || 'Failed to save session', 'error');
                 }
+            });
+        }
+
+        // ==================== GOOGLE LOGIN (YouTube) ====================
+        function googleLogin(username) {
+            const email = document.getElementById('gl-email-' + username).value.trim();
+            const password = document.getElementById('gl-password-' + username).value.trim();
+            if (!email) { showToast('Enter the Gmail address', 'error'); return; }
+            showToast('Starting Google login...', '');
+            fetch('/api/google_login/' + encodeURIComponent(username), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({email, password})
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { showToast('Google login running — watch the live cam', 'success'); setTimeout(() => location.reload(), 1200); }
+                else { showToast(d.error || 'Failed to start Google login', 'error'); }
             });
         }
 
@@ -437,17 +440,49 @@
             .then(() => location.reload());
         }
 
-        function logoutAccount(username) {
-            if (!confirm('Log out ' + username + '? This ends the ' + (window.__platform || '') + ' session.')) return;
-            fetch('/api/logout/' + username, {method: 'POST'})
-            .then(() => { showToast('Logged out', 'success'); setTimeout(() => location.reload(), 800); });
-        }
-
         // ==================== LIVE REFRESH ====================
         function refreshCams() {
             document.querySelectorAll('[id^="cam-"]').forEach(img => {
                 const username = img.id.replace('cam-', '');
                 img.src = '/live/' + username + '?t=' + Date.now();
+            });
+        }
+
+        // Live countdown targets: username -> target Date
+        const countdownTargets = {};
+
+        function parseNextPostTime(nextStr) {
+            if (!nextStr || nextStr === '—') return null;
+            const match = nextStr.match(/(\d{1,2}):(\d{2})/);
+            if (!match) return null;
+            const h = parseInt(match[1], 10);
+            const m = parseInt(match[2], 10);
+            const now = new Date();
+            let target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+            if (target <= now) {
+                // next day
+                target.setDate(target.getDate() + 1);
+            }
+            return target;
+        }
+
+        function updateCountdowns() {
+            Object.keys(countdownTargets).forEach(username => {
+                const target = countdownTargets[username];
+                const cdEl = document.getElementById('countdown-' + username);
+                if (!cdEl || !target) return;
+
+                const now = new Date();
+                let diff = Math.max(0, Math.floor((target - now) / 1000));
+
+                if (diff <= 0) {
+                    cdEl.textContent = 'posting soon';
+                    return;
+                }
+
+                const mins = Math.floor(diff / 60);
+                const secs = diff % 60;
+                cdEl.textContent = `in ${mins}m ${secs}s`;
             });
         }
 
@@ -460,45 +495,30 @@
                     if (taskEl) taskEl.textContent = acc.current_task || 'Idle';
                     const statusEl = document.getElementById('status-' + acc.username);
                     if (statusEl) statusEl.textContent = acc.status || '';
-                    const loginEl = document.getElementById('loginas-' + acc.username);
-                    if (loginEl) loginEl.textContent = (acc.logged_in_as || '—');
+                    
                     const nextEl = document.getElementById('next-' + acc.username);
                     if (nextEl) nextEl.textContent = acc.next_post || '—';
 
-                    // Cache the absolute next-post timestamp for the live countdown
-                    nextTs[acc.username] = acc.next_post_ts || 0;
+                    // Update live countdown target
+                    if (acc.next_post && acc.next_post !== '—') {
+                        const newTarget = parseNextPostTime(acc.next_post);
+                        if (newTarget) {
+                            countdownTargets[acc.username] = newTarget;
+                        }
+                    }
 
-                    // Auto-reload page if account became connected but buttons aren't showing
-                    const startBtn = document.querySelector('.btn-start');
+                    // Auto-reload if needed
                     const sessionPanel = document.getElementById('session-panel-' + acc.username);
                     if (acc.connected && sessionPanel) {
-                        // Page still shows disconnected panel but account is connected - reload
                         location.reload();
                     }
                 });
-                tickCountdowns();
             });
-        }
-
-        // Accurate, self-ticking live countdown to the next post.
-        function tickCountdowns() {
-            const now = Math.floor(Date.now() / 1000);
-            for (const username in nextTs) {
-                const el = document.getElementById('countdown-' + username);
-                if (!el) continue;
-                const ts = nextTs[username] || 0;
-                if (!ts) { el.textContent = '—'; continue; }
-                let rem = ts - now;
-                if (rem <= 0) { el.textContent = 'Posting now…'; continue; }
-                const m = Math.floor(rem / 60);
-                const s = rem % 60;
-                el.textContent = m + ':' + String(s).padStart(2, '0');
-            }
         }
 
         setInterval(refreshCams, 1000);
         setInterval(updateInfo, 4000);
-        setInterval(tickCountdowns, 1000);
+        setInterval(updateCountdowns, 1000);  // live every second
     </script>
 </body>
 </html>
