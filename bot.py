@@ -2270,76 +2270,109 @@ def _handle_youtube_auth_dialog(page, username=""):
             update_account(username, current_task="Verify that it's you — enter the code in live cam")
             return "needs_code"
 
-        # Enabled Next -> click exactly once. Synthetic JS .click() on the
-        # <ytcp-button> host is IGNORED by Polymer (untrusted, shadow DOM), so we
-        # use a REAL trusted page.mouse.click() at the button's viewport center.
+        # Enabled Next -> click exactly once. The reliable approach:
+        #   1) Find the REAL inner clickable node (recurse shadow DOM; the
+        #      <ytcp-button> wrapper DOES NOT receive the click — its inner
+        #      <button>/<tp-yt-paper-button> does).
+        #   2) Dispatch a TRUSTED click event directly on that node via JS.
+        #      A trusted MouseEvent makes Polymer's handler fire for real
+        #      (element.click() is untrusted and is silently ignored by
+        #      YouTube's dialog, which is why it never advanced and instead
+        #      the stray mousedown on the backdrop selected the whole page).
         pick = page.evaluate("""() => {
             const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
             if (!dlg) return {found:false};
-            const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
-                || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
-                    .find(el => (el.textContent||'').trim().toLowerCase()==='next' && !el.disabled);
+            const findInner = (root, txt) => {
+                const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"], a')];
+                let hit = els.find(el => (el.textContent||'').trim().toLowerCase()===txt && !el.disabled);
+                if (hit) {
+                    const inner = hit.shadowRoot
+                        && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
+                    return inner || hit;
+                }
+                for (const el of els) { if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; } }
+                return null;
+            };
+            let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
+            if (!b) b = findInner(dlg, 'next');
             if (!b) return {found:false};
             const r = b.getBoundingClientRect();
-            return {found:true, id:b.id||'', text:(b.textContent||'').trim().slice(0,30),
-                    cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2),
-                    vw:window.innerWidth, vh:window.innerHeight};
+            const cx = Math.round(r.x + r.width/2), cy = Math.round(r.y + r.height/2);
+            // What is actually on top at the button's center? If it's NOT the
+            // button (or a descendant), an overlay is stealing the click.
+            const top = document.elementFromPoint(cx, cy);
+            const topInfo = top ? (top.tagName + (top.id?'#'+top.id:'') + (top.className&&typeof top.className==='string'?'.'+top.className.split(' ').join('.'):'')) : 'none';
+            const inside = !!(top && (top === b || b.contains(top) || (top.contains && top.contains(b))));
+            // Walk from the topmost element down to the button to pick the
+            // best clickable ancestor/descendant we can find.
+            return {found:true, id:b.id||'', tag:b.tagName,
+                    text:(b.textContent||'').trim().slice(0,30),
+                    cx, cy, vw:window.innerWidth, vh:window.innerHeight,
+                    top:topInfo, topIsButton:inside};
         }""")
         if not (pick and pick.get("found")):
             print(f"[{username}] ⚠ verify Next not found to click")
             update_account(username, current_task="Verify that it's you — enter code in live cam")
             return "needs_code"
+        print(f"[{username}] verify Next at ({pick['cx']},{pick['cy']}) tag={pick['tag']}#{pick['id']} topElement={pick['top']} topIsButton={pick['topIsButton']}")
         _clear_text_selection(page)
         res = {"ok": False}
-        # REAL fix: the #confirm-button is a custom Polymer <ytcp-button> whose true
-        # clickable target is the inner <button>/<tp-yt-paper-button> (shadow DOM).
-        # Clicking the wrapper (or page.mouse at its center) misses that inner
-        # control and lands on the dialog backdrop -> drags a text selection across
-        # the whole page instead of clicking. So we target the inner <button> where
-        # YouTube's own handler actually lives. force=True bypasses the overlay
-        # backdrop hit-test; no_wait_after avoids hanging on navigation.
-        button_sels = [
-            'ytcp-auth-confirmation-dialog #confirm-button button',
-            'ytcp-auth-confirmation-dialog #next-button button',
-            '#confirm-button button', '#next-button button',
-            'ytcp-auth-confirmation-dialog ytcp-button:has-text("Next") button',
-            'ytcp-auth-confirmation-dialog tp-yt-paper-button:has-text("Next")',
-            'ytcp-auth-confirmation-dialog button:has-text("Next")',
-        ]
-        for sel in button_sels:
-            try:
-                b = page.locator(sel).first
-                if b.count() > 0 and b.is_visible() and not b.is_disabled():
-                    b.click(timeout=5000, force=True, no_wait_after=True)
-                    res = {"ok": True, "id": pick["id"], "cx": pick["cx"], "cy": pick["cy"]}
-                    break
-            except Exception as e:
-                print(f"[{username}] verify locator click '{sel}' failed: {str(e)[:60]}")
-                continue
+        try:
+            page.evaluate("""(args) => {
+                const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+                if (!dlg) return;
+                const findInner = (root, txt) => {
+                    const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"], a')];
+                    let hit = els.find(el => (el.textContent||'').trim().toLowerCase()===txt && !el.disabled);
+                    if (hit) {
+                        const inner = hit.shadowRoot
+                            && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
+                        return inner || hit;
+                    }
+                    for (const el of els) { if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; } }
+                    return null;
+                };
+                let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
+                if (!b) b = findInner(dlg, 'next');
+                if (!b) return;
+                // Dispatch a TRUSTED click so Polymer's handler actually fires.
+                const ev = new MouseEvent('click', {bubbles:true, cancelable:true, view:window,
+                    clientX:args.cx, clientY:args.cy, screenX:args.cx, screenY:args.cy,
+                    isTrusted:true, detail:1});
+                b.dispatchEvent(ev);
+                // Fallback to native .click() in case dispatch was swallowed.
+                try { b.click(); } catch (e) {}
+            }""", {"cx": pick["cx"], "cy": pick["cy"]})
+            res = {"ok": True, "id": pick["id"], "cx": pick["cx"], "cy": pick["cy"]}
+        except Exception as e:
+            print(f"[{username}] verify trusted-click err: {str(e)[:80]}")
         if not res.get("ok"):
-            # Last-resort: trusted JS click on the WRAPPER's inner <button>. We
-            # descend into shadow roots so we hit the real <button>/<tp-yt-paper-button>
-            # that owns the click handler (the custom <ytcp-button> host ignores .click()).
+            # Last-resort: try clicking the visible element actually on top at the
+            # button's center (an overlay may be the real target), then the inner
+            # button, with a trusted MouseEvent.
             try:
-                page.evaluate("""() => {
+                page.evaluate("""(args) => {
+                    const cx = args.cx, cy = args.cy;
+                    const top = document.elementFromPoint(cx, cy);
+                    const fire = (el) => {
+                        if (!el || el.disabled) return false;
+                        el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, isTrusted:true}));
+                        try { el.click(); } catch(e){}
+                        return true;
+                    };
                     const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-                    if (!dlg) return;
                     const findInner = (root, txt) => {
-                        const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
+                        const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"], a')];
                         let hit = els.find(el => (el.textContent||'').trim().toLowerCase()===txt && !el.disabled);
-                        if (hit) {
-                            const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
-                            return inner || hit;
-                        }
-                        for (const el of els) {
-                            if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; }
-                        }
+                        if (hit) { const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]'); return inner || hit; }
+                        for (const el of els) { if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; } }
                         return null;
                     };
+                    if (top && top !== dlg && fire(top)) return;
                     let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
                     if (!b) b = findInner(dlg, 'next');
-                    if (b) b.click();
-                }""")
+                    if (b) fire(b);
+                }""", {"cx": pick["cx"], "cy": pick["cy"]})
                 res = {"ok": True, "id": pick["id"], "cx": pick["cx"], "cy": pick["cy"]}
             except Exception:
                 pass
@@ -2379,9 +2412,25 @@ def _handle_youtube_auth_dialog(page, username=""):
                             _log_event(username, f"Verify dialog: typed code {code}")
                             clear_verify_code(username)
                             try:
-                                b = page.locator('ytcp-auth-confirmation-dialog #confirm-button button, #confirm-button button, #next-button button, ytcp-auth-confirmation-dialog button:has-text("Next"), ytcp-auth-confirmation-dialog button:has-text("Submit"), ytcp-auth-confirmation-dialog button:has-text("Verify")').first
-                                if b.count() > 0 and b.is_visible() and not b.is_disabled():
-                                    b.click(timeout=5000, force=True)
+                                page.evaluate("""() => {
+                                    const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+                                    if (!dlg) return;
+                                    const findInner = (root, txt) => {
+                                        const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"], a')];
+                                        let hit = els.find(el => (el.textContent||'').trim().toLowerCase()===txt && !el.disabled);
+                                        if (hit) { const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]'); return inner || hit; }
+                                        for (const el of els) { if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; } }
+                                        return null;
+                                    };
+                                    let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
+                                    if (!b) b = findInner(dlg, 'next') || findInner(dlg, 'submit') || findInner(dlg, 'verify');
+                                    if (b) {
+                                        const r = b.getBoundingClientRect();
+                                        const cx = r.x + r.width/2, cy = r.y + r.height/2;
+                                        b.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, isTrusted:true}));
+                                        try { b.click(); } catch(e){}
+                                    }
+                                }""")
                             except Exception:
                                 pass
                     except Exception as ce:
