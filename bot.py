@@ -880,20 +880,28 @@ def connect_account(username):
             time.sleep(2)  # let the page settle after navigation
             diag = page.evaluate("""() => {
                 const out = {};
-                const masthead = document.querySelector('ytd-masthead');
+                const q = (sel) => document.querySelector(sel);
+                const qa = (sel) => Array.from(document.querySelectorAll(sel));
+                const masthead = q('ytd-masthead');
                 out.hasMasthead = !!masthead;
-                // "Sign in" button anywhere in the masthead / end section.
-                const signIn = document.querySelector('ytd-masthead a[href*="accounts.google.com"], ytd-button-renderer:has-text("Sign in"), tp-yt-paper-button:has-text("Sign in")');
+                // "Sign in" button: an element whose visible text is exactly/contains
+                // "Sign in" (we CANNOT use Playwright :has-text() inside querySelector).
+                const signEls = qa('a[href*="accounts.google.com"], ytd-button-renderer, tp-yt-paper-button, button');
+                const signIn = signEls.find(el => {
+                    const t = (el.textContent || '').trim().toLowerCase();
+                    return t === 'sign in' || t.startsWith('sign in') || t === 'signin';
+                });
                 out.signInText = signIn ? (signIn.textContent||'').trim().slice(0,40) : '';
                 out.hasSignIn = !!signIn;
                 // Account avatar image AND the account button (either proves login).
-                const av = document.querySelector('ytd-masthead #avatar-btn img, #avatar-btn img, #menu #avatar img, ytd-masthead #account-button img, #account-button img');
+                const av = q('ytd-masthead #avatar-btn img, #avatar-btn img, #menu #avatar img, ytd-masthead #account-button img, #account-button img');
                 out.hasAvatar = !!av;
-                const acctBtn = document.querySelector('ytd-masthead #avatar-btn, #avatar-btn, ytd-masthead #account-button, #account-button');
+                const acctBtn = q('ytd-masthead #avatar-btn, #avatar-btn, ytd-masthead #account-button, #account-button');
                 out.hasAcctBtn = !!acctBtn;
                 // Account/channel handle link.
-                const handleA = document.querySelector('a[href^="https://www.youtube.com/@"], a[href^="http://www.youtube.com/@"], a[href*="/@"], a[href^="https://studio.youtube.com/channel/"]');
-                out.handle = handleA ? (handleA.getAttribute('href')||'').split('@')[1]||'' : '';
+                const handleA = qa('a[href*="@"]').find(a => /youtube\.com\/@/.test(a.getAttribute('href')||''))
+                              || q('a[href^="https://studio.youtube.com/channel/"]');
+                out.handle = handleA ? ((handleA.getAttribute('href')||'').split('@')[1]||'').split('/')[0] : '';
                 out.url = location.href;
                 return out;
             }""")
