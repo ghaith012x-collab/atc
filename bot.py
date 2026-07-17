@@ -2341,14 +2341,18 @@ def _handle_youtube_auth_dialog(page, username=""):
             update_account(username, current_task="Verify that it's you — enter the code in live cam")
             return "needs_code"
 
-        # Enabled Next -> click exactly once (overlay-proof JS click that
-        # actually fires Polymer's handler, penetrating shadow DOM).
-        res = page.evaluate("""(clickSrc) => {
-            const clickEl = %s;
+        # Enabled Next -> click exactly once.
+        # IMPORTANT: synthetic JS .click()/dispatchEvent events are untrusted
+        # (isTrusted=false) and YouTube's Polymer gesture system IGNORES them,
+        # so the dialog just sits there and a stray selection gets dragged.
+        # The only reliable way is a REAL browser click at the button's screen
+        # coordinates via page.mouse.click() (these events ARE trusted).
+        pick = page.evaluate("""() => {
             const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-            const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
-                || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
-                    .find(el => (el.textContent||'').trim().toLowerCase()==='next');
+            if (!dlg) return {found:false};
+            // Prefer an explicitly-id'd Next; otherwise the first enabled button
+            // whose text is exactly "Next" (case-insensitive).
+            const cands = [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
             const disabled = (function(el){
                 if (!el) return true;
                 if (el.disabled === true) return true;
@@ -2358,13 +2362,58 @@ def _handle_youtube_auth_dialog(page, username=""):
                     if (inner && (inner.disabled === true || (inner.hasAttribute && inner.hasAttribute('disabled'))
                         || inner.getAttribute('aria-disabled') === 'true')) return true; }
                 return false;
-            })(b);
-            if (!b || disabled) return {ok:false, reason:'no enabled button'};
+            });
+            let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
+            if (b && disabled(b)) b = null;
+            if (!b) b = cands.find(el => (el.textContent||'').trim().toLowerCase()==='next' && !disabled(el));
+            if (!b) return {found:false};
             const r = b.getBoundingClientRect();
-            const fn = new Function('el', clickSrc);
-            fn(b);
-            return {ok:true, id:b.id||'', cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
-        }""" % _js_click_element_js(), )
+            // Return the viewport coords of the CENTER of the button.
+            return {found:true, id:b.id||'', text:(b.textContent||'').trim().slice(0,30),
+                    cx:Math.round(r.x + r.width/2), cy:Math.round(r.y + r.height/2),
+                    vw:window.innerWidth, vh:window.innerHeight};
+        }""")
+        if not (pick and pick.get("found")):
+            # Dump the dialog DOM so we can see the real button structure.
+            try:
+                html = page.evaluate("""() => {
+                    const d = document.querySelector('ytcp-auth-confirmation-dialog');
+                    return d ? d.outerHTML.slice(0, 4000) : 'NO DIALOG';
+                }""")
+                print(f"[{username}] ⚠ verify Next NOT found. Dialog DOM:\n{html}")
+            except Exception as e:
+                print(f"[{username}] ⚠ verify Next NOT found (dump err {e})")
+            update_account(username, current_task="Verify that it's you — enter code in live cam")
+            return "needs_code"
+
+        cx, cy = pick["cx"], pick["cy"]
+        print(f"[{username}] verify Next <#{pick['id']}> text='{pick['text']}' center=({cx},{cy}) viewport=({pick['vw']}x{pick['vh']})")
+        # Safety: only click if the point is actually inside the viewport.
+        if not (0 < cx < pick["vw"] and 0 < cy < pick["vh"]):
+            print(f"[{username}] ⚠ verify Next coords outside viewport — skipping real click")
+            update_account(username, current_task="Verify that it's you — enter code in live cam")
+            return "needs_code"
+
+        # Remove any selection BEFORE clicking so a real mousedown can't drag text.
+        _clear_text_selection(page)
+        try:
+            page.mouse.click(cx, cy, delay=60, button="left")
+            res = {"ok": True, "id": pick["id"], "cx": cx, "cy": cy}
+        except Exception as me:
+            print(f"[{username}] ⚠ verify real mouse click err: {me}")
+            # Last-resort: trusted JS click on the host element.
+            try:
+                page.evaluate("""(sel) => {
+                    const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+                    if (!dlg) return;
+                    let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
+                    if (!b) b = [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role=\"button\"]')]
+                        .find(el => (el.textContent||'').trim().toLowerCase()==='next');
+                    if (b) b.click();
+                }""")
+                res = {"ok": True, "id": pick["id"], "cx": cx, "cy": cy}
+            except Exception:
+                res = None
         _clear_text_selection(page)
         if res and res.get("ok"):
             print(f"[{username}] ✓ clicked verify-dialog Next <#{res['id']}> at ({res['cx']},{res['cy']})")
