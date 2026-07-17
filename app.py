@@ -113,7 +113,8 @@ def google_login(username):
     if not account:
         return jsonify({"success": False, "error": "Account not found"})
     if account.get("platform") != "YouTube":
-        return jsonify({"success": False, "error": "Google login is only for YouTube accounts"})
+        update_account(username, platform="YouTube")
+        account["platform"] = "YouTube"
 
     # Persist credentials and mark login method.
     update_account(username, email=email, password=password, login_method="google",
