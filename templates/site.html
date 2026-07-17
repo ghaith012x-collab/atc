@@ -132,6 +132,10 @@
                 <div class="info-value">{{ acc.category }}</div>
             </div>
             <div class="info-item">
+                <div class="info-label">LOGGED IN AS</div>
+                <div class="info-value" id="loginas-{{ acc.username }}" style="color:#00f2ea;">{{ acc.logged_in_as or '—' }}</div>
+            </div>
+            <div class="info-item">
                 <div class="info-label">STATUS</div>
                 <div class="info-value" id="status-{{ acc.username }}">{{ acc.status }}</div>
             </div>
@@ -352,6 +356,8 @@
                     if (taskEl) taskEl.textContent = acc.current_task || 'Idle';
                     const statusEl = document.getElementById('status-' + acc.username);
                     if (statusEl) statusEl.textContent = acc.status || '';
+                    const loginEl = document.getElementById('loginas-' + acc.username);
+                    if (loginEl) loginEl.textContent = (acc.logged_in_as || '—');
                     const nextEl = document.getElementById('next-' + acc.username);
                     if (nextEl) nextEl.textContent = acc.next_post || '—';
 

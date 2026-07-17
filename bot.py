@@ -631,21 +631,27 @@ CATEGORY_HASHTAGS = {
 
 
 def create_placeholder(username, text):
+    account = get_account(username) if username else None
+    platform = (account.get("platform") if account else None) or "TikTok"
     img = Image.new("RGB", (800, 450), "#111111")
     from PIL import ImageDraw, ImageFont
     draw = ImageDraw.Draw(img)
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
-    except:
+    except Exception:
         font = ImageFont.load_default()
-    draw.text((30, 30), f"TikTok - {username}", fill="#ff0050", font=font)
+    draw.text((30, 30), f"{platform} - {username}", fill="#ff0050", font=font)
     draw.text((30, 80), text, fill="white", font=font)
     draw.text((30, 400), datetime.now().strftime("%H:%M:%S"), fill="#888", font=font)
     return img
 
 
 def take_screenshot(username):
-    """Resilient screenshot: never crashes, keeps last good frame when possible."""
+    """Resilient screenshot: never crashes, keeps last good frame when possible.
+
+    Always stores a PIL Image (never raw PNG bytes) so the /live route can
+    re-encode it to JPEG reliably. Falls back to the last good frame on error.
+    """
     session = browser_sessions.get(username)
     if not session:
         screenshots[username] = create_placeholder(username, "No browser")
@@ -664,16 +670,13 @@ def take_screenshot(username):
             except Exception:
                 screenshots[username] = create_placeholder(username, "Browser closed")
                 return
-        img = page.screenshot(type="png")
-        screenshots[username] = img
-    except Exception:
-        pass
-        screenshot_bytes = page.screenshot(timeout=8000)
-        img = Image.open(io.BytesIO(screenshot_bytes))
+        # Playwright returns raw PNG bytes -> convert to a PIL Image.
+        screenshot_bytes = page.screenshot(type="png", timeout=15000)
+        img = Image.open(io.BytesIO(screenshot_bytes)).convert("RGB")
         screenshots[username] = img
     except Exception as e:
         err = str(e).split("\n")[0][:60]
-        # Keep the last good frame instead of replacing it with an error card
+        # Keep the last good frame instead of replacing it with an error card.
         if username not in screenshots:
             screenshots[username] = create_placeholder(username, f"Screenshot error: {err}")
         print(f"[{username}] screenshot error: {err}")
@@ -858,8 +861,9 @@ def connect_account(username):
                     print(f"[{username}] warning: could not return to home page: {e}")
 
         if logged_in:
-            task_msg = f"Session verified - {profile_name}" if profile_name else "Session verified"
-            update_account(username, connected=1, status="Connected", current_task=task_msg)
+            task_msg = f"Logged in as {profile_name}" if profile_name else "Session verified"
+            update_account(username, connected=1, status="Connected", current_task=task_msg,
+                          logged_in_as=profile_name or "")
             print(f"✓ Session verified for {username} ({platform})" + (f" : {profile_name}" if profile_name else ""))
             take_screenshot(username)
             # IMPORTANT: keep the browser alive so the live cam + worker reuse it.
@@ -2565,6 +2569,7 @@ def logout_account(username):
         connected=0,
         status="Logged out",
         current_task="Logged out",
+        logged_in_as="",
     )
     return True
 
@@ -2587,4 +2592,4 @@ def delete_account_session(username):
         shutil.rmtree(session_path, ignore_errors=True)
 
     # Also clear session_data from DB
-    update_account(username, session_data=None, connected=0, status="Disconnected", current_task="Idle")
+    update_account(username, session_data=None, connected=0, status="Disconnected", current_task="Idle", logged_in_as="")

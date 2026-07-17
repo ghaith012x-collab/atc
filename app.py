@@ -137,15 +137,25 @@ def live(username):
         except Exception:
             pass
 
-    if username not in screenshots:
-        from PIL import Image
-        img = Image.new("RGB", (1280, 720), "#111111")
-        screenshots[username] = img
-
+    from PIL import Image
     from io import BytesIO
+
+    if username not in screenshots:
+        screenshots[username] = Image.new("RGB", (1280, 720), "#111111")
+
+    img = screenshots[username]
+    # Defensive: if a raw screenshot (bytes) was ever stored, wrap it in a PIL Image.
+    if isinstance(img, (bytes, bytearray)):
+        try:
+            img = Image.open(BytesIO(img)).convert("RGB")
+            screenshots[username] = img
+        except Exception:
+            img = Image.new("RGB", (1280, 720), "#111111")
+            screenshots[username] = img
+
     buffer = BytesIO()
     # High quality so the preview stays sharp.
-    screenshots[username].save(buffer, "JPEG", quality=95)
+    img.save(buffer, "JPEG", quality=95)
     buffer.seek(0)
     return Response(buffer.getvalue(), mimetype="image/jpeg")
 

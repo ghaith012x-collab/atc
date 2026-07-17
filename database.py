@@ -33,6 +33,7 @@ def init_db():
         for col, sql in [
             ("next_post_ts", "ALTER TABLE accounts ADD COLUMN next_post_ts INTEGER"),
             ("platform", "ALTER TABLE accounts ADD COLUMN platform TEXT DEFAULT 'TikTok'"),
+            ("logged_in_as", "ALTER TABLE accounts ADD COLUMN logged_in_as TEXT"),
         ]:
             if col not in cols:
                 conn.execute(sql)
