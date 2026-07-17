@@ -14,6 +14,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE,
+            platform TEXT DEFAULT 'TikTok',
             category TEXT DEFAULT 'dance',
             session_data TEXT,
             connected INTEGER DEFAULT 0,
@@ -29,8 +30,12 @@ def init_db():
     # Idempotently add new columns for existing databases.
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(accounts)").fetchall()]
-        if "next_post_ts" not in cols:
-            conn.execute("ALTER TABLE accounts ADD COLUMN next_post_ts INTEGER")
+        for col, sql in [
+            ("next_post_ts", "ALTER TABLE accounts ADD COLUMN next_post_ts INTEGER"),
+            ("platform", "ALTER TABLE accounts ADD COLUMN platform TEXT DEFAULT 'TikTok'"),
+        ]:
+            if col not in cols:
+                conn.execute(sql)
     except Exception:
         pass
     conn.commit()
