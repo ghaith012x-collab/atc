@@ -1916,6 +1916,339 @@ def upload_video_to_tiktok(username, file_path, caption):
         return False
 
 
+def _dismiss_youtube_popups(page, username=""):
+    """Auto-dismiss the cookie-consent banner and the various YouTube/Studio
+    onboarding popups ('Review your channel', 'Got it', 'Skip', 'Not now',
+    'Turn on', surveys, etc.) so they never block the upload flow.
+    """
+    # 1) Cookie consent — YouTube's consent dialog uses these buttons.
+    for sel in [
+        'button:has-text("Accept all")',
+        'button:has-text("I agree")',
+        'button:has-text("Reject all")',
+        'tp-yt-paper-button:has-text("Accept all")',
+        'ytd-button-renderer:has-text("Accept all")',
+    ]:
+        try:
+            b = page.locator(sel).first
+            if b.count() > 0 and b.is_visible():
+                b.click(timeout=2000, force=True)
+                print(f"[{username}] dismissed YouTube cookie popup: {sel}")
+                time.sleep(1)
+        except Exception:
+            pass
+
+    # 2) Generic dismiss buttons (dialogs, onboarding, "review your channel", etc.)
+    #    NOTE: we deliberately do NOT click "Dismiss"/"Close" on the
+    #    ytcp-auth-confirmation-dialog ("Verify that it's you") — collapsing it
+    #    without resolving verification just makes it re-block every click. That
+    #    dialog is handled separately by _handle_youtube_auth_dialog().
+    generic = [
+        'button:has-text("Skip")',
+        'button:has-text("Got it")',
+        'button:has-text("Not now")',
+        'button:has-text("No thanks")',
+        'button:has-text("Maybe later")',
+        'ytcp-button:has-text("Skip")',
+        'tp-yt-paper-button:has-text("Skip")',
+        'ytd-button-renderer:has-text("Got it")',
+    ]
+    for sel in generic:
+        try:
+            b = page.locator(sel).first
+            if b.count() > 0 and b.is_visible():
+                b.click(timeout=1500, force=True)
+                print(f"[{username}] dismissed YouTube popup: {sel}")
+                time.sleep(0.4)
+        except Exception:
+            pass
+
+    # 3) Remove any leftover modal/overlay elements via JS (reviews surveys etc.)
+    try:
+        page.evaluate("""() => {
+            document.querySelectorAll(
+                'ytd-popup-container, tp-yt-paper-dialog, [role="dialog"], ' +
+                '.ytd-consent-bump, ytd-enforcement-message-renderer, ' +
+                'yt-mealbar-promo-renderer, ytcp-survey, [class*="survey"]'
+            ).forEach(el => {
+                if (el.tagName && el.tagName.toLowerCase().includes('ytcp-auth-confirmation-dialog')) return;
+                const t = (el.textContent || '').toLowerCase();
+                if (t.includes('review') || t.includes('survey') || t.includes('cookie') ||
+                    t.includes('consent') || t.includes('got it') || t.includes('skip')) {
+                    el.remove();
+                }
+            });
+        }""")
+    except Exception:
+        pass
+
+
+def _log_click_targets(page, username, context_label):
+    """Dump EVERY clickable control that could be the Next/Publish button, with
+    its selector, visible text, bounding box (x, y, width, height) and the exact
+    center point we would click. This makes it 100% clear what the bot sees and
+    where it will click. Called before every Next/Publish attempt.
+    """
+    try:
+        data = page.evaluate("""() => {
+            const out = [];
+            const sels = [
+                'ytcp-button#next-button', '#next-button',
+                'tp-yt-paper-button#next-button', 'ytcp-button#publish-button',
+                '#publish-button', 'ytcp-button', 'tp-yt-paper-button',
+                'button', '[role="button"]'
+            ];
+            const seen = new Set();
+            for (const sel of sels) {
+                for (const el of document.querySelectorAll(sel)) {
+                    const t = (el.textContent || '').trim().replace(/\\s+/g, ' ');
+                    const low = t.toLowerCase();
+                    if (!(low === 'next' || low === 'publish' || low === 'continue' ||
+                          low === 'verify' || low === 'confirm' || low === 'done' ||
+                          el.id === 'next-button' || el.id === 'publish-button')) continue;
+                    const r = el.getBoundingClientRect();
+                    const key = el.tagName + '|' + el.id + '|' + t + '|' + Math.round(r.x) + ',' + Math.round(r.y);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    const cs = getComputedStyle(el);
+                    out.push({
+                        tag: el.tagName.toLowerCase(),
+                        id: el.id || '',
+                        text: t.slice(0, 40),
+                        x: Math.round(r.x), y: Math.round(r.y),
+                        w: Math.round(r.width), h: Math.round(r.height),
+                        cx: Math.round(r.x + r.width / 2),
+                        cy: Math.round(r.y + r.height / 2),
+                        visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none',
+                        disabled: el.disabled === true,
+                        opacity: cs.opacity,
+                    });
+                }
+            }
+            return out;
+        }""")
+        if not data:
+            print(f"[{username}] [{context_label}] no Next/Publish candidates found on page")
+            return
+        print(f"[{username}] [{context_label}] === CLICK TARGETS ({len(data)}) ===")
+        for d in data:
+            flag = ""
+            if d["disabled"]:
+                flag = " [DISABLED]"
+            elif not d["visible"]:
+                flag = " [NOT VISIBLE]"
+            print(
+                f"[{username}]   <{d['tag']}#{d['id']}> text='{d['text']}' "
+                f"box=({d['x']},{d['y']} {d['w']}x{d['h']}) center=({d['cx']},{d['cy']}) "
+                f"opacity={d['opacity']}{flag}"
+            )
+    except Exception as e:
+        print(f"[{username}] [{context_label}] target logging err: {e}")
+
+
+def _click_dialog_button_js(page, container, label):
+    """Click a button inside `container` (a CSS selector string) by its visible
+    text, via direct DOM .click() (overlay-proof — Playwright's normal click is
+    blocked by the dialog's own backdrop/overlay). Returns True if clicked.
+    """
+    return page.evaluate("""(args) => {
+        const [container, label] = args;
+        const root = document.querySelector(container);
+        if (!root) return false;
+        const want = label.toLowerCase();
+        const btns = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
+        const b = btns.find(el => {
+            const t = (el.textContent || '').trim().toLowerCase();
+            return t === want || t.startsWith(want + ' ') || t.endsWith(' ' + want);
+        });
+        if (b && !b.disabled) { b.click(); return true; }
+        return false;
+    }""", [container, label])
+
+
+def _clear_text_selection(page):
+    """Clear any accidental text selection (so the live preview doesn't show the
+    whole page highlighted/blue after a click)."""
+    try:
+        page.evaluate("() => { window.getSelection() && window.getSelection().removeAllRanges(); }")
+    except Exception:
+        pass
+
+
+def _handle_youtube_auth_dialog(page, username=""):
+    """Handle YouTube Studio's 'Verify that it's you' (ytcp-auth-confirmation-dialog).
+
+    This dialog intercepts ALL clicks on the upload form, so it MUST be resolved
+    first. Its primary action button is #confirm-button (text 'Next'); we click it
+    via a DIRECT DOM click (JS) because Playwright's actionability check is blocked
+    by the dialog's own overlay backdrop.
+
+    IMPORTANT: we NEVER click a DISABLED button. When the dialog has advanced to a
+    step that waits for a verification code/phone (the Next button is disabled), we
+    STOP and let the user finish it in the live cam — we do NOT hammer it (which
+    previously dragged a text selection across the page).
+
+    Returns:
+      False  -> no dialog present
+      "advanced" -> we clicked the enabled Next and the dialog moved on
+      "needs_code" -> dialog still open but Next is disabled (waiting for user input)
+    """
+    try:
+        dialog = page.locator('ytcp-auth-confirmation-dialog').first
+        if dialog.count() == 0:
+            return False
+        if not dialog.is_visible():
+            return False
+        print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected")
+
+        # Inspect the dialog's primary Next button (enabled or disabled?).
+        info = page.evaluate("""() => {
+            const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+            if (!dlg) return {present:false};
+            const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
+                || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
+                    .find(el => (el.textContent||'').trim().toLowerCase() === 'next');
+            if (!b) return {present:true, hasNext:false};
+            const r = b.getBoundingClientRect();
+            return {present:true, hasNext:true, id:b.id||'',
+                    text:(b.textContent||'').trim().slice(0,30),
+                    disabled: !!b.disabled,
+                    cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
+        }""")
+
+        if not info or not info.get("present"):
+            return False
+
+        if not info.get("hasNext"):
+            print(f"[{username}] ⚠ verify dialog has no Next button — may need a code")
+            update_account(username, current_task="Verify that it's you — enter code in live cam")
+            return "needs_code"
+
+        if info.get("disabled"):
+            # Button is disabled => waiting for the user to enter a code/phone.
+            # STOP here; do NOT click. Clear any stray selection.
+            _clear_text_selection(page)
+            print(f"[{username}] ⚠ verify Next <#{info['id']}> is DISABLED — waiting for code (user action needed)")
+            update_account(username, current_task="Verify that it's you — enter the code in live cam")
+            return "needs_code"
+
+        # Enabled Next -> click exactly once (overlay-proof JS click).
+        res = page.evaluate("""() => {
+            const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+            const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
+                || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
+                    .find(el => (el.textContent||'').trim().toLowerCase()==='next' && !el.disabled);
+            if (!b || b.disabled) return {ok:false, reason:'no enabled button'};
+            const r = b.getBoundingClientRect();
+            b.click();
+            return {ok:true, id:b.id||'', cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
+        }""")
+        _clear_text_selection(page)
+        if res and res.get("ok"):
+            print(f"[{username}] ✓ clicked verify-dialog Next <#{res['id']}> at ({res['cx']},{res['cy']})")
+            update_account(username, current_task="Verify that it's you — clicked Next, waiting...")
+            time.sleep(3)
+            take_screenshot(username)
+            # Wait to see if the dialog advances / closes.
+            for _ in range(8):
+                try:
+                    d2 = page.locator('ytcp-auth-confirmation-dialog').first
+                    if d2.count() == 0 or not d2.is_visible():
+                        print(f"[{username}] ✓ verify dialog dismissed")
+                        return "advanced"
+                except Exception:
+                    pass
+                time.sleep(2)
+            # Still open: check if it's now waiting for a code (disabled).
+            info2 = page.evaluate("""() => {
+                const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+                if (!dlg) return {open:false};
+                const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
+                    || [...dlg.querySelectorAll('ytcp-button, button')].find(el => (el.textContent||'').trim().toLowerCase()==='next');
+                return {open:true, disabled: !!(b && b.disabled)};
+            }""")
+            if info2.get("open") and info2.get("disabled"):
+                print(f"[{username}] ⚠ verify advanced to code-entry step — waiting for user")
+                update_account(username, current_task="Verify that it's you — enter the code in live cam")
+                return "needs_code"
+            return "advanced"
+        print(f"[{username}] ⚠ verify-dialog Next click failed: {res}")
+        return "needs_code"
+    except Exception as e:
+        print(f"[{username}] verify dialog handling err: {e}")
+        return False
+
+
+def _click_youtube_next(page):
+    """Click YouTube Studio's Next button — but NEVER a disabled one, and only
+    ONCE. If the 'Verify that it's you' dialog is open, we hand off to
+    _handle_youtube_auth_dialog (which skips disabled buttons). Returns True if a
+    real (enabled) Next was clicked.
+    """
+    # 0) If the verify dialog is up, let the dedicated handler deal with it
+    #    (it correctly skips disabled buttons). Return whether it advanced.
+    try:
+        if page.locator('ytcp-auth-confirmation-dialog').count() > 0:
+            res = _handle_youtube_auth_dialog(page, "")
+            return res == "advanced"
+    except Exception:
+        pass
+
+    # 1) Try Playwright locators with force=True. Skip disabled buttons.
+    selectors = [
+        'ytcp-button#next-button',
+        '#next-button',
+        'tp-yt-paper-button#next-button',
+        'ytcp-button:has-text("Next")',
+        'button:has-text("Next")',
+        'tp-yt-paper-button:has-text("Next")',
+    ]
+    for sel in selectors:
+        try:
+            b = page.locator(sel).first
+            if b.count() > 0 and b.is_visible():
+                if b.is_disabled():
+                    print(f"[NEXT] skipping DISABLED Next '{sel}'")
+                    continue
+                box = b.bounding_box()
+                cx = cy = None
+                if box:
+                    cx = round(box["x"] + box["width"] / 2)
+                    cy = round(box["y"] + box["height"] / 2)
+                print(f"[NEXT] clicking selector='{sel}' box={box} center=({cx},{cy})")
+                b.click(timeout=4000, force=True, no_wait_after=True)
+                _clear_text_selection(page)
+                print(f"[NEXT] ✓ clicked via Playwright selector '{sel}' at ({cx},{cy})")
+                return True
+        except Exception as e:
+            print(f"[NEXT] selector '{sel}' failed: {e}")
+            continue
+    # 2) JS fallback: click a visible, ENABLED element whose text is exactly "Next".
+    try:
+        res = page.evaluate("""() => {
+            const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
+            const next = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
+                && !el.disabled && el.offsetParent !== null);
+            if (next) {
+                const r = next.getBoundingClientRect();
+                next.click();
+                return {clicked: true, tag: next.tagName.toLowerCase(), id: next.id || '',
+                         text: (next.textContent||'').trim().slice(0,40),
+                         cx: Math.round(r.x + r.width/2), cy: Math.round(r.y + r.height/2)};
+            }
+            return {clicked: false};
+        }""")
+        _clear_text_selection(page)
+        if res and res.get("clicked"):
+            print(f"[NEXT] ✓ clicked via JS <{res['tag']}#{res['id']}> text='{res['text']}' at ({res['cx']},{res['cy']})")
+            return True
+        print(f"[NEXT] no enabled 'Next' element found")
+        return False
+    except Exception as e:
+        print(f"[NEXT] JS fallback err: {e}")
+        return False
+
+
 def upload_video_to_youtube(username, file_path, caption, title):
     """Upload a prepared (1080x1920) Short to YouTube Studio with an accurate,
     full caption. Selects 'No, it's not made for kids' + public visibility so it
