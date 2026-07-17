@@ -723,14 +723,16 @@ def _get_proxy(account=None):
     return {"server": proxy}
 
 
-def _start_browser_session(username, account=None):
+def _start_browser_session(username, account=None, no_proxy=False):
     """Launch a Playwright browser + context and store it in browser_sessions.
     Closes any pre-existing session for this username first. Returns the
     session dict (with 'context'/'page') or None on failure.
 
     If a proxy is configured (env PROXY / PROXY_IP+PROXY_PORT, or an account
     `proxy` field), the browser routes through it — useful for avoiding
-    YouTube bot-verification by using a residential IP.
+    YouTube bot-verification by using a residential IP. Pass no_proxy=True to
+    force a DIRECT connection (used as a fallback when the proxy is unreachable,
+    so a bad proxy setting never kills the whole bot).
     """
     if username in browser_sessions:
         try:
