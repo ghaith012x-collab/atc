@@ -1,13 +1,17 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>TikTok Auto Poster</title>
+    <title>TikTok &amp; YouTube Auto Poster</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         *, *::before, *::after { box-sizing: border-box; }
         body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f0f; color: #fff; margin: 0; padding: 20px; }
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
         h1 { background: linear-gradient(90deg, #ff0050, #00f2ea); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }
+        .platform-toggle { display: inline-flex; border: 1px solid #444; border-radius: 9999px; overflow: hidden; }
+        .platform-toggle button { border: none; border-radius: 0; background: #222; color: #aaa; padding: 8px 18px; }
+        .platform-toggle button.active { background: #ff0050; color: #fff; }
+        .platform-toggle button.yt.active { background: #ff0000; color: #fff; }
 
         .add-form { background: #1a1a1a; padding: 20px; border-radius: 16px; margin-bottom: 30px; border: 1px solid #333; }
         .add-form h3 { margin: 0 0 15px 0; }
@@ -42,8 +46,6 @@
         .btn-delete { background: #444; color: #ccc; }
         .btn-delete-session { background: #2a1a1a; color: #ff5252; border: 1px solid #ff5252; }
         .btn-logout { background: #1a2740; color: #4fa3ff; border: 1px solid #4fa3ff; }
-        .btn-google { background: #ffffff; color: #222; }
-        .btn-google:hover { opacity: .9; }
         .password-row { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
         .password-row input { flex: 1; background: #222; border: 1px solid #444; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; min-width: 160px; }
         .password-row input:focus { outline: none; border-color: #00f2ea; }
@@ -75,7 +77,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>TikTok Auto Poster</h1>
+        <h1>TikTok &amp; YouTube Auto Poster</h1>
         <div style="color:#888;">{{ accounts|length }} Account{{ 's' if accounts|length != 1 else '' }}</div>
     </div>
 
@@ -84,6 +86,10 @@
         <h3>Add New Account</h3>
         <div class="row">
             <input type="text" id="new-username" placeholder="@username" style="flex:1;min-width:160px;">
+            <div class="platform-toggle" id="new-platform-toggle">
+                <button type="button" class="active" id="btn-tiktok" onclick="selectPlatform('TikTok')">TikTok</button>
+                <button type="button" class="yt" id="btn-youtube" onclick="selectPlatform('YouTube')">YouTube</button>
+            </div>
             <select id="new-category">
                 <option value="Dance">Dance</option>
                 <option value="Horror">Horror</option>
@@ -95,6 +101,7 @@
             </select>
             <button class="btn-primary" onclick="addAccount()">Add Account</button>
         </div>
+        <div class="hint" style="font-size:11px;color:#666;margin-top:8px;">Tip: choose the platform first — the category list updates. YouTube always searches TikTok for clips, then posts them as Shorts.</div>
     </div>
 
     <!-- Account Cards -->
@@ -102,6 +109,7 @@
     <div class="account-card" id="card-{{ acc.username }}">
         <div class="card-header">
             <div class="card-username">{{ acc.username }}</div>
+            <span class="status-badge {{ 'status-connected' if acc.platform == 'YouTube' else 'status-pending' }}" style="{{ 'border-color:#ff0000;color:#ff5252;' if acc.platform == 'YouTube' else 'border-color:#00f2ea;color:#00f2ea;' }}">{{ acc.platform }}</span>
             {% if acc.connected %}
                 <span class="status-badge status-connected">Connected</span>
             {% elif acc.status in ['Session saved', 'Connecting', 'Verifying session...'] %}
@@ -144,12 +152,16 @@
         <!-- Session Panel (disconnected) -->
         {% if not acc.connected %}
         <div class="session-panel" id="session-panel-{{ acc.username }}">
-            <h4>Paste TikTok Session</h4>
+            <h4>Paste {{ acc.platform }} Session Cookies</h4>
             <textarea
                 id="session-input-{{ acc.username }}"
-                placeholder='[{"name":"sessionid","value":"...","domain":".tiktok.com"},...]'
+                placeholder='[{"name":"sessionid","value":"...","domain":".{{ acc.platform.lower() }}.com"},...]'
             ></textarea>
-            <div class="hint">Export cookies from your browser using an extension like "EditThisCookie" or "Cookie-Editor" on tiktok.com, then paste the JSON here.</div>
+            <div class="hint">
+                Export cookies from your browser using an extension like "EditThisCookie" or "Cookie-Editor"
+                while logged in to <b>{{ acc.platform }}</b>, then paste the JSON here. We login with these
+                session cookies (no Google login).
+            </div>
             <div class="btn-row">
                 <button class="btn-primary" onclick="saveSession('{{ acc.username }}')">Save Session</button>
             </div>
@@ -157,15 +169,9 @@
         {% else %}
         <!-- Connected panel -->
         <div class="session-verified">
-            Session verified &mdash; account is connected and ready.
+            {{ acc.platform }} session verified &mdash; account is connected and ready.
         </div>
         {% endif %}
-
-        <!-- Email Login -->
-        <div class="password-row">
-            <input type="text" id="email-{{ acc.username }}" value="{{ acc.gmail or '' }}" placeholder="Email or username">
-            <button class="btn-google" onclick="loginGoogle('{{ acc.username }}')">Login with Google</button>
-        </div>
 
         <!-- Controls -->
         <div class="controls">
@@ -190,7 +196,7 @@
     <!-- Toast notification -->
     <div class="toast" id="toast"></div>
 
-    <script>
+        <script>
         // ==================== TOAST ====================
         function showToast(msg, type) {
             const t = document.getElementById('toast');
@@ -199,15 +205,36 @@
             setTimeout(() => { t.className = 'toast'; }, 3000);
         }
 
+        // ==================== PLATFORM + CATEGORY ====================
+        let selectedPlatform = 'TikTok';
+        const CATEGORIES = {
+            'TikTok': ['Dance', 'Horror', 'Story Animation', 'Funny Videos', 'Gin Stories', 'Scary facts', 'Predator Catches'],
+            'YouTube': ['Viral Clips', 'Funny Clips', 'Scary Story Animation', 'Fruit Story Animation', 'Horror Animations', 'Edits']
+        };
+
+        function selectPlatform(platform) {
+            selectedPlatform = platform;
+            document.getElementById('btn-tiktok').classList.toggle('active', platform === 'TikTok');
+            document.getElementById('btn-youtube').classList.toggle('active', platform === 'YouTube');
+            const sel = document.getElementById('new-category');
+            sel.innerHTML = '';
+            CATEGORIES[platform].forEach(cat => {
+                const opt = document.createElement('option');
+                opt.value = cat; opt.textContent = cat;
+                sel.appendChild(opt);
+            });
+        }
+
         // ==================== ADD ACCOUNT ====================
         function addAccount() {
             const username = document.getElementById('new-username').value.trim();
             const category = document.getElementById('new-category').value;
+            const platform = selectedPlatform;
             if (!username) { showToast('Enter a username', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, category})
+                body: JSON.stringify({username, category, platform})
             })
             .then(r => r.json())
             .then(d => {
@@ -303,24 +330,9 @@
         }
 
         function logoutAccount(username) {
-            if (!confirm('Log out ' + username + '? This ends the TikTok session.')) return;
+            if (!confirm('Log out ' + username + '? This ends the ' + (window.__platform || '') + ' session.')) return;
             fetch('/api/logout/' + username, {method: 'POST'})
             .then(() => { showToast('Logged out', 'success'); setTimeout(() => location.reload(), 800); });
-        }
-
-        function loginGoogle(username) {
-            const email = document.getElementById('email-' + username).value.trim();
-            if (!email) { showToast('Enter your Gmail first', 'error'); return; }
-            fetch('/api/login_google/' + username, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({email})
-            })
-            .then(r => r.json())
-            .then(d => {
-                if (d.success) { showToast('Google login started — approve on your phone...', 'success'); }
-                else { showToast(d.error || 'Failed to start Google login', 'error'); }
-            });
         }
 
         // ==================== LIVE REFRESH ====================

@@ -5,7 +5,7 @@ from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account
 from bot import (
     connect_account, start_automation, stop_automation,
-    delete_account_session, logout_account, login_with_google,
+    delete_account_session, logout_account,
     screenshots, browser_sessions, take_screenshot
 )
 
@@ -45,11 +45,14 @@ def add_new_account():
     data = request.json
     username = data.get("username", "").strip()
     category = data.get("category", "dance")
-    
+    platform = data.get("platform", "TikTok")
+    if platform not in ("TikTok", "YouTube"):
+        platform = "TikTok"
+
     if not username.startswith("@"):
         username = "@" + username
-    
-    if add_account(username, category):
+
+    if add_account(username, category, platform):
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Account already exists"})
 
@@ -122,14 +125,6 @@ def api_delete_session(username):
 def api_logout(username):
     logout_account(username)
     return jsonify({"success": True})
-
-
-@app.route("/api/login_google/<path:username>", methods=["POST"])
-def api_login_google(username):
-    data = request.get_json(silent=True) or {}
-    email = data.get("email", "")
-    threading.Thread(target=login_with_google, args=(username, email), daemon=True).start()
-    return jsonify({"success": True, "message": "Google login started..."})
 
 
 @app.route("/live/<path:username>")

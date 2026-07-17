@@ -60,12 +60,12 @@ def update_account(username, **kwargs):
     conn.commit()
     conn.close()
 
-def add_account(username, category="dance"):
+def add_account(username, category="dance", platform="TikTok"):
     conn = get_db()
     try:
         conn.execute(
-            "INSERT INTO accounts (username, category) VALUES (?, ?)",
-            (username, category)
+            "INSERT INTO accounts (username, platform, category) VALUES (?, ?, ?)",
+            (username, platform, category)
         )
         conn.commit()
         return True

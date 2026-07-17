@@ -559,24 +559,53 @@ TIKWM_SEARCH_API = "https://www.tikwm.com/api/feed/search"
 
 # Exact, accurate posting interval. The worker waits until this many seconds
 # have elapsed since the previous successful post, so the gap between posts is
-# always ~10 minutes (not 25+ as before).
-POST_INTERVAL_SECONDS = 600  # 10 minutes
+# always ~5 minutes.
+POST_INTERVAL_SECONDS = 300  # 5 minutes
 
 # How many of the top-ranked candidates to randomly choose between, so we never
 # keep picking the exact same viral video every cycle.
 VIDEO_CHOICE_POOL = 6
+
+# Exact, good YouTube Shorts resolution (vertical 9:16, full HD portrait).
+YOUTUBE_SHORTS_WIDTH = 1080
+YOUTUBE_SHORTS_HEIGHT = 1920
+
+# Exact, good video DURATION (in seconds) per platform. Clips are trimmed/padded
+# to land inside these exact bounds so every video is a clean, well-sized Short.
+TIKTOK_MIN_SEC = 12
+TIKTOK_MAX_SEC = 55
+YOUTUBE_MIN_SEC = 20
+YOUTUBE_MAX_SEC = 58
+
 # Category key -> the ACTUAL TikTok search query used (search page + tikwm API).
 # Keys are the exact display labels chosen in the dashboard (so what you pick
-# is what gets stored and searched).
+# is what gets stored and searched). TikTok ALWAYS does the searching; YouTube
+# accounts reuse the same TikTok search to source clips, then upload to YouTube.
 CATEGORY_SEARCH = {
     "Dance": "dance",
     "Horror": "horror",
+    "Viral Clips": "viral",
+    "Funny Clips": "funny",
+    "Scary Story Animation": "Scary Story Animation",
+    "Fruit Story Animation": "Fruit Story Animation",
+    "Horror Animations": "Horror Animations",
+    "Edits": "edits",
     "Story Animation": "Horror Story Animation",
-    "Gin Stories": "Jinn stories Islam",       # shown as "Gin Stories"
-    "Scary facts": "Scary Facts",              # shown as "Scary facts"
+    "Gin Stories": "Jinn stories Islam",
+    "Scary facts": "Scary Facts",
     "Funny Videos": "Funny Videos",
     "Predator Catches": "Pred catches",
 }
+
+# Categories offered when adding a YouTube account.
+YOUTUBE_CATEGORIES = [
+    "Viral Clips",
+    "Funny Clips",
+    "Scary Story Animation",
+    "Fruit Story Animation",
+    "Horror Animations",
+    "Edits",
+]
 
 # Hashtag pools per category used to enrich captions.
 # Keys are LOWERCASE (generate_caption lowercases the category before lookup).
@@ -592,6 +621,12 @@ CATEGORY_HASHTAGS = {
     "fitness": ["#fitness", "#gym", "#workout", "#fitnessmotivation", "#fyp", "#viral"],
     "pets": ["#pets", "#dogsoftiktok", "#catsoftiktok", "#animals", "#fyp", "#viral"],
     "motivation": ["#motivation", "#mindset", "#success", "#inspiration", "#fyp", "#viral"],
+    "viral clips": ["#viral", "#fyp", "#trending", "#shorts", "#viralvideo", "#foryoupage"],
+    "funny clips": ["#funny", "#comedy", "#lol", "#shorts", "#funnyvideo", "#fyp"],
+    "scary story animation": ["#scarystory", "#animation", "#horror", "#storytime", "#shorts", "#scary"],
+    "fruit story animation": ["#fruit", "#animation", "#kids", "#story", "#shorts", "#cute"],
+    "horror animations": ["#horror", "#animation", "#scary", "#horrorstory", "#shorts", "#creepy"],
+    "edits": ["#edits", "#edit", "#aesthetic", "#trending", "#shorts", "#fyp"],
 }
 
 
@@ -644,13 +679,61 @@ def take_screenshot(username):
         print(f"[{username}] screenshot error: {err}")
 
 
+def _cookie_domain_for(c, platform):
+    """Pick a sane default cookie domain based on the platform."""
+    if platform == "YouTube":
+        return c.get("domain", ".youtube.com")
+    return c.get("domain", ".tiktok.com")
+
+
+def _start_browser_session(username):
+    """Launch a Playwright browser + context and store it in browser_sessions.
+    Closes any pre-existing session for this username first. Returns the
+    session dict (with 'context'/'page') or None on failure.
+    """
+    if username in browser_sessions:
+        try:
+            browser_sessions[username]["context"].close()
+            browser_sessions[username]["browser"].close()
+            browser_sessions[username]["pw"].stop()
+        except Exception:
+            pass
+        del browser_sessions[username]
+
+    pw = sync_playwright().start()
+    browser = pw.chromium.launch(
+        headless=True,
+        args=[
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+        ],
+    )
+    context = browser.new_context(
+        viewport={"width": 1280, "height": 720},
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        locale="en-US",
+    )
+    page = context.new_page()
+    session = {"pw": pw, "browser": browser, "context": context, "page": page}
+    browser_sessions[username] = session
+    return session
+
+
 def connect_account(username):
-    """Start headless browser, load cookies, and verify login status"""
+    """Start headless browser, load cookies, verify login, and KEEP the browser
+    alive so the live cam (and the automation worker) can use it immediately.
+    Works for both TikTok and YouTube session cookies.
+    """
     account = get_account(username)
     if not account or not account.get("session_data"):
         update_account(username, status="No Session", current_task="Please paste session")
         return False
 
+    platform = account.get("platform") or "TikTok"
     update_account(username, status="Connecting", current_task="Starting browser...")
 
     try:
@@ -660,154 +743,137 @@ def connect_account(username):
         return False
 
     try:
-        pw = sync_playwright().start()
-
-        # Use browser.new_context() NOT persistent_context
-        # This ensures cookies are loaded BEFORE any page navigation
-        browser = pw.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage"
-            ]
-        )
-
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            locale="en-US",
-        )
-
-        # Clean cookies - remove metadata fields Cookie Editor adds
         clean_cookies = []
         for c in cookies:
             if not isinstance(c, dict):
                 continue
             if "name" not in c or "value" not in c:
                 continue
-
             cleaned = {
                 "name": c["name"],
                 "value": c["value"],
-                "domain": c.get("domain", ".tiktok.com"),
+                "domain": _cookie_domain_for(c, platform),
                 "path": c.get("path", "/"),
                 "secure": c.get("secure", False),
                 "httpOnly": c.get("httpOnly", False),
             }
-
-            # Only add sameSite if valid
             if "sameSite" in c and c["sameSite"] in ["Strict", "Lax", "None"]:
                 cleaned["sameSite"] = c["sameSite"]
-
             clean_cookies.append(cleaned)
 
         if not clean_cookies:
             update_account(username, status="Invalid Session", current_task="No valid cookies found")
             return False
 
+        session = _start_browser_session(username)
+        context = session["context"]
+        page = session["page"]
+
         # CORRECT ORDER: add cookies BEFORE creating page and navigating
         context.add_cookies(clean_cookies)
 
-        page = context.new_page()
-
-        browser_sessions[username] = {
-            "pw": pw,
-            "browser": browser,
-            "context": context,
-            "page": page
-        }
-
+        home_url = "https://www.youtube.com" if platform == "YouTube" else "https://www.tiktok.com"
         update_account(username, current_task="Verifying session...")
-        page.goto("https://www.tiktok.com", timeout=30000)
+        page.goto(home_url, timeout=30000)
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
         except TimeoutError:
             pass
         time.sleep(3)
-        handle_captcha_if_present(page, username)  # <--- CAPTCHA SOLVER (isolated)
+        handle_captcha_if_present(page, username)
         take_screenshot(username)
 
-        # Verify login by checking for profile icon or logged-in indicators
+        # ---- Platform-specific login verification ----
         logged_in = False
-        tiktok_username = ""
+        profile_name = ""
 
-        try:
-            page.wait_for_selector(
-                '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]',
-                timeout=10000
-            )
-            logged_in = True
-        except TimeoutError:
-            pass
-
-        # Also check if login button is NOT present (another way to confirm logged in)
-        if not logged_in:
+        if platform == "YouTube":
+            # Logged-in YouTube shows the avatar / "You" menu.
             try:
-                login_btn = page.locator('[data-e2e="top-login-button"], a[href*="/login"]')
-                if login_btn.count() == 0:
-                    logged_in = True
-            except:
+                page.wait_for_selector(
+                    'ytd-masthead #avatar-btn, #end #buttons ytd-button-renderer, a[href*="account.google.com"]',
+                    timeout=10000,
+                )
+                # If a Sign in button is present, we are NOT logged in.
+                sign_in = page.locator('a[href*="accounts.google.com"] ytd-button-renderer, #buttons ytd-button-renderer:has-text("Sign in")')
+                logged_in = sign_in.count() == 0
+            except TimeoutError:
                 pass
+            if not logged_in:
+                # Fallback: presence of the "You" / avatar indicates a session
+                try:
+                    if page.locator('ytd-masthead #avatar-btn, #menu #avatar').count() > 0:
+                        logged_in = True
+                except Exception:
+                    pass
+            if logged_in:
+                try:
+                    av = page.locator('ytd-masthead #avatar-btn img, #menu #avatar img').first
+                    if av.count() > 0:
+                        profile_name = (av.get_attribute("alt") or "").strip()
+                except Exception:
+                    pass
+        else:
+            try:
+                page.wait_for_selector(
+                    '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]',
+                    timeout=10000,
+                )
+                logged_in = True
+            except TimeoutError:
+                pass
+            if not logged_in:
+                try:
+                    login_btn = page.locator('[data-e2e="top-login-button"], a[href*="/login"]')
+                    if login_btn.count() == 0:
+                        logged_in = True
+                except Exception:
+                    pass
+
+            if logged_in:
+                try:
+                    page.goto("https://www.tiktok.com/profile", timeout=15000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=10000)
+                    except TimeoutError:
+                        pass
+                    time.sleep(2)
+                    current_url = page.url
+                    if "/@" in current_url:
+                        profile_name = current_url.split("/@")[-1].split("?")[0].split("/")[0]
+                    if not profile_name:
+                        title_el = page.locator('h1[data-e2e="user-title"], h2[data-e2e="user-subtitle"], [data-e2e="user-title"]').first
+                        if title_el.count() > 0:
+                            profile_name = title_el.text_content().strip().lstrip("@")
+                except Exception:
+                    pass
+                try:
+                    page.goto("https://www.tiktok.com", timeout=30000)
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    except TimeoutError:
+                        pass
+                    time.sleep(2)
+                except Exception as e:
+                    print(f"[{username}] warning: could not return to home page: {e}")
 
         if logged_in:
-            # Get the TikTok username by navigating to profile page
-            try:
-                page.goto("https://www.tiktok.com/profile", timeout=15000)
-                try:
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                except TimeoutError:
-                    pass
-                time.sleep(2)
-
-                # The profile page URL redirects to /@username
-                current_url = page.url
-                if "/@" in current_url:
-                    tiktok_username = current_url.split("/@")[-1].split("?")[0].split("/")[0]
-
-                # Fallback: read from page content
-                if not tiktok_username:
-                    title_el = page.locator('h1[data-e2e="user-title"], h2[data-e2e="user-subtitle"], [data-e2e="user-title"]').first
-                    if title_el.count() > 0:
-                        tiktok_username = title_el.text_content().strip().lstrip("@")
-            except:
-                pass
-
-            # FIX: navigate BACK to tiktok.com so the page is left in a good,
-            # known state (prevents stale-page "Screenshot error" after verify)
-            try:
-                page.goto("https://www.tiktok.com", timeout=30000)
-                try:
-                    page.wait_for_load_state("domcontentloaded", timeout=15000)
-                except TimeoutError:
-                    pass
-                time.sleep(2)
-            except Exception as e:
-                print(f"[{username}] warning: could not return to home page: {e}")
-
-            task_msg = f"Session verified - @{tiktok_username}" if tiktok_username else "Session verified"
+            task_msg = f"Session verified - {profile_name}" if profile_name else "Session verified"
             update_account(username, connected=1, status="Connected", current_task=task_msg)
-            print(f"✓ Session verified for {username}" + (f" (TikTok: @{tiktok_username})" if tiktok_username else ""))
+            print(f"✓ Session verified for {username} ({platform})" + (f" : {profile_name}" if profile_name else ""))
             take_screenshot(username)
+            # IMPORTANT: keep the browser alive so the live cam + worker reuse it.
         else:
             update_account(username, connected=0, status="Session expired", current_task="Please update session")
-            print(f"✗ Session expired or invalid for {username}")
-
-        # FIX: We no longer spawn a separate screenshot loop here, nor keep the browser open.
-        # This function is now strictly for verification.
-        
-        # Close the verification browser to free it up for the automation worker
-        try:
-            page.close()
-            context.close()
-            browser.close()
-            pw.stop()
-            del browser_sessions[username]
-        except Exception:
-            pass
+            print(f"✗ Session expired or invalid for {username} ({platform})")
+            # Close the browser so we don't leave a dead session around.
+            try:
+                context.close()
+                session["browser"].close()
+                session["pw"].stop()
+            except Exception:
+                pass
+            browser_sessions.pop(username, None)
 
         return logged_in
 
@@ -1026,8 +1092,120 @@ def download_video_no_watermark(username, video_info):
         return None
 
 
-def generate_caption(video_info, category):
-    """Generate category-aware captions that actually match the content."""
+def _get_video_duration_seconds(path):
+    """Return the exact duration (float seconds) of a video using OpenCV."""
+    try:
+        import cv2
+        cap = cv2.VideoCapture(path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+        cap.release()
+        if fps > 0 and frames > 0:
+            return frames / fps
+    except Exception:
+        pass
+    return 0.0
+
+
+def prepare_video_for_platform(username, file_path, platform):
+    """Return a processed video path sized/trimmed for the target platform.
+
+    For YouTube we FORCE the exact 1080x1920 Shorts resolution (good quality,
+    full HD portrait) and an exact, good duration (YOUTUBE_MIN_SEC..MAX_SEC s):
+      - too short  -> loop the clip until it reaches the minimum length
+      - too long   -> trim to the maximum length at a clean cut
+    For TikTok we keep the original (already a vertical short clip).
+    Skips re-encoding if the file already meets the constraints.
+    """
+    if platform != "YouTube":
+        return file_path
+
+    try:
+        import cv2
+    except Exception as e:
+        print(f"[{username}] cv2 unavailable, uploading original: {e}")
+        return file_path
+
+    update_account(username, current_task="Resizing to exact 1080x1920 Shorts...")
+
+    dur = _get_video_duration_seconds(file_path)
+    target_dur = None
+    if dur > 0:
+        if dur < YOUTUBE_MIN_SEC:
+            target_dur = YOUTUBE_MIN_SEC
+        elif dur > YOUTUBE_MAX_SEC:
+            target_dur = YOUTUBE_MAX_SEC
+
+    safe_user = re.sub(r"[^A-Za-z0-9_-]", "_", username)
+    out_path = os.path.join(DOWNLOADS_DIR, f"{safe_user}_yt_{int(time.time())}.mp4")
+
+    cap = cv2.VideoCapture(file_path)
+    if not cap.isOpened():
+        print(f"[{username}] could not open video for processing")
+        return file_path
+
+    src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    if src_fps <= 0:
+        src_fps = 30.0
+
+    W, H = YOUTUBE_SHORTS_WIDTH, YOUTUBE_SHORTS_HEIGHT
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(out_path, fourcc, src_fps, (W, H))
+
+    # Letterbox/pillarbox preserving aspect ratio, centered, black bars.
+    scale = min(W / src_w, H / src_h)
+    new_w = int(round(src_w * scale))
+    new_h = int(round(src_h * scale))
+    pad_x = (W - new_w) // 2
+    pad_y = (H - new_h) // 2
+
+    max_frames = int(target_dur * src_fps) if target_dur else 0
+    written = 0
+    loop_count = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            # Loop short clips up to the target duration.
+            if target_dur and written < max_frames and loop_count < 50:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                loop_count += 1
+                continue
+            break
+        if target_dur and written >= max_frames:
+            break
+        resized = cv2.resize(frame, (new_w, new_h))
+        canvas = cv2.copyMakeBorder(
+            resized, pad_y, H - new_h - pad_y, pad_x, W - new_w - pad_x,
+            cv2.BORDER_CONSTANT, value=(0, 0, 0),
+        ) if (pad_x or pad_y) else resized
+        # Ensure exact output dimensions (handles odd rounding).
+        if canvas.shape[1] != W or canvas.shape[0] != H:
+            canvas = cv2.resize(canvas, (W, H))
+        writer.write(canvas)
+        written += 1
+
+    cap.release()
+    writer.release()
+
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 10 * 1024:
+        final_dur = _get_video_duration_seconds(out_path)
+        update_account(username, current_task=f"Shorts ready: {W}x{H}, {final_dur:.0f}s")
+        print(f"[{username}] prepared YouTube Short: {out_path} ({W}x{H}, {final_dur:.1f}s)")
+        return out_path
+    print(f"[{username}] video processing failed, uploading original")
+    return file_path
+
+
+def generate_caption(video_info, category, platform="TikTok"):
+    """Generate category-aware captions that actually match the content.
+
+    For YouTube we add #Shorts and write a longer, accurate caption that
+    describes the clip (good for retention + search). For TikTok we keep the
+    shorter, hashtag-forward style.
+    """
     original = (video_info.get("title") or "").strip()
     plain = re.sub(r"#\w+", "", original).strip()
     plain = re.sub(r"\s{2,}", " ", plain)
@@ -1085,12 +1263,62 @@ def generate_caption(video_info, category):
             "Caught in the act 📸",
             plain or "This catch was insane",
         ],
+        "viral clips": [
+            "This clip is blowing up everywhere 🔥",
+            "No way this went viral like that",
+            "POV: you find the best clip on the internet",
+            plain or "This viral clip is insane",
+        ],
+        "funny clips": [
+            "I can't stop laughing 😂",
+            "This is too real",
+            "The accuracy 💀",
+            plain or "This had me dying",
+        ],
+        "scary story animation": [
+            "This scary story animation gave me chills 😱",
+            "POV: the story takes a dark turn...",
+            "Animation horror hits different",
+            plain or "This story animation is wild",
+        ],
+        "fruit story animation": [
+            "This fruit story animation is so wholesome 🍓",
+            "POV: the cutest fruit story ever",
+            "Animation stories always hit different",
+            plain or "This fruit story is adorable",
+        ],
+        "horror animations": [
+            "This horror animation gave me chills 😱",
+            "POV: the demon appears...",
+            "Horror animation hits different",
+            plain or "This horror animation is wild",
+        ],
+        "edits": [
+            "This edit is fire 🔥",
+            "The transition tho…",
+            "Best edit I've seen all day",
+            plain or "This edit goes hard",
+        ],
     }
 
     base = random.choice(templates.get(cat, templates["dance"]))
 
     # Add relevant hashtags
     pool = CATEGORY_HASHTAGS.get(cat, ["#fyp", "#viral", "#trending"])
+
+    if platform == "YouTube":
+        # YouTube Shorts: longer, accurate, searchable caption + #Shorts.
+        extra = ["#Shorts", "#YouTubeShorts", "#viralshorts"]
+        all_tags = list(set(pool + extra))[:8]
+        topic = plain or base
+        caption = (
+            f"{base}\n\n{topic}\n\n"
+            f"Drop a like and subscribe for more {cat.replace(' ', ' ')} "
+            f"shorts every day! 🔔\n\n"
+            f"{' '.join(all_tags)}"
+        )
+        return caption.strip()[:300]
+
     extra = ["#fyp", "#foryou", "#viral"]
     all_tags = list(set(pool + extra))[:6]
 
@@ -1687,40 +1915,242 @@ def upload_video_to_tiktok(username, file_path, caption):
         except: pass
         return False
 
+
+def upload_video_to_youtube(username, file_path, caption, title):
+    """Upload a prepared (1080x1920) Short to YouTube Studio with an accurate,
+    full caption. Selects 'No, it's not made for kids' + public visibility so it
+    publishes as a Short. Returns True on success.
+    """
+    page = _get_page(username)
+    if page is None:
+        print(f"[{username}] No page available for YouTube upload")
+        return False
+
+    SUCCESS = 'text=/uploaded|published|video is live|your video has been|processing|done/i'
+
+    try:
+        print(f"[{username}] === YOUTUBE UPLOAD FLOW ===")
+        update_account(username, current_task="Opening YouTube Studio upload...")
+
+        upload_url_used = None
+        for u in ["https://studio.youtube.com/channel/upload",
+                  "https://www.youtube.com/upload",
+                  "https://studio.youtube.com"]:
+            try:
+                print(f"[{username}] Trying: {u}")
+                page.goto(u, timeout=45000, wait_until="domcontentloaded")
+                time.sleep(random.uniform(3.0, 5.5))
+                take_screenshot(username)
+                if _find_file_input(page) is not None:
+                    print(f"[{username}] ✓ file input found on {u}")
+                    upload_url_used = u
+                    break
+                # Studio dashboard may show the upload button instead
+                try:
+                    page.locator('ytcp-uploads-dialog, ytcp-button#upload-button, button:has-text("CREATE")').first.click(timeout=6000, force=True)
+                    time.sleep(3)
+                    if _find_file_input(page) is not None:
+                        upload_url_used = u
+                        break
+                except Exception:
+                    pass
+            except Exception as g:
+                print(f"[{username}] goto err: {str(g)[:60]}")
+
+        if not upload_url_used:
+            print(f"[{username}] ❌ No file input found on any YouTube upload URL")
+            _save_debug_html(page, "YT_NO_FILE_INPUT", username)
+            take_screenshot(username)
+            return False
+
+        print(f"[{username}] Using YouTube upload page: {upload_url_used}")
+        file_input = _find_file_input(page)
+        if file_input is None:
+            file_input = page.locator('input[type="file"]').first
+        try:
+            file_input.set_input_files(file_path, timeout=30000)
+            print(f"[{username}] ✓ set_input_files succeeded (YouTube)")
+        except Exception as se:
+            print(f"[{username}] YouTube set_input EXCEPTION: {se}")
+            _save_debug_html(page, "YT_SET_INPUT_FAIL", username)
+            return False
+
+        # Wait for processing + the details form to appear
+        print(f"[{username}] Waiting for YouTube processing + details form...")
+        details_ready = False
+        for sec in range(240):  # up to 8 min
+            time.sleep(3)
+            # Title input indicates the details screen is ready
+            title_loc = page.locator('#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], input[placeholder*="Title"]').first
+            if title_loc.count() > 0 and title_loc.is_visible():
+                details_ready = True
+                break
+            if sec % 15 == 0:
+                take_screenshot(username)
+
+        if not details_ready:
+            print(f"[{username}] ⚠ YouTube details form not detected, attempting anyway")
+
+        take_screenshot(username)
+
+        # Title — keep it short & accurate, with #Shorts for discovery.
+        try:
+            if title:
+                t = (title[:58] + " #Shorts") if len(title) <= 58 else (title[:58] + "…")
+            else:
+                t = "Daily Short #Shorts"
+            tl = page.locator('#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], input[placeholder*="Title"]').first
+            if tl.count() > 0:
+                tl.click(timeout=4000)
+                time.sleep(0.3)
+                page.keyboard.press("Control+A")
+                page.keyboard.press("Delete")
+                tl.type(t, delay=25)
+                print(f"[{username}] ✓ YouTube title set: {t}")
+        except Exception as ce:
+            print(f"[{username}] YouTube title EXCEPTION: {ce}")
+
+        # Description — paste the full accurate caption.
+        try:
+            dl = page.locator('#description-textarea, #textbox[label*="Description"], ytcp-mention-textbox[label*="Description"], textarea[placeholder*="Description"]').first
+            if dl.count() > 0:
+                dl.click(timeout=4000)
+                time.sleep(0.3)
+                page.keyboard.press("Control+A")
+                page.keyboard.press("Delete")
+                dl.type(caption, delay=12)
+                print(f"[{username}] ✓ YouTube description set")
+        except Exception as ce:
+            print(f"[{username}] YouTube description EXCEPTION: {ce}")
+
+        take_screenshot(username)
+
+        # Click "Show more" to reveal Made for kids, then set Not made for kids.
+        try:
+            more = page.locator('button:has-text("Show more")').first
+            if more.count() > 0 and more.is_visible():
+                more.click(timeout=4000)
+                time.sleep(1)
+        except Exception:
+            pass
+        try:
+            not_kids = page.locator('tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No")').first
+            if not_kids.count() > 0:
+                not_kids.click(timeout=4000)
+                time.sleep(0.5)
+        except Exception:
+            pass
+
+        # Next -> Next -> Next (Details -> Video elements -> Checks -> Public)
+        for step in range(3):
+            try:
+                nb = page.locator('ytcp-button#next-button, button:has-text("Next")').first
+                if nb.count() > 0 and nb.is_visible():
+                    nb.click(timeout=4000)
+                    time.sleep(random.uniform(1.5, 3.0))
+                    take_screenshot(username)
+            except Exception:
+                pass
+
+        # Set visibility to Public
+        try:
+            public = page.locator('tp-yt-paper-radio-button:has-text("Public"), paper-radio-button:has-text("Public")').first
+            if public.count() > 0:
+                public.click(timeout=4000)
+                time.sleep(0.5)
+        except Exception:
+            pass
+
+        take_screenshot(username)
+        _save_debug_screenshot(page, "yt_pre_publish", username)
+        _save_debug_html(page, "YT_PRE_PUBLISH", username)
+
+        # Click Publish
+        published = False
+        for attempt in range(4):
+            try:
+                pb = page.locator('ytcp-button#publish-button, button:has-text("Publish")').first
+                if pb.count() == 0 or not pb.is_visible():
+                    print(f"[{username}] YouTube publish button not found (attempt {attempt+1})")
+                    time.sleep(4)
+                    continue
+                pb.click(timeout=6000, force=True)
+                print(f"[{username}] YouTube publish clicked (attempt {attempt+1})")
+            except Exception as e:
+                print(f"[{username}] YouTube publish click err: {e}")
+
+            for _ in range(15):
+                time.sleep(3)
+                take_screenshot(username)
+                if page.locator(SUCCESS).count() > 0:
+                    published = True
+                    break
+                try:
+                    body = page.inner_text("body", timeout=2000) or ""
+                    if any(k in body.lower() for k in
+                           ["uploaded", "published", "video is live", "your video has been uploaded",
+                            "is being processed", "done"]):
+                        published = True
+                        break
+                except Exception:
+                    pass
+            if published:
+                break
+            time.sleep(3)
+
+        if published:
+            _save_debug_html(page, "YT_SUCCESS", username)
+            try:
+                page.goto("https://studio.youtube.com", timeout=20000)
+            except Exception:
+                pass
+            return True
+        else:
+            _save_debug_html(page, "YT_FAIL", username)
+            take_screenshot(username)
+            return False
+
+    except Exception as fatal:
+        print(f"[{username}] FATAL YOUTUBE UPLOAD: {fatal}")
+        import traceback
+        traceback.print_exc()
+        _save_debug_html(page, "YT_FATAL", username)
+        take_screenshot(username)
+        return False
+
+
 def _init_worker_browser(username, account):
-    """Initialize a Playwright browser session strictly for the worker thread."""
+    """Initialize a Playwright browser session for the worker thread.
+
+    Reuses the persistent session that `connect_account` already started (so the
+    live cam + worker share one browser), otherwise launches a fresh one from the
+    stored cookies. Works for both TikTok and YouTube.
+    """
+    platform = (account.get("platform") or "TikTok")
+
+    # If connect_account already started a live browser, just reuse it.
     if username in browser_sessions:
+        try:
+            sess = browser_sessions[username]
+            if sess.get("page") is not None and not sess["page"].is_closed():
+                return True
+        except Exception:
+            pass
+        # Stale session — tear down and re-create.
         try:
             browser_sessions[username]["context"].close()
             browser_sessions[username]["browser"].close()
             browser_sessions[username]["pw"].stop()
-        except:
+        except Exception:
             pass
         del browser_sessions[username]
-        
+
     try:
         cookies = json.loads(account["session_data"])
-    except:
+    except Exception:
         return False
 
-    pw = sync_playwright().start()
-    browser = pw.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage"
-        ]
-    )
-    context = browser.new_context(
-        viewport={"width": 1280, "height": 720},
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ),
-        locale="en-US",
-    )
-    
+    session = _start_browser_session(username)
     clean_cookies = []
     for c in cookies:
         if not isinstance(c, dict) or "name" not in c or "value" not in c:
@@ -1728,7 +2158,7 @@ def _init_worker_browser(username, account):
         cleaned = {
             "name": c["name"],
             "value": c["value"],
-            "domain": c.get("domain", ".tiktok.com"),
+            "domain": _cookie_domain_for(c, platform),
             "path": c.get("path", "/"),
             "secure": c.get("secure", False),
             "httpOnly": c.get("httpOnly", False),
@@ -1736,16 +2166,11 @@ def _init_worker_browser(username, account):
         if "sameSite" in c and c["sameSite"] in ["Strict", "Lax", "None"]:
             cleaned["sameSite"] = c["sameSite"]
         clean_cookies.append(cleaned)
-        
-    context.add_cookies(clean_cookies)
-    page = context.new_page()
-    
-    browser_sessions[username] = {
-        "pw": pw,
-        "browser": browser,
-        "context": context,
-        "page": page
-    }
+
+    if not clean_cookies:
+        return False
+
+    session["context"].add_cookies(clean_cookies)
     return True
 
 def _posted_ids_path(username):
@@ -1802,9 +2227,12 @@ def automation_worker(username):
             take_screenshot(username)
 
             category = account.get("category") or "dance"
+            platform = account.get("platform") or "TikTok"
 
             # --- Step 1: search TikTok in the browser ---
-            log(f"[{username}] Step 1: Searching '{category}'")
+            # NOTE: searches ALWAYS happen on TikTok (never YouTube) to source
+            # the clips — both platforms reuse the TikTok search.
+            log(f"[{username}] Step 1: Searching TikTok '{category}' (platform={platform})")
             update_account(username, current_task=f"Step 1: Searching '{category}'...")
 
             page = _get_page(username)
@@ -1839,16 +2267,33 @@ def automation_worker(username):
                 time.sleep(120)
                 continue
 
-            # --- Step 4: generate category-matched caption ---
+            # --- Prepare video for the target platform (YouTube gets exact
+            #     1080x1920 + good duration; TikTok keeps the original clip) ---
+            prepared_file = prepare_video_for_platform(username, video_file, platform)
+
+            # --- Step 4: generate category-matched, platform-aware caption ---
             update_account(username, current_task="Step 4: Generating caption...")
-            caption = generate_caption(video_info, category)
+            caption = generate_caption(video_info, category, platform)
+            title = category
             print(f"[{username}] caption: {caption}")
 
             # --- Steps 5-6: upload & post ---
-            log(f"[{username}] Step 5: Uploading to TikTok...")
-            update_account(username, current_task="Step 5: Uploading to TikTok...")
-            success = upload_video_to_tiktok(username, video_file, caption)
+            if platform == "YouTube":
+                log(f"[{username}] Step 5: Uploading to YouTube Shorts...")
+                update_account(username, current_task="Step 5: Uploading to YouTube Shorts...")
+                success = upload_video_to_youtube(username, prepared_file, caption, title)
+            else:
+                log(f"[{username}] Step 5: Uploading to TikTok...")
+                update_account(username, current_task="Step 5: Uploading to TikTok...")
+                success = upload_video_to_tiktok(username, video_file, caption)
             log(f"[{username}] Upload result: {success}")
+
+            # Clean up the prepared (YouTube) copy if it differs from the original.
+            if prepared_file and prepared_file != video_file and os.path.exists(prepared_file):
+                try:
+                    os.remove(prepared_file)
+                except Exception:
+                    pass
 
             if success:
                 vid = video_info.get("video_id")
@@ -1862,20 +2307,21 @@ def automation_worker(username):
                     last_post=now.strftime("%Y-%m-%d %H:%M"),
                     next_post=next_dt.strftime("%H:%M"),
                     next_post_ts=int(post_cycle_start) + POST_INTERVAL_SECONDS,
-                    current_task=f"Posted! Going to For You Page..."
+                    current_task=f"Posted to {platform}! Browsing feed..."
                 )
 
                 # ======================================================
-                # After posting -> go to For You, heart & scroll (capped
-                # so the full cycle stays ~10 min, then sleep the remainder)
+                # After posting -> browse the native feed to humanize
+                # (TikTok: For You Page. YouTube: Subscriptions/Home).
                 # ======================================================
-                try:
-                    page = _get_page(username)
-                    if page:
-                        log(f"[{username}] Going to For You page to humanize...")
-                        update_account(username, current_task="Browsing For You Page...")
-                        page.goto("https://www.tiktok.com", timeout=25000)
-                        time.sleep(random.uniform(2.5, 4.5))
+                if platform != "YouTube":
+                    try:
+                        page = _get_page(username)
+                        if page:
+                            log(f"[{username}] Going to For You page to humanize...")
+                            update_account(username, current_task="Browsing For You Page...")
+                            page.goto("https://www.tiktok.com", timeout=25000)
+                            time.sleep(random.uniform(2.5, 4.5))
 
                         hearts = 0
                         fyp_start = time.time()
@@ -1940,8 +2386,68 @@ def automation_worker(username):
 
                         log(f"[{username}] Humanized on FYP for {int((time.time()-fyp_start)/60)}min — liked {hearts} videos")
                         update_account(username, current_task=f"Liked {hearts} videos on FYP")
-                except Exception as e:
-                    log(f"[{username}] FYP humanize error: {e}")
+                    except Exception as e:
+                        log(f"[{username}] FYP humanize error: {e}")
+                else:
+                    # YouTube: browse the Subscriptions feed and watch a few Shorts.
+                    try:
+                        page = _get_page(username)
+                        if page:
+                            log(f"[{username}] Going to YouTube feed to humanize...")
+                            update_account(username, current_task="Browsing YouTube feed...")
+                            page.goto("https://www.youtube.com/feed/subscriptions", timeout=25000)
+                            time.sleep(random.uniform(2.5, 4.5))
+
+                        watched = 0
+                        yt_start = time.time()
+                        yt_budget = max(60, POST_INTERVAL_SECONDS - 150)
+                        while time.time() - yt_start < yt_budget:
+                            try:
+                                if random.random() < 0.12:
+                                    page.mouse.wheel(0, -random.randint(120, 350))
+                                else:
+                                    page.mouse.wheel(0, random.randint(250, 820))
+                                time.sleep(random.uniform(1.0, 3.5))
+
+                                if random.random() < 0.4:
+                                    try:
+                                        v = page.locator('a#video-title, ytd-video-renderer a#video-title, a[title]').first
+                                        if v.count() > 0 and v.is_visible():
+                                            v.click(timeout=2000)
+                                            time.sleep(random.uniform(6, 18))  # watch
+                                            try:
+                                                lb = page.locator('button[aria-label*="Like"], ytd-toggle-button-renderer[is-icon-button] #button').first
+                                                if lb.count() > 0 and lb.is_visible() and random.random() < 0.7:
+                                                    lb.click(timeout=1500)
+                                                    watched += 1
+                                            except Exception:
+                                                pass
+                                            page.goto("https://www.youtube.com/feed/subscriptions", timeout=20000)
+                                            time.sleep(random.uniform(1.5, 3.0))
+                                    except Exception:
+                                        pass
+                                else:
+                                    if random.random() < 0.5:
+                                        try:
+                                            like_btn = page.locator('button[aria-label*="Like"], ytd-toggle-button-renderer[is-icon-button] #button').first
+                                            if like_btn.count() > 0 and like_btn.is_visible():
+                                                like_btn.click(timeout=1500)
+                                                watched += 1
+                                                time.sleep(random.uniform(0.5, 1.8))
+                                        except Exception:
+                                            pass
+
+                                if random.random() < 0.22:
+                                    time.sleep(random.uniform(4.0, 9.0))
+                                if random.random() < 0.15:
+                                    take_screenshot(username)
+                            except Exception:
+                                time.sleep(2)
+
+                        log(f"[{username}] Humanized on YouTube for {int((time.time()-yt_start)/60)}min — liked {watched} videos")
+                        update_account(username, current_task=f"Liked {watched} videos on YouTube")
+                    except Exception as e:
+                        log(f"[{username}] YouTube humanize error: {e}")
 
                 # Accurate wait: sleep ONLY the remaining time until exactly
                 # POST_INTERVAL_SECONDS since the post. The cycle then repeats
@@ -2061,391 +2567,6 @@ def logout_account(username):
         current_task="Logged out",
     )
     return True
-
-
-def _must_click(page, labels_or_selectors, task="", max_attempts=8, verify_opened=None):
-    norm = [l.lower().strip() for l in labels_or_selectors if l and not l.startswith(('[', 'button:', 'a:', 'input[', 'div[', 'span[', '#', '.'))]
-    selectors = [s for s in labels_or_selectors if s and (s.startswith('[') or s.startswith('button:') or s.startswith('a:') or s.startswith('input[') or s.startswith('div[') or s.startswith('span[') or s.startswith('#') or s.startswith('.'))]
-    
-    for attempt in range(max_attempts):
-        clicked = False
-        
-        for sel in selectors:
-            try:
-                if page.locator(sel).count() > 0:
-                    el = page.locator(sel).first
-                    if el.is_visible(timeout=2000):
-                        el.scroll_into_view_if_needed(timeout=2000)
-                        try:
-                            page.evaluate("""(el) => el.click()""", el)
-                            clicked = True
-                            break
-                        except Exception:
-                            try:
-                                el.click(timeout=6000, force=True)
-                                clicked = True
-                                break
-                            except Exception:
-                                continue
-            except Exception:
-                continue
-        
-        if not clicked and norm:
-            for sel in ['button', 'a', '[role="button"]', '[role="link"]', 'div', 'span']:
-                try:
-                    els = page.locator(sel).all()
-                except Exception:
-                    continue
-                for el in els[:300]:
-                    try:
-                        if not el.is_visible(timeout=800):
-                            continue
-                        txt = (el.inner_text(timeout=800) or "").strip().lower()
-                        if any(n in txt for n in norm):
-                            el.scroll_into_view_if_needed(timeout=2000)
-                            try:
-                                page.evaluate("""(el) => el.click()""", el)
-                                clicked = True
-                            except Exception:
-                                try:
-                                    el.click(timeout=6000, force=True)
-                                    clicked = True
-                                except Exception:
-                                    continue
-                            if clicked:
-                                break
-                    except Exception:
-                        continue
-                if clicked:
-                    break
-        
-        if clicked:
-            time.sleep(1)
-            try:
-                page.wait_for_load_state("domcontentloaded", timeout=5000)
-            except Exception:
-                pass
-            time.sleep(1)
-            
-            if verify_opened:
-                try:
-                    if verify_opened(page):
-                        log(f"[{task}] Clicked '{labels_or_selectors[0]}' and verified opened on attempt {attempt+1}")
-                        return True
-                except Exception:
-                    pass
-            else:
-                log(f"[{task}] Clicked '{labels_or_selectors[0]}' on attempt {attempt+1}")
-                return True
-        
-def login_with_google(username, email=""):
-    account = get_account(username)
-    if not account:
-        return False
-
-    email_to_use = (email or account.get("gmail") or "").strip().lower()
-    if not email_to_use.endswith("@gmail.com"):
-        update_account(username, status="Need Gmail", current_task="Enter a @gmail.com address")
-        return False
-
-    update_account(username, status="Google login", current_task="Starting browser...")
-    try:
-        pw = sync_playwright().start()
-        browser = pw.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-        )
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            locale="en-US",
-        )
-        page = context.new_page()
-        browser_sessions[username] = {"pw": pw, "browser": browser, "context": context, "page": page}
-        log(f"[{username}] Google login: browser ready")
-
-        page.goto("https://www.tiktok.com", timeout=30000)
-        page.wait_for_load_state("domcontentloaded", timeout=15000)
-        time.sleep(3)
-        take_screenshot(username)
-
-        update_account(username, current_task="Dismissing popups...")
-        for _ in range(5):
-            try:
-                page.keyboard.press("Escape")
-                page.evaluate("""() => {
-                    document.querySelectorAll('[role="dialog"], .modal, .overlay, [class*="cookie"], [class*="consent"], [class*="age-gate"]').forEach(el => {
-                        el.remove();
-                    });
-                }""")
-            except Exception:
-                pass
-            time.sleep(1)
-
-        update_account(username, current_task="Clicking Log in...")
-        on_google = False
-        for attempt in range(30):
-            try:
-                page.evaluate("""() => {
-                    const btn = document.getElementById('top-right-action-bar-login-button');
-                    if (btn) {
-                        btn.scrollIntoView({block: 'center'});
-                        btn.click();
-                        return 'clicked_id';
-                    }
-                    const buttons = [...document.querySelectorAll('button, a, [role="button"]')];
-                    const loginBtn = buttons.find(el => el.textContent.trim().toLowerCase() === 'log in');
-                    if (loginBtn) {
-                        loginBtn.scrollIntoView({block: 'center'});
-                        loginBtn.click();
-                        return 'clicked_text';
-                    }
-                    return 'not_found';
-                }""")
-                log(f"[{username}] Log in: JS click attempt {attempt+1}")
-            except Exception as e:
-                log(f"[{username}] Log in click err attempt {attempt+1}: {e}")
-            time.sleep(2)
-            try:
-                page.wait_for_load_state("domcontentloaded", timeout=3000)
-            except Exception:
-                pass
-            if "accounts.google.com" in page.url:
-                log(f"[{username}] Log in: redirected to Google on attempt {attempt+1}")
-                on_google = True
-                break
-            if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url:
-                log(f"[{username}] Log in: login UI detected on attempt {attempt+1}")
-                break
-            take_screenshot(username)
-        time.sleep(3)
-        take_screenshot(username)
-
-        if not on_google:
-            update_account(username, current_task="Waiting for login modal...")
-            login_frame = None
-            for _ in range(45):
-                try:
-                    frames = page.frames
-                    for frame in frames:
-                        try:
-                            if frame.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"], button:has-text("Continue with Google")').count() > 0:
-                                login_frame = frame
-                                log(f"[{username}] Found login modal in iframe: {frame.name}")
-                                break
-                        except Exception:
-                            continue
-                    if login_frame:
-                        break
-                    if page.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"], [data-e2e="channel-item"]').count() > 0 or "/login" in page.url or "accounts.google.com" in page.url:
-                        break
-                except Exception:
-                    pass
-                time.sleep(1)
-            time.sleep(3)
-            take_screenshot(username)
-
-            update_account(username, current_task="Clicking Continue with Google...")
-            target = login_frame or page
-            for attempt in range(30):
-                clicked = False
-                
-                target.evaluate("""() => {
-                    document.querySelectorAll('[role="dialog"], .modal, .overlay, [class*="cookie"], [class*="consent"], [class*="age-gate"], [class*="login-modal"], [class*="modal"], [aria-modal="true"]').forEach(el => {
-                        el.style.display = 'none';
-                        el.style.visibility = 'hidden';
-                        el.style.opacity = '0';
-                        el.setAttribute('aria-hidden', 'true');
-                    });
-                }""")
-                time.sleep(1)
-                
-                try:
-                    btn = target.locator('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50')
-                    if btn.count() > 0:
-                        box = btn.first.bounding_box(timeout=2000)
-                        log(f"[{username}] exact selector bbox: {box}")
-                        if box:
-                            x = box['x'] + box['width'] / 2
-                            y = box['y'] + box['height'] / 2
-                            page.mouse.click(x, y)
-                            log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
-                            clicked = True
-                except Exception as e:
-                    log(f"[{username}] exact selector err: {e}")
-                
-                if not clicked:
-                    try:
-                        btn = target.get_by_role("link", name="Continue with Google").first
-                        box = btn.bounding_box(timeout=2000)
-                        log(f"[{username}] link role bbox: {box}")
-                        if box:
-                            x = box['x'] + box['width'] / 2
-                            y = box['y'] + box['height'] / 2
-                            page.mouse.click(x, y)
-                            log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
-                            clicked = True
-                    except Exception as e:
-                        log(f"[{username}] link role err: {e}")
-                
-                if not clicked:
-                    try:
-                        items = target.locator('[data-e2e="channel-item"]').all()
-                        log(f"[{username}] channel-item count: {len(items)}")
-                        for item in items:
-                            try:
-                                txt = item.inner_text(timeout=1000).strip()
-                                if "Continue with Google" in txt:
-                                    box = item.bounding_box(timeout=2000)
-                                    log(f"[{username}] channel-item bbox: {box}")
-                                    if box:
-                                        x = box['x'] + box['width'] / 2
-                                        y = box['y'] + box['height'] / 2
-                                        page.mouse.click(x, y)
-                                        log(f"[{username}] Continue with Google: mouse click at ({x:.0f},{y:.0f}) attempt {attempt+1}")
-                                        clicked = True
-                                        break
-                            except Exception:
-                                continue
-                    except Exception as e:
-                        log(f"[{username}] channel-item err: {e}")
-                
-                if not clicked:
-                    try:
-                        target.evaluate("""() => {
-                            const btn = document.querySelector('#loginContainer > div.css-1jwe9yn-5b89d02d--DivLoginContainer.eb92qk53 > div > div > div > div > div:nth-child(4) > div.css-1jti10m-5b89d02d--DivBoxContainer.e17788p50');
-                            if (btn) {
-                                btn.scrollIntoView({block: 'center'});
-                                btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                                btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                                btn.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                                return 'clicked';
-                            }
-                            const items = [...document.querySelectorAll('[data-e2e="channel-item"]')];
-                            const googleBtn = items.find(el => el.textContent.includes('Continue with Google'));
-                            if (googleBtn) {
-                                googleBtn.scrollIntoView({block: 'center'});
-                                googleBtn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                                googleBtn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                                googleBtn.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                                return 'clicked_channel';
-                            }
-                            return 'not_found';
-                        }""")
-                        log(f"[{username}] Continue with Google: JS fallback click attempt {attempt+1}")
-                        clicked = True
-                    except Exception as e:
-                        log(f"[{username}] JS fallback err attempt {attempt+1}: {e}")
-                
-                if not clicked:
-                    try:
-                        btn = target.get_by_role("link", name="Continue with Google").first
-                        btn.focus(timeout=2000)
-                        page.keyboard.press("Enter")
-                        log(f"[{username}] Continue with Google: focus+Enter attempt {attempt+1}")
-                        clicked = True
-                    except Exception as e:
-                        log(f"[{username}] focus+Enter err attempt {attempt+1}: {e}")
-                
-                time.sleep(4)
-                try:
-                    target.wait_for_load_state("domcontentloaded", timeout=8000)
-                except Exception:
-                    pass
-                try:
-                    current_url = page.url
-                except Exception:
-                    current_url = "unknown"
-                log(f"[{username}] Page URL after click: {current_url}")
-                if ("accounts.google.com" in current_url or 
-                    target.locator('input[type="email"], input[name="identifier"]').count() > 0 or
-                    target.locator('#loginContainer, [data-e2e="login-modal"], [class*="LoginContainer"], [class*="login-modal"]').count() > 0):
-                    log(f"[{username}] Continue with Google: success on attempt {attempt+1}")
-                    break
-                take_screenshot(username)
-            time.sleep(4)
-            take_screenshot(username)
-
-        update_account(username, current_task="Typing Gmail...")
-        try:
-            email_input = page.locator('input[type="email"], input[name="identifier"], input[type="text"]').first
-            email_input.fill(email_to_use, timeout=10000)
-            log(f"[{username}] Google login: filled email")
-        except Exception as e:
-            log(f"[{username}] fill email err: {e}")
-        time.sleep(2)
-        _must_click(page, [
-            'button:has-text("Next")',
-            'button:has-text("Continue")',
-            'input[type="submit"]',
-            "next", "continue"
-        ], task=username)
-        time.sleep(3)
-        take_screenshot(username)
-
-        update_account(username, current_task="Navigating recovery flow...")
-        for i in range(15):
-            forgot_ok = _must_click(page, [
-                'button:has-text("Forgot password")',
-                'a:has-text("Forgot password")',
-                '[data-e2e="forgot-password-button"]',
-                "forgot password", "forgot your password", "need help", "trouble logging in", "forgot"
-            ], task=username)
-            if forgot_ok:
-                log(f"[{username}] Google login: clicked forgot ({i})")
-                time.sleep(3)
-                page.wait_for_load_state("domcontentloaded", timeout=10000)
-                take_screenshot(username)
-
-            another_ok = _must_click(page, [
-                'button:has-text("Try another way")',
-                'a:has-text("Try another way")',
-                '[data-e2e="try-another-way-button"]',
-                "try another way", "try another method", "another way", "more options", "use another account"
-            ], task=username)
-            if another_ok:
-                log(f"[{username}] Google login: clicked try another way ({i})")
-                time.sleep(3)
-                page.wait_for_load_state("domcontentloaded", timeout=10000)
-                take_screenshot(username)
-
-            if re.search(r"gmail|approve|verify.*device|enter.*code|1\s*[-–]\s*99", page.content(), re.I):
-                break
-
-        update_account(username, status="Google login", current_task="Waiting for you to approve on your phone...")
-
-        logged_in = False
-        for _ in range(300):
-            try:
-                if page.locator('[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]').count() > 0:
-                    logged_in = True
-                    break
-                if "/login" not in page.url and page.locator('[data-e2e="top-login-button"], a[href*="/login"]').count() == 0:
-                    logged_in = True
-                    break
-            except Exception:
-                pass
-            time.sleep(5)
-
-        if logged_in:
-            cookies = context.cookies()
-            update_account(username, session_data=json.dumps(cookies), connected=1,
-                          status="Connected", current_task="Ready")
-            log(f"[{username}] Google login SUCCESS")
-            return True
-        else:
-            update_account(username, status="Google login failed",
-                          current_task="Timed out waiting for approval")
-            return False
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        update_account(username, status="Google login error",
-                      current_task=f"Error: {str(e)[:60]}")
-        return False
 
 
 def delete_account_session(username):
