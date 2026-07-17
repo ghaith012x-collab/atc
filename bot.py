@@ -2278,19 +2278,34 @@ def _handle_youtube_auth_dialog(page, username=""):
             print(f"[{username}] ⚠ verify Next not found to click")
             update_account(username, current_task="Verify that it's you — enter code in live cam")
             return "needs_code"
-        cx, cy = pick["cx"], pick["cy"]
         _clear_text_selection(page)
         res = {"ok": False}
-        if 0 < cx < pick["vw"] and 0 < cy < pick["vh"]:
+        # Use a REAL Playwright locator click on the actual Next button. Playwright
+        # clicks the element's true center with a trusted event and force=True
+        # bypasses the overlay's actionability/backdrop hit-testing (so we never
+        # land on the backdrop and drag a text selection). This is the reliable
+        # method that actually fires Polymer's click handler.
+        button_sels = [
+            'ytcp-auth-confirmation-dialog #confirm-button',
+            'ytcp-auth-confirmation-dialog #next-button',
+            '#confirm-button', '#next-button',
+            'ytcp-button:has-text("Next")', 'tp-yt-paper-button:has-text("Next")',
+            'button:has-text("Next")',
+        ]
+        for sel in button_sels:
             try:
-                page.mouse.click(cx, cy, delay=60, button="left")
-                res = {"ok": True, "id": pick["id"], "cx": cx, "cy": cy}
-            except Exception as me:
-                print(f"[{username}] verify mouse click err: {me}")
+                b = page.locator(sel).first
+                if b.count() > 0 and b.is_visible() and not b.is_disabled():
+                    b.click(timeout=5000, force=True, no_wait_after=True)
+                    res = {"ok": True, "id": pick["id"], "cx": pick["cx"], "cy": pick["cy"]}
+                    break
+            except Exception as e:
+                print(f"[{username}] verify locator click '{sel}' failed: {str(e)[:60]}")
+                continue
         if not res.get("ok"):
-            # Fallback: trusted JS click on the host element.
+            # Last-resort: trusted JS click on the host element.
             try:
-                page.evaluate("""(sel) => {
+                page.evaluate("""() => {
                     const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
                     if (!dlg) return;
                     let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
@@ -2298,7 +2313,7 @@ def _handle_youtube_auth_dialog(page, username=""):
                         .find(el => (el.textContent||'').trim().toLowerCase()==='next');
                     if (b) b.click();
                 }""")
-                res = {"ok": True, "id": pick["id"], "cx": cx, "cy": cy}
+                res = {"ok": True, "id": pick["id"], "cx": pick["cx"], "cy": pick["cy"]}
             except Exception:
                 pass
         if res and res.get("ok"):
