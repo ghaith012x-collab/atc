@@ -2259,18 +2259,48 @@ def _handle_youtube_auth_dialog(page, username=""):
             update_account(username, current_task="Verify that it's you — enter the code in live cam")
             return "needs_code"
 
-        # Enabled Next -> click exactly once (overlay-proof JS click).
-        res = page.evaluate("""() => {
+        # Enabled Next -> click exactly once. Synthetic JS .click() on the
+        # <ytcp-button> host is IGNORED by Polymer (untrusted, shadow DOM), so we
+        # use a REAL trusted page.mouse.click() at the button's viewport center.
+        pick = page.evaluate("""() => {
             const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+            if (!dlg) return {found:false};
             const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
                 || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
                     .find(el => (el.textContent||'').trim().toLowerCase()==='next' && !el.disabled);
-            if (!b || b.disabled) return {ok:false, reason:'no enabled button'};
+            if (!b) return {found:false};
             const r = b.getBoundingClientRect();
-            b.click();
-            return {ok:true, id:b.id||'', cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
+            return {found:true, id:b.id||'', text:(b.textContent||'').trim().slice(0,30),
+                    cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2),
+                    vw:window.innerWidth, vh:window.innerHeight};
         }""")
+        if not (pick and pick.get("found")):
+            print(f"[{username}] ⚠ verify Next not found to click")
+            update_account(username, current_task="Verify that it's you — enter code in live cam")
+            return "needs_code"
+        cx, cy = pick["cx"], pick["cy"]
         _clear_text_selection(page)
+        res = {"ok": False}
+        if 0 < cx < pick["vw"] and 0 < cy < pick["vh"]:
+            try:
+                page.mouse.click(cx, cy, delay=60, button="left")
+                res = {"ok": True, "id": pick["id"], "cx": cx, "cy": cy}
+            except Exception as me:
+                print(f"[{username}] verify mouse click err: {me}")
+        if not res.get("ok"):
+            # Fallback: trusted JS click on the host element.
+            try:
+                page.evaluate("""(sel) => {
+                    const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+                    if (!dlg) return;
+                    let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
+                    if (!b) b = [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
+                        .find(el => (el.textContent||'').trim().toLowerCase()==='next');
+                    if (b) b.click();
+                }""")
+                res = {"ok": True, "id": pick["id"], "cx": cx, "cy": cy}
+            except Exception:
+                pass
         if res and res.get("ok"):
             print(f"[{username}] ✓ clicked verify-dialog Next <#{res['id']}> at ({res['cx']},{res['cy']})")
             _log_event(username, "Verify dialog: clicked Next")
