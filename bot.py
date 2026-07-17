@@ -878,6 +878,14 @@ def connect_account(username):
         profile_name = ""
 
         if platform == "YouTube":
+            # Google-login method: drive the Google sign-in flow instead of
+            # relying on pasted cookies. Keep the browser open for the live cam.
+            if (account.get("login_method") == "google") and (account.get("email") or "").strip():
+                google_login_youtube(username)
+                # google_login_youtube keeps the session alive for recovery;
+                # return here so we don't close the browser / mark expired.
+                return True
+
             # Logged-in YouTube shows the avatar / "You" menu.
             try:
                 page.wait_for_selector(
@@ -1005,6 +1013,213 @@ def connect_account(username):
         traceback.print_exc()
         update_account(username, status="Error", current_task=f"Error: {str(e)[:50]}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Google login for YouTube (email + "Forgot password" -> "Try another way")
+# ---------------------------------------------------------------------------
+
+def _glogin_click(page, selectors, timeout=8000):
+    """Click the first matching visible element from a list of CSS selectors.
+    Returns the selector that worked, or None."""
+    for sel in selectors:
+        try:
+            el = page.locator(sel).first
+            if el.count() > 0 and el.is_visible(timeout=2000):
+                el.click(timeout=timeout, force=True)
+                return sel
+        except Exception:
+            continue
+    return None
+
+
+def _glogin_fill(page, selectors, value, timeout=8000):
+    """Type `value` into the first matching visible input. Returns True on success."""
+    for sel in selectors:
+        try:
+            el = page.locator(sel).first
+            if el.count() > 0 and el.is_visible(timeout=2000):
+                el.click(timeout=3000, force=True)
+                time.sleep(0.3)
+                el.fill(value, timeout=timeout)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def google_login_youtube(username):
+    """Log into YouTube via Google using the account's stored Gmail.
+
+    Flow:
+      1) Load youtube.com
+      2) Click the "Sign in" button (the yt-touch-feedback-shape element)
+      3) On the Google account screen, type the Gmail and click "Next"/"Log in"
+      4) Click "Forgot password"
+      5) Click "Try another way"
+
+    The bot then stops and waits — recovery is handled by the user in the live
+    cam (enter code / confirm on phone, etc.). We NEVER hammer the buttons.
+    """
+    account = get_account(username)
+    if not account:
+        print(f"[{username}] google_login_youtube: account not found")
+        return False
+
+    email = (account.get("email") or "").strip()
+    password = (account.get("password") or "").strip()
+    if not email:
+        update_account(username, status="Google login failed", current_task="No Gmail set — add it in the dashboard")
+        print(f"[{username}] google_login_youtube: no email configured")
+        return False
+
+    update_account(username, status="Google login", current_task="Loading YouTube...")
+    print(f"[{username}] === GOOGLE LOGIN (YouTube) ===")
+    _log_event(username, "Google login: starting")
+
+    session = None
+    try:
+        session = _start_browser_session(username, account)
+        page = session["page"]
+        context = session["context"]
+
+        # 1) Load YouTube.
+        page.goto("https://www.youtube.com", timeout=45000, wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass
+        time.sleep(random.uniform(2.0, 3.5))
+        take_screenshot(username)
+
+        # 2) Click the "Sign in" button. The user-supplied target is the
+        #    yt-touch-feedback-shape inside the masthead's sign-in button. We
+        #    also accept the standard Google Account link as a fallback.
+        signin_selectors = [
+            '#buttons ytd-button-renderer yt-button-shape a yt-touch-feedback-shape',
+            '#buttons ytd-button-renderer yt-button-shape a',
+            '#buttons ytd-button-renderer:has-text("Sign in")',
+            'a[href*="accounts.google.com"] ytd-button-renderer',
+            'a[href*="accounts.google.com"]',
+            'ytd-masthead a[aria-label*="Sign in" i]',
+            'ytd-masthead #end #buttons a',
+        ]
+        clicked = _glogin_click(page, signin_selectors, timeout=10000)
+        if not clicked:
+            # Last resort: anything that looks like a sign-in affordance.
+            clicked = _glogin_click(page, [
+                'a:has-text("Sign in")', 'button:has-text("Sign in")',
+                'yt-button-shape:has-text("Sign in")',
+            ])
+        print(f"[{username}] Google login: sign-in click -> {clicked}")
+        update_account(username, current_task="Clicked Sign in — Google account screen")
+        time.sleep(random.uniform(2.5, 4.0))
+        take_screenshot(username)
+
+        # 3) We are now on the Google account chooser / identifier page.
+        #    Fill the email (identifier) field and submit.
+        #    Detect whether we are on accounts.google.com or still on YouTube.
+        email_selectors = [
+            'input[type="email"]',
+            'input[name="identifier"]',
+            'input#identifierId',
+            'input[autocomplete="username"]',
+            'input[aria-label*="Email" i]',
+            'input[aria-label*="phone" i]',
+        ]
+        # Some flows show an account chip instead of an empty email field.
+        if _glogin_fill(page, email_selectors, email, timeout=10000):
+            print(f"[{username}] Google login: typed email {email[:3]}***")
+            update_account(username, current_task="Typed Gmail — clicking Next")
+            # Click Next / Log in / Continue.
+            _glogin_click(page, [
+                '#identifierNext button',
+                'button:has-text("Next")',
+                'button:has-text("Log in")',
+                'button:has-text("Continue")',
+                'input[type="submit"]',
+            ])
+            time.sleep(random.uniform(2.5, 4.0))
+            take_screenshot(username)
+        else:
+            print(f"[{username}] Google login: no email field (account may already be chosen)")
+            update_account(username, current_task="Google account screen — no email field")
+
+        # 4) If a password step appears, the user asked us to click
+        #    "Forgot password" then "Try another way".
+        #    We only do this if a password field is present; otherwise we just
+        #    stop and wait (the user completes verification in the live cam).
+        password_selectors = [
+            'input[type="password"]',
+            'input[name="password"]',
+            'input[type="password"][autocomplete="current-password"]',
+        ]
+        has_password = False
+        for sel in password_selectors:
+            try:
+                el = page.locator(sel).first
+                if el.count() > 0 and el.is_visible(timeout=1500):
+                    has_password = True
+                    break
+            except Exception:
+                continue
+
+        if has_password:
+            print(f"[{username}] Google login: password step detected")
+            update_account(username, current_task="Password step — clicking 'Forgot password'")
+            # Type the password if we have one (some recovery flows need it),
+            # then click "Forgot password".
+            if password:
+                _glogin_fill(page, password_selectors, password, timeout=8000)
+            forgot = _glogin_click(page, [
+                'button:has-text("Forgot password")',
+                'div:has-text("Forgot password")',
+                'a:has-text("Forgot password")',
+            ])
+            print(f"[{username}] Google login: forgot-password click -> {forgot}")
+            time.sleep(random.uniform(2.0, 3.5))
+            take_screenshot(username)
+            update_account(username, current_task="Clicked 'Forgot password' — looking for 'Try another way'")
+            # Click "Try another way".
+            tried = _glogin_click(page, [
+                'button:has-text("Try another way")',
+                'div:has-text("Try another way")',
+                'a:has-text("Try another way")',
+            ])
+            print(f"[{username}] Google login: try-another-way click -> {tried}")
+            time.sleep(random.uniform(2.0, 3.5))
+            take_screenshot(username)
+            update_account(username, current_task="Clicked 'Try another way' — finish recovery in live cam")
+            _log_event(username, "Google login: reached 'Try another way'")
+
+        else:
+            # Either an account was already chosen, or a code/verification step
+            # is showing. Stop and let the user handle it in the live cam.
+            update_account(username, current_task="Google login awaiting your action (live cam)")
+            _log_event(username, "Google login: awaiting user action")
+
+        # Keep the browser alive so the live cam shows the current state and the
+        # user can finish recovery. Do NOT auto-close.
+        return True
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        update_account(username, status="Google login error", current_task=f"Error: {str(e)[:60]}")
+        _log_event(username, f"Google login error: {e}")
+        return False
+    finally:
+        # Leave the session open for the live cam; only clean up on total failure
+        # if we never managed to start a browser.
+        if session is None:
+            try:
+                if username in browser_sessions:
+                    browser_sessions[username]["context"].close()
+                    browser_sessions[username]["browser"].close()
+                    browser_sessions[username]["pw"].stop()
+            except Exception:
+                pass
+            browser_sessions.pop(username, None)
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ from database import init_db, get_all_accounts, get_account, update_account, add
 from bot import (
     connect_account, start_automation, stop_automation,
     delete_account_session, logout_account,
+    google_login_youtube,
     screenshots, browser_sessions, take_screenshot
 )
 
@@ -53,6 +54,12 @@ def add_new_account():
         username = "@" + username
 
     if add_account(username, category, platform):
+        # Store optional Google login credentials if provided.
+        email = (data.get("email") or "").strip()
+        password = (data.get("password") or "").strip()
+        login_method = (data.get("login_method") or "cookie").strip()
+        if email or password:
+            update_account(username, email=email, password=password, login_method=login_method)
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Account already exists"})
 
@@ -78,7 +85,12 @@ def save_session(username):
             return jsonify({"success": False, "error": "Invalid cookie format. Expected array of {name, value, domain} objects."})
             
         # Save to DB
-        update_account(username, session_data=session_json, status="Session saved", current_task="Ready to connect")
+        email = (data.get("email") or "").strip()
+        password = (data.get("password") or "").strip()
+        kwargs = dict(session_data=session_json, status="Session saved", current_task="Ready to connect")
+        if email or password:
+            kwargs.update(email=email, password=password, login_method=(data.get("login_method") or "cookie").strip())
+        update_account(username, **kwargs)
         
         # Connect to verify
         def connect_thread():
@@ -89,6 +101,30 @@ def save_session(username):
         
     except json.JSONDecodeError:
         return jsonify({"success": False, "error": "Invalid JSON format"})
+
+
+@app.route("/api/google_login/<path:username>", methods=["POST"])
+def google_login(username):
+    data = request.json or {}
+    email = (data.get("email") or "").strip()
+    password = (data.get("password") or "").strip()
+
+    account = get_account(username)
+    if not account:
+        return jsonify({"success": False, "error": "Account not found"})
+    if account.get("platform") != "YouTube":
+        return jsonify({"success": False, "error": "Google login is only for YouTube accounts"})
+
+    # Persist credentials and mark login method.
+    update_account(username, email=email, password=password, login_method="google",
+                   status="Google login", current_task="Starting Google login...")
+    if not email:
+        return jsonify({"success": False, "error": "Enter the Gmail address"})
+
+    def login_thread():
+        google_login_youtube(username)
+    threading.Thread(target=login_thread, daemon=True).start()
+    return jsonify({"success": True, "message": "Google login started..."})
 
 
 @app.route("/api/start/<path:username>", methods=["POST"])

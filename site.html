@@ -117,7 +117,19 @@
                 <option value="story">Story Animation</option>
                 <option value="memes">Memes</option>
             </select>
+            <select id="new-platform">
+                <option value="TikTok">TikTok</option>
+                <option value="YouTube">YouTube</option>
+            </select>
             <button class="btn-primary" onclick="addAccount()">Add Account</button>
+        </div>
+        <div class="row" style="margin-top:10px;">
+            <input type="email" id="new-email" placeholder="Gmail (for YouTube Google login)" style="flex:1;min-width:200px;">
+            <input type="password" id="new-password" placeholder="Password (optional)" style="flex:1;min-width:160px;">
+            <select id="new-login-method">
+                <option value="cookie">Login: Cookie session</option>
+                <option value="google">Login: Google (email)</option>
+            </select>
         </div>
     </div>
 
@@ -169,15 +181,27 @@
         <!-- Session Panel (disconnected) -->
         {% if not acc.connected %}
         <div class="session-panel" id="session-panel-{{ acc.username }}">
-            <h4>Paste TikTok Session</h4>
+            <h4>Paste {{ 'YouTube' if acc.platform == 'YouTube' else 'TikTok' }} Session (optional)</h4>
             <textarea
                 id="session-input-{{ acc.username }}"
-                placeholder='[{"name":"sessionid","value":"...","domain":".tiktok.com"},...]'
+                placeholder='[{"name":"sessionid","value":"...","domain":".{{ "youtube.com" if acc.platform == "YouTube" else "tiktok.com" }}"},...]'
             ></textarea>
-            <div class="hint">Export cookies from your browser using an extension like "EditThisCookie" or "Cookie-Editor" on tiktok.com, then paste the JSON here.</div>
+            <div class="hint">Export cookies from your browser (EditThisCookie / Cookie-Editor) and paste the JSON here. For YouTube you can instead use Google login below.</div>
             <div class="btn-row">
                 <button class="btn-primary" onclick="saveSession('{{ acc.username }}')">Save Session</button>
             </div>
+
+            {% if acc.platform == 'YouTube' %}
+            <h4 style="margin-top:16px;">Google Login (YouTube)</h4>
+            <div class="row" style="flex-direction:column;align-items:stretch;gap:8px;">
+                <input type="email" id="gl-email-{{ acc.username }}" placeholder="Gmail" style="width:100%;">
+                <input type="password" id="gl-password-{{ acc.username }}" placeholder="Password (optional)" style="width:100%;">
+            </div>
+            <div class="btn-row">
+                <button class="btn-primary" onclick="googleLogin('{{ acc.username }}')">Google Login</button>
+            </div>
+            <div class="hint">Loads YouTube, clicks Sign in, types your Gmail, clicks Log in, then "Forgot password" → "Try another way". Finish recovery in the live cam.</div>
+            {% endif %}
         </div>
         {% else %}
         <!-- Connected panel -->
@@ -243,11 +267,15 @@
         function addAccount() {
             const username = document.getElementById('new-username').value.trim();
             const category = document.getElementById('new-category').value;
+            const platform = document.getElementById('new-platform').value;
+            const email = document.getElementById('new-email').value.trim();
+            const password = document.getElementById('new-password').value.trim();
+            const login_method = document.getElementById('new-login-method').value;
             if (!username) { showToast('Enter a username', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, category})
+                body: JSON.stringify({username, category, platform, email, password, login_method})
             })
             .then(r => r.json())
             .then(d => {
@@ -272,11 +300,14 @@
                 return;
             }
 
+            const email = (document.getElementById('new-email') || {}).value || '';
+            const password = (document.getElementById('new-password') || {}).value || '';
+            const login_method = (document.getElementById('new-login-method') || {}).value || 'cookie';
             showToast('Saving and verifying session...', '');
             fetch('/api/session/' + username, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session: raw})
+                body: JSON.stringify({session: raw, email, password, login_method})
             })
             .then(r => r.json())
             .then(d => {
@@ -287,6 +318,24 @@
                 } else {
                     showToast(d.error || 'Failed to save session', 'error');
                 }
+            });
+        }
+
+        // ==================== GOOGLE LOGIN (YouTube) ====================
+        function googleLogin(username) {
+            const email = document.getElementById('gl-email-' + username).value.trim();
+            const password = document.getElementById('gl-password-' + username).value.trim();
+            if (!email) { showToast('Enter the Gmail address', 'error'); return; }
+            showToast('Starting Google login...', '');
+            fetch('/api/google_login/' + encodeURIComponent(username), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({email, password})
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { showToast('Google login running — watch the live cam', 'success'); setTimeout(() => location.reload(), 1200); }
+                else { showToast(d.error || 'Failed to start Google login', 'error'); }
             });
         }
 

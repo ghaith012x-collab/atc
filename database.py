@@ -36,6 +36,9 @@ def init_db():
             ("logged_in_as", "ALTER TABLE accounts ADD COLUMN logged_in_as TEXT"),
             ("logs", "ALTER TABLE accounts ADD COLUMN logs TEXT"),
             ("verify_code", "ALTER TABLE accounts ADD COLUMN verify_code TEXT"),
+            ("email", "ALTER TABLE accounts ADD COLUMN email TEXT"),
+            ("password", "ALTER TABLE accounts ADD COLUMN password TEXT"),
+            ("login_method", "ALTER TABLE accounts ADD COLUMN login_method TEXT DEFAULT 'cookie'"),
         ]:
             if col not in cols:
                 conn.execute(sql)
