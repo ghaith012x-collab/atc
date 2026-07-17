@@ -2066,6 +2066,69 @@ def _dismiss_youtube_popups(page, username=""):
         pass
 
 
+def _log_click_targets(page, username, context_label):
+    """Dump EVERY clickable control that could be the Next/Publish button, with
+    its selector, visible text, bounding box (x, y, width, height) and the exact
+    center point we would click. This makes it 100% clear what the bot sees and
+    where it will click. Called before every Next/Publish attempt.
+    """
+    try:
+        data = page.evaluate("""() => {
+            const out = [];
+            const sels = [
+                'ytcp-button#next-button', '#next-button',
+                'tp-yt-paper-button#next-button', 'ytcp-button#publish-button',
+                '#publish-button', 'ytcp-button', 'tp-yt-paper-button',
+                'button', '[role="button"]'
+            ];
+            const seen = new Set();
+            for (const sel of sels) {
+                for (const el of document.querySelectorAll(sel)) {
+                    const t = (el.textContent || '').trim().replace(/\\s+/g, ' ');
+                    const low = t.toLowerCase();
+                    if (!(low === 'next' || low === 'publish' || low === 'continue' ||
+                          low === 'verify' || low === 'confirm' || low === 'done' ||
+                          el.id === 'next-button' || el.id === 'publish-button')) continue;
+                    const r = el.getBoundingClientRect();
+                    const key = el.tagName + '|' + el.id + '|' + t + '|' + Math.round(r.x) + ',' + Math.round(r.y);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    const cs = getComputedStyle(el);
+                    out.push({
+                        tag: el.tagName.toLowerCase(),
+                        id: el.id || '',
+                        text: t.slice(0, 40),
+                        x: Math.round(r.x), y: Math.round(r.y),
+                        w: Math.round(r.width), h: Math.round(r.height),
+                        cx: Math.round(r.x + r.width / 2),
+                        cy: Math.round(r.y + r.height / 2),
+                        visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none',
+                        disabled: el.disabled === true,
+                        opacity: cs.opacity,
+                    });
+                }
+            }
+            return out;
+        }""")
+        if not data:
+            print(f"[{username}] [{context_label}] no Next/Publish candidates found on page")
+            return
+        print(f"[{username}] [{context_label}] === CLICK TARGETS ({len(data)}) ===")
+        for d in data:
+            flag = ""
+            if d["disabled"]:
+                flag = " [DISABLED]"
+            elif not d["visible"]:
+                flag = " [NOT VISIBLE]"
+            print(
+                f"[{username}]   <{d['tag']}#{d['id']}> text='{d['text']}' "
+                f"box=({d['x']},{d['y']} {d['w']}x{d['h']}) center=({d['cx']},{d['cy']}) "
+                f"opacity={d['opacity']}{flag}"
+            )
+    except Exception as e:
+        print(f"[{username}] [{context_label}] target logging err: {e}")
+
+
 def _click_dialog_button_js(page, container, label):
     """Click a button inside `container` (a CSS selector string) by its visible
     text, via direct DOM .click() (overlay-proof — Playwright's normal click is
@@ -2168,21 +2231,41 @@ def _click_youtube_next(page):
         try:
             b = page.locator(sel).first
             if b.count() > 0 and b.is_visible():
+                box = b.bounding_box()
+                cx = cy = None
+                if box:
+                    cx = round(box["x"] + box["width"] / 2)
+                    cy = round(box["y"] + box["height"] / 2)
+                print(f"[NEXT] clicking selector='{sel}' box={box} center=({cx},{cy})")
                 b.click(timeout=4000, force=True, no_wait_after=True)
+                print(f"[NEXT] ✓ clicked via Playwright selector '{sel}' at ({cx},{cy})")
                 return True
-        except Exception:
+        except Exception as e:
+            print(f"[NEXT] selector '{sel}' failed: {e}")
             continue
     # 2) JS fallback: click any visible element whose text is exactly "Next".
+    #    Also report the center coordinates so we know exactly where.
     try:
-        clicked = page.evaluate("""() => {
+        res = page.evaluate("""() => {
             const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
             const next = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
                 && !el.disabled && el.offsetParent !== null);
-            if (next) { next.click(); return true; }
-            return false;
+            if (next) {
+                const r = next.getBoundingClientRect();
+                next.click();
+                return {clicked: true, tag: next.tagName.toLowerCase(), id: next.id || '',
+                         text: (next.textContent||'').trim().slice(0,40),
+                         cx: Math.round(r.x + r.width/2), cy: Math.round(r.y + r.height/2)};
+            }
+            return {clicked: false};
         }""")
-        return bool(clicked)
-    except Exception:
+        if res and res.get("clicked"):
+            print(f"[NEXT] ✓ clicked via JS <{res['tag']}#{res['id']}> text='{res['text']}' at ({res['cx']},{res['cy']})")
+            return True
+        print(f"[NEXT] no clickable 'Next' element found")
+        return False
+    except Exception as e:
+        print(f"[NEXT] JS fallback err: {e}")
         return False
 
 
@@ -2325,6 +2408,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
         # the verify dialog that can appear between steps.
         for step in range(4):
             _handle_youtube_auth_dialog(page, username)
+            _log_click_targets(page, username, f"NEXT_STEP_{step+1}")
             try:
                 nb = _click_youtube_next(page)
                 if nb:
@@ -2352,23 +2436,38 @@ def upload_video_to_youtube(username, file_path, caption, title):
         published = False
         for attempt in range(4):
             _handle_youtube_auth_dialog(page, username)
+            _log_click_targets(page, username, f"PUBLISH_ATTEMPT_{attempt+1}")
             try:
                 pb = page.locator('ytcp-button#publish-button, #publish-button, button:has-text("Publish"), ytcp-button:has-text("Publish")').first
                 if pb.count() == 0 or not pb.is_visible():
-                    # JS fallback for an icon-only Publish button.
+                    # JS fallback for an icon-only Publish button — report coords.
                     clicked = page.evaluate("""() => {
                         const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button')];
                         const p = els.find(el => (el.textContent || '').trim().toLowerCase() === 'publish'
                             && !el.disabled && el.offsetParent !== null);
-                        if (p) { p.click(); return true; }
-                        return false;
+                        if (p) {
+                            const r = p.getBoundingClientRect();
+                            p.click();
+                            return {ok:true, tag:p.tagName.toLowerCase(), id:p.id||'',
+                                    text:(p.textContent||'').trim().slice(0,40),
+                                    cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
+                        }
+                        return {ok:false};
                     }""")
-                    if not clicked:
+                    if not clicked or not clicked.get("ok"):
                         print(f"[{username}] YouTube publish button not found (attempt {attempt+1})")
                         time.sleep(4)
                         continue
+                    print(f"[PUBLISH] ✓ clicked via JS <{clicked['tag']}#{clicked['id']}> text='{clicked['text']}' at ({clicked['cx']},{clicked['cy']})")
                 else:
+                    box = pb.bounding_box()
+                    cx = cy = None
+                    if box:
+                        cx = round(box["x"] + box["width"] / 2)
+                        cy = round(box["y"] + box["height"] / 2)
+                    print(f"[PUBLISH] clicking selector='ytcp-button#publish-button' box={box} center=({cx},{cy})")
                     pb.click(timeout=6000, force=True)
+                    print(f"[PUBLISH] ✓ clicked via Playwright at ({cx},{cy})")
                 print(f"[{username}] YouTube publish clicked (attempt {attempt+1})")
             except Exception as e:
                 print(f"[{username}] YouTube publish click err: {e}")
