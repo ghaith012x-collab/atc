@@ -873,38 +873,53 @@ def connect_account(username):
         profile_name = ""
 
         if platform == "YouTube":
-            # Reliable logged-in check: an avatar image is present AND there is
-            # NO "Sign in" button. Avoid the risky account-menu click that can
-            # hang. Bounded by timeouts so connect never runs forever.
+            # Instant, JS-based logged-in detection (no blocking waits). We treat
+            # the account as logged in if a SIGN-IN button is absent AND an
+            # account avatar / account menu is present. We also log the raw
+            # signals so a failure is debuggable in the Logs panel.
+            time.sleep(2)  # let the page settle after navigation
+            diag = page.evaluate("""() => {
+                const out = {};
+                const masthead = document.querySelector('ytd-masthead');
+                out.hasMasthead = !!masthead;
+                // "Sign in" button anywhere in the masthead / end section.
+                const signIn = document.querySelector('ytd-masthead a[href*="accounts.google.com"], ytd-button-renderer:has-text("Sign in"), tp-yt-paper-button:has-text("Sign in")');
+                out.signInText = signIn ? (signIn.textContent||'').trim().slice(0,40) : '';
+                out.hasSignIn = !!signIn;
+                // Account avatar image AND the account button (either proves login).
+                const av = document.querySelector('ytd-masthead #avatar-btn img, #avatar-btn img, #menu #avatar img, ytd-masthead #account-button img, #account-button img');
+                out.hasAvatar = !!av;
+                const acctBtn = document.querySelector('ytd-masthead #avatar-btn, #avatar-btn, ytd-masthead #account-button, #account-button');
+                out.hasAcctBtn = !!acctBtn;
+                // Account/channel handle link.
+                const handleA = document.querySelector('a[href^="https://www.youtube.com/@"], a[href^="http://www.youtube.com/@"], a[href*="/@"], a[href^="https://studio.youtube.com/channel/"]');
+                out.handle = handleA ? (handleA.getAttribute('href')||'').split('@')[1]||'' : '';
+                out.url = location.href;
+                return out;
+            }""")
+            has_avatar = bool(diag.get("hasAvatar")) or bool(diag.get("hasAcctBtn"))
+            has_sign_in = bool(diag.get("hasSignIn")) and "sign in" in (diag.get("signInText") or "").lower()
+            # Primary signal: a logged-IN YouTube session NEVER shows a "Sign in"
+            # button. If there's no Sign in button we are logged in (avatar/handle
+            # only reinforce this). This avoids false negatives when the avatar
+            # selector doesn't perfectly match the current YouTube DOM.
+            logged_in = (not has_sign_in) or bool(diag.get("handle"))
+            if has_avatar:
+                logged_in = True
+            # Fallback: handle link present with a real @handle also means logged in.
+            if (diag.get("handle") or "").strip():
+                logged_in = True
+                if not profile_name:
+                    profile_name = diag["handle"].strip().lstrip("@")
+            log_event(username, f"YT connect diag: avatar={has_avatar} signIn={has_sign_in} handle='{diag.get('handle','')}' url={diag.get('url','')[:60]}")
             try:
-                page.wait_for_selector('ytd-masthead #avatar-btn img, #avatar-btn img', timeout=12000)
-            except TimeoutError:
-                pass
-            try:
-                sign_in = page.locator('a[href*="accounts.google.com"] ytd-button-renderer, #buttons ytd-button-renderer:has-text("Sign in"), ytd-button-renderer:has-text("Sign in")')
-                has_avatar = page.locator('ytd-masthead #avatar-btn, #menu #avatar, #avatar-btn img').count() > 0
-                logged_in = has_avatar and sign_in.count() == 0
-            except Exception:
-                logged_in = False
-            try:
-                av = page.locator('ytd-masthead #avatar-btn img, #menu #avatar img').first
+                av = page.locator('ytd-masthead #avatar-btn img, #avatar-btn img, #menu #avatar img').first
                 if av.count() > 0:
                     alt = (av.get_attribute("alt") or "").strip()
                     if alt and alt.lower() not in ("avatar image", "avatar", ""):
                         profile_name = alt
             except Exception:
                 pass
-            # Best-effort: read the channel @handle from the page (no menu click).
-            if not profile_name:
-                try:
-                    h = page.evaluate("""() => {
-                        const a = document.querySelector('a[href^="https://www.youtube.com/@"]');
-                        return a ? (a.getAttribute('href').split('@')[1]||'').split('/')[0] : '';
-                    }""")
-                    profile_name = (h or "").strip().lstrip("@")
-                except Exception:
-                    pass
-        else:
             try:
                 page.wait_for_selector(
                     '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]',
