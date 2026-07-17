@@ -56,9 +56,10 @@ def add_new_account():
     if add_account(username, category, platform):
         # Store optional Google login credentials if provided.
         email = (data.get("email") or "").strip()
+        password = (data.get("password") or "").strip()
         login_method = (data.get("login_method") or "cookie").strip()
-        if email:
-            update_account(username, email=email, login_method=login_method)
+        if email or password:
+            update_account(username, email=email, password=password, login_method=login_method)
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Account already exists"})
 
@@ -85,9 +86,10 @@ def save_session(username):
             
         # Save to DB
         email = (data.get("email") or "").strip()
+        password = (data.get("password") or "").strip()
         kwargs = dict(session_data=session_json, status="Session saved", current_task="Ready to connect")
-        if email:
-            kwargs.update(email=email, login_method=(data.get("login_method") or "cookie").strip())
+        if email or password:
+            kwargs.update(email=email, password=password, login_method=(data.get("login_method") or "cookie").strip())
         update_account(username, **kwargs)
         
         # Connect to verify
@@ -110,19 +112,19 @@ def google_login(username):
     if not account:
         return jsonify({"success": False, "error": "Account not found"})
     if account.get("platform") != "YouTube":
-        update_account(username, platform="YouTube")
-        account["platform"] = "YouTube"
+        return jsonify({"success": False, "error": "Google login is only for YouTube accounts"})
 
-    # Persist credentials and mark login method.
+    # Mark login method. Email is optional — the manual flow logs in for you in
+    # the visible browser; it is only stored for reference.
     update_account(username, email=email, login_method="google",
-                   status="Google login", current_task="Starting Google login...")
+                   status="Google login", current_task="Opening browser for manual login...")
     if not email:
-        return jsonify({"success": False, "error": "Enter the Gmail address"})
+        print(f"[{username}] google login started (manual — no email needed)")
 
     def login_thread():
         google_login_youtube(username)
     threading.Thread(target=login_thread, daemon=True).start()
-    return jsonify({"success": True, "message": "Google login started..."})
+    return jsonify({"success": True, "message": "Browser opened — log in manually, session saves automatically"})
 
 
 @app.route("/api/start/<path:username>", methods=["POST"])

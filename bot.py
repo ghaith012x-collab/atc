@@ -692,6 +692,38 @@ def take_screenshot(username):
         print(f"[{username}] screenshot error: {err}")
 
 
+# Persistent browser profiles: each account keeps its own profile dir so
+# cookies / login sessions survive across runs (no manual re-login needed).
+PROFILE_BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "playwright-profile")
+
+def _profile_dir_for(username):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", username or "default")
+    return os.path.join(PROFILE_BASE, safe)
+
+def _chrome_channel_available():
+    """Return 'chrome' if a real Google Chrome is installed, else None."""
+    try:
+        import shutil
+        for c in ("google-chrome", "google-chrome-stable", "chrome"):
+            if shutil.which(c):
+                return "chrome"
+    except Exception:
+        pass
+    return None
+
+def _save_session_from_context(username, context):
+    """Persist the authenticated cookies from a live context into the DB so the
+    next run can reuse the session without logging in again."""
+    try:
+        cookies = context.cookies()
+        if cookies:
+            update_account(username, session_data=json.dumps(cookies))
+            _log_event(username, f"Saved {len(cookies)} cookies from persistent profile")
+            return True
+    except Exception as e:
+        _log_event(username, f"save session err: {e}")
+    return False
+
 def _cookie_domain_for(c, platform):
     """Pick a sane default cookie domain based on the platform."""
     if platform == "YouTube":
@@ -734,6 +766,8 @@ def _start_browser_session(username, account=None, no_proxy=False):
     force a DIRECT connection (used as a fallback when the proxy is unreachable,
     so a bad proxy setting never kills the whole bot).
     """
+    profile_dir = _profile_dir_for(username)
+    os.makedirs(profile_dir, exist_ok=True)
     if username in browser_sessions:
         try:
             browser_sessions[username]["context"].close()
@@ -745,12 +779,22 @@ def _start_browser_session(username, account=None, no_proxy=False):
 
     proxy = None if no_proxy else _get_proxy(account)
     pw = sync_playwright().start()
-    # Anti-detection launch args. The critical one is
-    # --disable-blink-features=AutomationControlled, which strips the
-    # navigator.webdriver / automation signals Google uses to reject Playwright
-    # logins with "This browser or app may not be secure."
+    channel = _chrome_channel_available()
+    # launch_persistent_context keeps cookies/localStorage in `profile_dir`
+    # between runs, so a logged-in YouTube/Google session is reused. We run
+    # HEADED (headless=False) because Google blocks headless automation logins;
+    # on a headless server use `xvfb-run`. The persistent profile means we never
+    # clear cookies or the profile between runs.
     launch_kwargs = dict(
-        headless=True,
+        user_data_dir=profile_dir,
+        headless=False,
+        viewport={"width": 1280, "height": 720},
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        locale="en-US",
+        ignore_https_errors=True,
         args=[
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -759,61 +803,42 @@ def _start_browser_session(username, account=None, no_proxy=False):
             "--disable-infobars",
             "--no-first-run",
             "--no-default-browser-check",
-            "--disable-extensions",
-            "--disable-popup-blocking",
             "--window-size=1280,720",
-            "--start-maximized",
         ],
     )
-    # Prefer REAL Google Chrome (channel="chrome") when available — Google trusts
-    # it far more than Playwright's bundled Chromium. Fall back silently if not installed.
-    try:
-        import shutil
-        if shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("google-chrome-stable"):
-            launch_kwargs["channel"] = "chrome"
-    except Exception:
-        pass
+    if channel:
+        launch_kwargs["channel"] = channel
     if proxy:
         launch_kwargs["proxy"] = proxy
-        print(f"[{username}] launching browser via proxy: {proxy['server']}")
+        print(f"[{username}] launching persistent browser (profile={profile_dir}) via proxy: {proxy['server']}")
     else:
-        print(f"[{username}] launching browser DIRECT (no proxy)")
+        print(f"[{username}] launching persistent browser (profile={profile_dir}) DIRECT")
+
     try:
-        browser = pw.chromium.launch(**launch_kwargs)
+        context = pw.chromium.launch_persistent_context(**launch_kwargs)
     except Exception as le:
-        # If the chrome channel isn't actually installed, retry with bundled chromium.
         if "channel" in launch_kwargs:
             print(f"[{username}] chrome channel launch failed ({le}); using bundled chromium")
             launch_kwargs.pop("channel", None)
-            browser = pw.chromium.launch(**launch_kwargs)
+            context = pw.chromium.launch_persistent_context(**launch_kwargs)
         else:
             raise
-    context = browser.new_context(
-        viewport={"width": 1280, "height": 720},
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ),
-        locale="en-US",
-        ignore_https_errors=True,
-    )
-    # Extra stealth: kill the automation flag on every new document so Google
-    # can't tell this is a controlled browser.
+
+    # launch_persistent_context returns a BrowserContext directly (no separate
+    # browser object). We keep `browser` === context so all existing
+    # session["browser"].close() / session["context"].close() calls keep working.
+    page = context.pages[0] if context.pages else context.new_page()
     try:
         context.add_init_script("""() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            window.chrome = window.chrome || {};
-            window.chrome.runtime = window.chrome.runtime || {};
         }""")
     except Exception:
         pass
-    page = context.new_page()
     # Record the thread that owns this Playwright browser. Playwright's sync API
     # is bound to the thread that called sync_playwright().start(), so ALL
-    # Playwright calls for this session MUST happen on this thread — never from
-    # the Flask request thread or any other thread (would raise greenlet errors).
-    session = {"pw": pw, "browser": browser, "context": context, "page": page,
-               "owner_thread": threading.current_thread()}
+    # Playwright calls for this session MUST happen on this thread.
+    session = {"pw": pw, "browser": context, "context": context, "page": page,
+               "profile_dir": profile_dir, "owner_thread": threading.current_thread()}
     browser_sessions[username] = session
     return session
 
@@ -920,7 +945,7 @@ def connect_account(username):
         if platform == "YouTube":
             # Google-login method: drive the Google sign-in flow instead of
             # relying on pasted cookies. Keep the browser open for the live cam.
-            if (account.get("login_method") == "google") and (account.get("email") or "").strip():
+            if account.get("login_method") == "google":
                 google_login_youtube(username)
                 # google_login_youtube keeps the session alive for recovery;
                 # return here so we don't close the browser / mark expired.
@@ -1088,33 +1113,44 @@ def _glogin_fill(page, selectors, value, timeout=8000):
     return False
 
 
+def _is_logged_in_youtube(page):
+    """Return True if a YouTube/Google session is already authenticated."""
+    try:
+        # A logged-in masthead shows the avatar; a signed-out one shows Sign in.
+        if page.locator('ytd-masthead #avatar-btn').count() > 0:
+            return True
+        if page.locator('a[href*="accounts.google.com"] ytd-button-renderer, #buttons ytd-button-renderer:has-text("Sign in")').count() == 0:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def google_login_youtube(username):
-    """Log into YouTube via Google using the account's stored Gmail.
+    """Log into YouTube using a PERSISTENT browser profile + MANUAL login.
 
-    Flow:
-      1) Load youtube.com
-      2) Click the "Sign in" button (the yt-touch-feedback-shape element)
-      3) On the Google account screen, type the Gmail and click "Next"/"Log in"
-      4) Click "Forgot password"
-      5) Click "Try another way"
+    We do NOT automate the Google sign-in (Google blocks headless/automated
+    logins with "This browser or app may not be secure"). Instead:
 
-    The bot then stops and waits — recovery is handled by the user in the live
-    cam (enter code / confirm on phone, etc.). We NEVER hammer the buttons.
+      1) Launch a persistent Chromium profile (./playwright-profile/<user>).
+         Cookies + login survive between runs.
+      2) If the profile is ALREADY logged in, reuse it and save the session.
+      3) Otherwise navigate to the Google sign-in page for YouTube and WAIT
+         (indefinitely / up to a long cap) for YOU to log in manually in the
+         visible browser.
+      4) Once Google redirects back to YouTube (logged in), the authenticated
+         cookies are saved to the DB automatically for future reuse.
+
+    The browser is left open so the live cam reflects the real state.
     """
     account = get_account(username)
     if not account:
         print(f"[{username}] google_login_youtube: account not found")
         return False
 
-    email = (account.get("email") or "").strip()
-    if not email:
-        update_account(username, status="Google login failed", current_task="No Gmail set — add it in the dashboard")
-        print(f"[{username}] google_login_youtube: no email configured")
-        return False
-
-    update_account(username, status="Google login", current_task="Loading YouTube...")
-    print(f"[{username}] === GOOGLE LOGIN (YouTube) ===")
-    _log_event(username, "Google login: starting")
+    update_account(username, status="Google login", current_task="Opening persistent browser...")
+    print(f"[{username}] === MANUAL GOOGLE LOGIN (persistent profile) ===")
+    _log_event(username, "Google login: opening persistent profile")
 
     session = None
     try:
@@ -1122,12 +1158,12 @@ def google_login_youtube(username):
         page = session["page"]
         context = session["context"]
 
-        # 1) Load YouTube (with no-proxy fallback if a proxy times out).
+        # Give the profile a moment, then check if we're already authenticated.
+        time.sleep(2)
         try:
             page.goto("https://www.youtube.com", timeout=45000, wait_until="domcontentloaded")
         except Exception as ge:
             if ("TIMED_OUT" in str(ge) or "net::" in str(ge)) and _get_proxy(account):
-                print(f"[{username}] google login goto timed out ({ge}); retrying WITHOUT proxy")
                 try:
                     context.close(); session["browser"].close(); session["pw"].stop()
                 except Exception:
@@ -1142,126 +1178,50 @@ def google_login_youtube(username):
             page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
             pass
-        time.sleep(random.uniform(2.0, 3.5))
+        time.sleep(2)
         take_screenshot(username)
 
-        # 2) Click the "Sign in" button. The user-supplied target is the
-        #    yt-touch-feedback-shape inside the masthead's sign-in button. We
-        #    also accept the standard Google Account link as a fallback.
-        signin_selectors = [
-            '#buttons ytd-button-renderer yt-button-shape a yt-touch-feedback-shape',
-            '#buttons ytd-button-renderer yt-button-shape a',
-            '#buttons ytd-button-renderer:has-text("Sign in")',
-            'a[href*="accounts.google.com"] ytd-button-renderer',
-            'a[href*="accounts.google.com"]',
-            'ytd-masthead a[aria-label*="Sign in" i]',
-            'ytd-masthead #end #buttons a',
-        ]
-        clicked = _glogin_click(page, signin_selectors, timeout=10000)
-        if not clicked:
-            # Last resort: anything that looks like a sign-in affordance.
-            clicked = _glogin_click(page, [
-                'a:has-text("Sign in")', 'button:has-text("Sign in")',
-                'yt-button-shape:has-text("Sign in")',
-            ])
-        print(f"[{username}] Google login: sign-in click -> {clicked}")
-        update_account(username, current_task="Clicked Sign in — Google account screen")
-        time.sleep(random.uniform(2.5, 4.0))
-        take_screenshot(username)
+        if _is_logged_in_youtube(page):
+            print(f"[{username}] Google login: profile already authenticated")
+            _save_session_from_context(username, context)
+            update_account(username, status="Connected", current_task="Logged in (profile reused)")
+            _log_event(username, "Google login: reused existing profile")
+            return True
 
-        # 3) We are now on the Google account chooser / identifier page.
-        #    Fill the email (identifier) field and submit.
-        #    Detect whether we are on accounts.google.com or still on YouTube.
-        email_selectors = [
-            'input[type="email"]',
-            'input[name="identifier"]',
-            'input#identifierId',
-            'input[autocomplete="username"]',
-            'input[aria-label*="Email" i]',
-            'input[aria-label*="phone" i]',
-        ]
-        # Some flows show an account chip instead of an empty email field.
-        if _glogin_fill(page, email_selectors, email, timeout=10000):
-            print(f"[{username}] Google login: typed email {email[:3]}***")
-            update_account(username, current_task="Typed Gmail — clicking Next")
-            # Click Next / Log in / Continue.
-            _glogin_click(page, [
-                '#identifierNext button',
-                'button:has-text("Next")',
-                'button:has-text("Log in")',
-                'button:has-text("Continue")',
-                'input[type="submit"]',
-            ])
-            time.sleep(random.uniform(2.5, 4.0))
-            take_screenshot(username)
-        else:
-            print(f"[{username}] Google login: no email field (account may already be chosen)")
-            update_account(username, current_task="Google account screen — no email field")
-
-        # Detect Google's "Couldn't sign you in / browser not secure" block.
+        # Not logged in -> send the user to the Google sign-in page and wait for
+        # them to complete it manually in the visible (headed) browser.
+        signin_url = ("https://accounts.google.com/ServiceLogin"
+                      "?service=youtube&continue=https://www.youtube.com")
+        update_account(username, current_task="Log in manually in the browser (Google sign-in open)")
+        print(f"[{username}] Google login: opening sign-in page — WAITING for manual login")
+        _log_event(username, "Google login: awaiting MANUAL sign-in")
         try:
-            body_txt = (page.inner_text("body", timeout=2000) or "").lower()
-            if "couldn't sign you in" in body_txt or "may not be secure" in body_txt:
-                msg = "Google blocked login: 'This browser or app may not be secure'. Use real cookies or a trusted browser."
-                update_account(username, status="Google blocked", current_task=msg)
-                _log_event(username, "Google login: " + msg)
-                print(f"[{username}] {msg}")
-                return True
+            page.goto(signin_url, timeout=45000, wait_until="domcontentloaded")
         except Exception:
             pass
+        take_screenshot(username)
 
-        # 4) If a password step appears, the user asked us to click
-        #    "Forgot password" then "Try another way".
-        #    We only do this if a password field is present; otherwise we just
-        #    stop and wait (the user completes verification in the live cam).
-        password_selectors = [
-            'input[type="password"]',
-            'input[name="password"]',
-            'input[type="password"][autocomplete="current-password"]',
-        ]
-        has_password = False
-        for sel in password_selectors:
+        # Poll until the user is logged in. Cap at ~1h so it can't truly hang
+        # forever, but effectively indefinite for a human to complete.
+        deadline = time.time() + 3600
+        while time.time() < deadline:
             try:
-                el = page.locator(sel).first
-                if el.count() > 0 and el.is_visible(timeout=1500):
-                    has_password = True
-                    break
+                if "youtube.com" in page.url and _is_logged_in_youtube(page):
+                    print(f"[{username}] Google login: manual login detected")
+                    _save_session_from_context(username, context)
+                    update_account(username, status="Connected",
+                                   current_task="Logged in — session saved")
+                    _log_event(username, "Google login: manual login complete, session saved")
+                    take_screenshot(username)
+                    return True
             except Exception:
-                continue
+                pass
+            time.sleep(3)
 
-        if has_password:
-            print(f"[{username}] Google login: password step detected")
-            update_account(username, current_task="Password step — clicking 'Forgot password'")
-            forgot = _glogin_click(page, [
-                'button:has-text("Forgot password")',
-                'div:has-text("Forgot password")',
-                'a:has-text("Forgot password")',
-            ])
-            print(f"[{username}] Google login: forgot-password click -> {forgot}")
-            time.sleep(random.uniform(2.0, 3.5))
-            take_screenshot(username)
-            update_account(username, current_task="Clicked 'Forgot password' — looking for 'Try another way'")
-            # Click "Try another way".
-            tried = _glogin_click(page, [
-                'button:has-text("Try another way")',
-                'div:has-text("Try another way")',
-                'a:has-text("Try another way")',
-            ])
-            print(f"[{username}] Google login: try-another-way click -> {tried}")
-            time.sleep(random.uniform(2.0, 3.5))
-            take_screenshot(username)
-            update_account(username, current_task="Clicked 'Try another way' — finish recovery in live cam")
-            _log_event(username, "Google login: reached 'Try another way'")
-
-        else:
-            # Either an account was already chosen, or a code/verification step
-            # is showing. Stop and let the user handle it in the live cam.
-            update_account(username, current_task="Google login awaiting your action (live cam)")
-            _log_event(username, "Google login: awaiting user action")
-
-        # Keep the browser alive so the live cam shows the current state and the
-        # user can finish recovery. Do NOT auto-close.
-        return True
+        update_account(username, status="Google login timeout",
+                       current_task="Manual login not completed in time — retry")
+        _log_event(username, "Google login: timed out waiting for manual login")
+        return False
 
     except Exception as e:
         import traceback
@@ -1270,8 +1230,8 @@ def google_login_youtube(username):
         _log_event(username, f"Google login error: {e}")
         return False
     finally:
-        # Leave the session open for the live cam; only clean up on total failure
-        # if we never managed to start a browser.
+        # Leave the browser open for the live cam / manual login. Only clean up
+        # if we never managed to start a session at all.
         if session is None:
             try:
                 if username in browser_sessions:
@@ -1282,8 +1242,8 @@ def google_login_youtube(username):
                 pass
             browser_sessions.pop(username, None)
 
-
 # ---------------------------------------------------------------------------
+# Real automation helpers# ---------------------------------------------------------------------------
 # Real automation helpers
 # ---------------------------------------------------------------------------
 
@@ -3051,62 +3011,77 @@ def _init_worker_browser(username, account):
             pass
         del browser_sessions[username]
 
-    try:
-        cookies = json.loads(account["session_data"])
-    except Exception:
+    # Build the cookie list (if a session was pasted). For YouTube we ALSO
+    # support a persistent profile with no pasted cookies — the profile itself
+    # stores the login, so we just reuse it.
+    clean_cookies = []
+    raw = account.get("session_data") or ""
+    if raw:
+        try:
+            cookies = json.loads(raw)
+            for c in cookies:
+                if not isinstance(c, dict) or "name" not in c or "value" not in c:
+                    continue
+                is_secure = bool(c.get("secure", False)) or (".google.com" in _cookie_domain_for(c, platform) or ".youtube.com" in _cookie_domain_for(c, platform))
+                cleaned = {
+                    "name": c["name"],
+                    "value": c["value"],
+                    "domain": _cookie_domain_for(c, platform),
+                    "path": c.get("path", "/"),
+                    "secure": is_secure,
+                    "httpOnly": c.get("httpOnly", False),
+                }
+                cleaned["sameSite"] = c["sameSite"] if c.get("sameSite") in ["Strict", "Lax", "None"] else "Lax"
+                clean_cookies.append(cleaned)
+        except Exception:
+            clean_cookies = []
+
+    if not clean_cookies and platform != "YouTube":
+        # TikTok always needs pasted cookies (no persistent manual login flow).
         return False
 
     proxy_cfg = _get_proxy(account)
     session = _start_browser_session(username, account)
-    clean_cookies = []
-    for c in cookies:
-        if not isinstance(c, dict) or "name" not in c or "value" not in c:
-            continue
-        cleaned = {
-            "name": c["name"],
-            "value": c["value"],
-            "domain": _cookie_domain_for(c, platform),
-            "path": c.get("path", "/"),
-            "secure": c.get("secure", False),
-            "httpOnly": c.get("httpOnly", False),
-        }
-        if "sameSite" in c and c["sameSite"] in ["Strict", "Lax", "None"]:
-            cleaned["sameSite"] = c["sameSite"]
-        clean_cookies.append(cleaned)
+    home_url = "https://www.youtube.com" if platform == "YouTube" else "https://www.tiktok.com"
 
-    if not clean_cookies:
-        return False
-
-    # Navigate to the platform home first, then add cookies, so the cookie
-    # domain is recognised (same pattern as connect_account).
-    try:
-        page = session["page"]
-        home_url = "https://www.youtube.com" if platform == "YouTube" else "https://www.tiktok.com"
-        page.goto(home_url, timeout=30000)
-        session["context"].add_cookies(clean_cookies)
-        page.reload(timeout=30000)
-        time.sleep(3)
-    except Exception as e:
-        # If a proxy was configured and the site timed out, fall back to a DIRECT
-        # (no proxy) browser so a bad proxy setting never kills the worker.
-        if proxy_cfg and ("TIMED_OUT" in str(e) or "net::" in str(e)):
-            print(f"[{username}] worker proxy goto failed ({e}); retrying WITHOUT proxy")
-            try:
-                session["context"].close(); session["browser"].close(); session["pw"].stop()
-            except Exception:
-                pass
-            browser_sessions.pop(username, None)
-            session = _start_browser_session(username, account, no_proxy=True)
-            try:
-                page = session["page"]
-                page.goto(home_url, timeout=30000)
-                session["context"].add_cookies(clean_cookies)
-                page.reload(timeout=30000)
-                time.sleep(3)
-            except Exception as e2:
-                print(f"[{username}] worker direct retry warning: {e2}")
-        else:
-            print(f"[{username}] worker cookie load warning: {e}")
+    # If we have cookies, load them on top of the persistent profile.
+    if clean_cookies:
+        try:
+            page = session["page"]
+            page.goto(home_url, timeout=30000)
+            session["context"].add_cookies(clean_cookies)
+            page.reload(timeout=30000)
+            time.sleep(3)
+        except Exception as e:
+            # If a proxy was configured and the site timed out, fall back to a
+            # DIRECT (no proxy) browser so a bad proxy setting never kills it.
+            if proxy_cfg and ("TIMED_OUT" in str(e) or "net::" in str(e)):
+                print(f"[{username}] worker proxy goto failed ({e}); retrying WITHOUT proxy")
+                try:
+                    session["context"].close(); session["browser"].close(); session["pw"].stop()
+                except Exception:
+                    pass
+                browser_sessions.pop(username, None)
+                session = _start_browser_session(username, account, no_proxy=True)
+                try:
+                    page = session["page"]
+                    page.goto(home_url, timeout=30000)
+                    session["context"].add_cookies(clean_cookies)
+                    page.reload(timeout=30000)
+                    time.sleep(3)
+                except Exception as e2:
+                    print(f"[{username}] worker direct retry warning: {e2}")
+            else:
+                print(f"[{username}] worker cookie load warning: {e}")
+    else:
+        # YouTube + persistent profile, no pasted cookies: just open the home
+        # page and rely on the profile's stored login.
+        try:
+            page = session["page"]
+            page.goto(home_url, timeout=30000)
+            time.sleep(3)
+        except Exception as e:
+            print(f"[{username}] worker profile open warning: {e}")
     return True
 
 def _posted_ids_path(username):
