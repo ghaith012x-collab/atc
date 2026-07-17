@@ -76,6 +76,14 @@
 
         /* Logs button + modal */
         .btn-logs { background: #1a2740; color: #4fa3ff; border: 1px solid #4fa3ff; }
+        .verify-row { display: flex; gap: 8px; margin-top: 10px; }
+        .verify-input {
+            flex: 1; min-width: 120px; background: #111; border: 1px solid #4fa3ff; color: #fff;
+            padding: 10px 12px; border-radius: 8px; font-size: 15px; letter-spacing: 2px;
+            font-family: ui-monospace, monospace;
+        }
+        .verify-input:focus { outline: none; border-color: #00f2ea; }
+        .btn-verify { background: #00c853; color: #04210f; border: none; font-weight: 700; }
         .logs-overlay {
             position: fixed; inset: 0; background: rgba(0,0,0,.7);
             display: none; align-items: center; justify-content: center; z-index: 10000; padding: 20px;
@@ -218,6 +226,11 @@
                 <button class="btn-logout" onclick="logoutAccount('{{ acc.username }}')">Log out</button>
             {% endif %}
             <button class="btn-logs" onclick="openLogs('{{ acc.username }}')">&#128221; Logs</button>
+            <div class="verify-row">
+                <input type="text" inputmode="numeric" maxlength="8" id="verify-code-{{ acc.username }}"
+                       placeholder="6-digit code" class="verify-input" oninput="this.value=this.value.replace(/\D/g,'')">
+                <button class="btn-verify" onclick="submitVerifyCode('{{ acc.username }}')">Submit Code</button>
+            </div>
             <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
         </div>
     </div>
@@ -444,6 +457,28 @@
         setInterval(refreshCams, 1000);
         setInterval(updateInfo, 4000);
         setInterval(tickCountdowns, 1000);
+
+        // ==================== VERIFY CODE ====================
+        function submitVerifyCode(username) {
+            const inp = document.getElementById('verify-code-' + username);
+            const code = inp ? inp.value.trim() : '';
+            if (!code) { showToast('Enter the code first', 'error'); return; }
+            fetch('/api/verify_code/' + encodeURIComponent(username), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({code: code})
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) {
+                    showToast('Code sent to bot (' + d.digits + ') — it will type it', 'success');
+                    if (inp) inp.value = '';
+                } else {
+                    showToast(d.error || 'Failed to send code', 'error');
+                }
+            })
+            .catch(() => showToast('Network error', 'error'));
+        }
 
         // ==================== LOGS MODAL ====================
         let logsUsername = null;

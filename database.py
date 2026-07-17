@@ -38,6 +38,8 @@ def init_db():
         ]:
             if col not in cols:
                 conn.execute(sql)
+            if "verify_code" not in cols:
+                conn.execute("ALTER TABLE accounts ADD COLUMN verify_code TEXT")
     except Exception:
         pass
     conn.commit()
@@ -108,3 +110,20 @@ def get_logs(username):
     row = conn.execute("SELECT logs FROM accounts WHERE username = ?", (username,)).fetchone()
     conn.close()
     return row["logs"] if row and row["logs"] else ""
+
+
+def get_verify_code(username):
+    conn = get_db()
+    row = conn.execute("SELECT verify_code FROM accounts WHERE username = ?", (username,)).fetchone()
+    conn.close()
+    return (row["verify_code"] if row and row["verify_code"] else "").strip()
+
+
+def clear_verify_code(username):
+    try:
+        conn = get_db()
+        conn.execute("UPDATE accounts SET verify_code = '' WHERE username = ?", (username,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass

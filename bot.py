@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright, TimeoutError
 from PIL import Image
 import io
 import math
-from database import get_account, update_account, append_log
+from database import get_account, update_account, append_log, get_verify_code, clear_verify_code
 
 # === CAPTCHA SOLVER (isolated addition) ===
 try:
@@ -2445,50 +2445,83 @@ def _handle_youtube_auth_dialog(page, username=""):
             update_account(username, current_task="Verify that it's you — could not click Next (see log)")
             return "needs_code"
 
-        print(f"[{username}] ✓ clicked verify Next")
         log_event(username, "Verify dialog: clicked Next successfully")
-        update_account(username, current_task="Verify that it's you — clicked Next, waiting...")
-        # Poll up to ~19s. ONLY return "advanced" if the dialog is GONE. If it is
-        # still present (next step of the wizard, or a code-entry step), we stop
-        # and wait for the user — otherwise we'd loop forever clicking greyed
-        # buttons and the upload form would never become usable.
-        for _ in range(8):
-            time.sleep(2)
+        update_account(username, current_task="Verify that it's you \u2014 clicked Next, waiting...")
+        # After clicking Next the verify wizard may: (a) close, (b) move to another
+        # step (e.g. "choose a method"), or (c) ask for a 6-digit code. We poll for
+        # up to ~5 min, handling code entry automatically when the user supplies a
+        # code via the dashboard. Automation is NEVER stopped by this dialog \u2014 we
+        # only return once the dialog is actually gone (or after the long timeout).
+        def _dialog_present():
+            try:
+                return page.evaluate("""() => {
+                    const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','ytcp-upload-confirmation-dialog','[role=\"dialog\"]'];
+                    for (const x of c) { const d=document.querySelector(x);
+                        if (d && d.offsetParent !== null) return true; }
+                    return false;
+                }""")
+            except Exception:
+                return False
+
+        def _enter_code_and_submit():
+            # Look for a visible numeric/text input inside the dialog and type the
+            # user-provided 6-digit code, then click Next/Submit/Verify.
+            code = get_verify_code(username)
+            if not code:
+                return False
+            filled = page.evaluate("""(code) => {
+                const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','[role=\"dialog\"]'];
+                let root = null;
+                for (const x of c) { const d=document.querySelector(x); if (d && d.offsetParent!==null) { root=d; break; } }
+                if (!root) return false;
+                // Prefer an input inside the dialog (code entry fields).
+                const inp = root.querySelector('input[type=\"text\"], input[type=\"tel\"], input[type=\"number\"], input:not([type]), textarea');
+                if (!inp) return false;
+                const settable = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                if (settable) { settable.call(inp, code); inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                else { inp.value = code; inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                return true;
+            }""", code)
+            if not filled:
+                return False
+            log_event(username, f"Verify dialog: typed code '{code}' into input")
+            # Clear the code so it is only used once.
+            clear_verify_code(username)
+            time.sleep(0.5)
+            # Click the enabled Next/Submit/Verify button.
+            try:
+                b = page.locator('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button, #next-button, ytcp-button:has-text("Next"), ytcp-button:has-text("Submit"), ytcp-button:has-text("Verify"), button:has-text("Next"), button:has-text("Submit"), button:has-text("Verify")').first
+                if b.count() > 0 and b.is_visible() and not b.is_disabled():
+                    b.click(timeout=5000, force=True)
+                    return True
+            except Exception:
+                pass
+            return True
+
+        deadline = time.time() + 300  # up to 5 minutes
+        while time.time() < deadline:
             take_screenshot(username)  # keep the live view in sync
-            still = page.evaluate("""() => {
-                const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','ytcp-upload-confirmation-dialog','[role=\"dialog\"]'];
-                for (const x of c) { const d=document.querySelector(x);
-                    if (d && d.offsetParent !== null) return true; }
-                return false;
-            }""")
-            if not still:
-                print(f"[{username}] ✓ verify dialog dismissed")
-                log_event(username, "Verify dialog: dismissed after Next")
+            if not _dialog_present():
+                print(f"[{username}] \u2713 verify dialog dismissed")
+                log_event(username, "Verify dialog: dismissed")
                 return "advanced"
-        # Dialog still present after clicking Next — wait for the user to finish
-        # (this is a multi-step wizard: choose method -> enter code, etc).
-        waiting = page.evaluate("""() => {
-            const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','[role=\"dialog\"]'];
-            for (const x of c) { const root=document.querySelector(x); if(!root) continue;
-                const b = root.querySelector('#confirm-button')||root.querySelector('#next-button')
-                    || [...root.querySelectorAll('ytcp-button,button,[role=\"button\"]')].find(el=>(el.textContent||'').trim().toLowerCase()==='next');
-                if (b) return {present:true, disabled: !!(b.disabled || (b.hasAttribute && b.hasAttribute('disabled'))),
-                              text:(root.textContent||'').replace(/\\s+/g,' ').slice(0,120)};
-            }
-            return {present:false};
-        }""")
-        if waiting.get("present"):
-            if waiting.get("disabled"):
-                print(f"[{username}] ⚠ verify Next now DISABLED — waiting for user to enter code")
-                log_event(username, "Verify dialog: Next disabled — waiting for user code/action. Dialog: " + str(waiting.get("text")))
-            else:
-                print(f"[{username}] ⚠ verify dialog still open after Next (more steps) — waiting for user")
-                log_event(username, "Verify dialog: still open after Next (multi-step) — waiting. Dialog: " + str(waiting.get("text")))
-            update_account(username, current_task="Verify that it's you — complete the step in live cam")
-            take_screenshot(username)
-            return "needs_code"
+            # Code step? If a code is available in the DB, enter it and submit.
+            if get_verify_code(username):
+                update_account(username, current_task="Verify that it's you \u2014 entering code from dashboard...")
+                _enter_code_and_submit()
+                time.sleep(3)
+                continue
+            # Still on a step (choose method etc.) \u2014 wait for the user, but keep
+            # the dialog alive (do NOT abort automation).
+            update_account(username, current_task="Verify that it's you \u2014 waiting for your code/method in live cam")
+            time.sleep(5)
+        # Timed out waiting (no code supplied) \u2014 return advanced so the flow
+        # retries; automation keeps running regardless.
+        log_event(username, "Verify dialog: timed out waiting for code \u2014 continuing")
         return "advanced"
     except Exception as e:
+        print(f"[{username}] verify dialog handling err: {e}")
+        return False
         print(f"[{username}] verify dialog handling err: {e}")
         return False
 
@@ -2743,7 +2776,12 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 print(f"[{username}] ⚠ verify dialog needs user action — aborting upload step, will wait")
                 log_event(username, "Verify dialog needs user action — upload paused, waiting in live cam")
                 take_screenshot(username)
-                return "VERIFY_WAIT"
+            if auth == "needs_code":
+                # Verify dialog still needs user input — keep automation running.
+                log_event(username, "Verify dialog still needs input — automation continues")
+                take_screenshot(username)
+                time.sleep(5)
+                continue
 
             # Before each Next: reveal "Made for kids" and set "No" (required to proceed).
             try:
@@ -2821,7 +2859,12 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 print(f"[{username}] ⚠ verify dialog needs user action before Publish — waiting")
                 log_event(username, "Verify dialog blocks Publish — waiting for user in live cam")
                 take_screenshot(username)
-                return "VERIFY_WAIT"
+            if auth == "needs_code":
+                # Verify dialog still needs user input — keep automation running.
+                log_event(username, "Verify dialog still needs input — automation continues")
+                take_screenshot(username)
+                time.sleep(5)
+                continue
             _log_click_targets(page, username, f"PUBLISH_ATTEMPT_{attempt+1}")
             try:
                 pb = page.locator('ytcp-button#publish-button, #publish-button, button:has-text("Publish"), ytcp-button:has-text("Publish")').first
@@ -3093,13 +3136,6 @@ def automation_worker(username):
                 if page:
                     _dismiss_youtube_popups(page, username)
                 success = upload_video_to_youtube(username, prepared_file, caption, title)
-                if success == "VERIFY_WAIT":
-                    # Verify dialog needs manual action (code / multi-step). Pause
-                    # the cycle and wait so the user can finish it in the live cam.
-                    update_account(username, current_task="Verify that it's you — paused, complete in live cam")
-                    log(f"[{username}] VERIFY_WAIT: pausing cycle, waiting for user")
-                    time.sleep(180)
-                    continue
             else:
                 log(f"[{username}] Step 5: Uploading to TikTok...")
                 update_account(username, current_task="Step 5: Uploading to TikTok...")

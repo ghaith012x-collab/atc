@@ -132,6 +132,21 @@ def api_logs(username):
     logs = get_logs(username)
     return jsonify({"success": True, "username": username, "logs": logs or ""})
 
+@app.route("/api/verify_code/<path:username>", methods=["POST"])
+def api_verify_code(username):
+    data = request.json or {}
+    code = (data.get("code") or "").strip()
+    # Accept up to 8 digits (some flows use 6, some more) plus optional spaces/dashes.
+    import re as _re
+    digits = _re.sub(r"\D", "", code)
+    if not digits:
+        return jsonify({"success": False, "error": "Enter the code digits"})
+    update_account(username, verify_code=digits)
+    return jsonify({"success": True, "digits": digits})
+
+
+
+
 
 @app.route("/live/<path:username>")
 def live(username):
