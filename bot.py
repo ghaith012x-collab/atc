@@ -768,6 +768,11 @@ def _start_browser_session(username, account=None, no_proxy=False):
         locale="en-US",
     )
     page = context.new_page()
+    try:
+        page.set_default_timeout(25000)
+        page.set_default_navigation_timeout(35000)
+    except Exception:
+        pass
     # Record the thread that owns this Playwright browser. Playwright's sync API
     # is bound to the thread that called sync_playwright().start(), so ALL
     # Playwright calls for this session MUST happen on this thread — never from
@@ -835,7 +840,7 @@ def connect_account(username):
         def _goto_home(p, ctx, url):
             p.goto(url, timeout=30000)
             try:
-                p.wait_for_load_state("networkidle", timeout=15000)
+                p.wait_for_load_state("domcontentloaded", timeout=15000)
             except TimeoutError:
                 pass
 
@@ -868,53 +873,37 @@ def connect_account(username):
         profile_name = ""
 
         if platform == "YouTube":
-            # Logged-in YouTube shows the avatar / "You" menu.
+            # Reliable logged-in check: an avatar image is present AND there is
+            # NO "Sign in" button. Avoid the risky account-menu click that can
+            # hang. Bounded by timeouts so connect never runs forever.
             try:
-                page.wait_for_selector(
-                    'ytd-masthead #avatar-btn, #end #buttons ytd-button-renderer, a[href*="account.google.com"]',
-                    timeout=10000,
-                )
-                # If a Sign in button is present, we are NOT logged in.
-                sign_in = page.locator('a[href*="accounts.google.com"] ytd-button-renderer, #buttons ytd-button-renderer:has-text("Sign in")')
-                logged_in = sign_in.count() == 0
+                page.wait_for_selector('ytd-masthead #avatar-btn img, #avatar-btn img', timeout=12000)
             except TimeoutError:
                 pass
-            if not logged_in:
-                # Fallback: presence of the "You" / avatar indicates a session
+            try:
+                sign_in = page.locator('a[href*="accounts.google.com"] ytd-button-renderer, #buttons ytd-button-renderer:has-text("Sign in"), ytd-button-renderer:has-text("Sign in")')
+                has_avatar = page.locator('ytd-masthead #avatar-btn, #menu #avatar, #avatar-btn img').count() > 0
+                logged_in = has_avatar and sign_in.count() == 0
+            except Exception:
+                logged_in = False
+            try:
+                av = page.locator('ytd-masthead #avatar-btn img, #menu #avatar img').first
+                if av.count() > 0:
+                    alt = (av.get_attribute("alt") or "").strip()
+                    if alt and alt.lower() not in ("avatar image", "avatar", ""):
+                        profile_name = alt
+            except Exception:
+                pass
+            # Best-effort: read the channel @handle from the page (no menu click).
+            if not profile_name:
                 try:
-                    if page.locator('ytd-masthead #avatar-btn, #menu #avatar').count() > 0:
-                        logged_in = True
+                    h = page.evaluate("""() => {
+                        const a = document.querySelector('a[href^="https://www.youtube.com/@"]');
+                        return a ? (a.getAttribute('href').split('@')[1]||'').split('/')[0] : '';
+                    }""")
+                    profile_name = (h or "").strip().lstrip("@")
                 except Exception:
                     pass
-            if logged_in:
-                try:
-                    av = page.locator('ytd-masthead #avatar-btn img, #menu #avatar img').first
-                    if av.count() > 0:
-                        alt = (av.get_attribute("alt") or "").strip()
-                        # "alt" is usually "Avatar image" — not the real name.
-                        # Prefer the channel handle from the account menu instead.
-                        if alt and alt.lower() not in ("avatar image", "avatar", ""):
-                            profile_name = alt
-                except Exception:
-                    pass
-                # Get the real channel name/handle from the account menu.
-                if not profile_name:
-                    try:
-                        page.locator('ytd-masthead #avatar-btn, #end #avatar-btn').first.click(timeout=4000)
-                        time.sleep(1.5)
-                        name_el = page.locator('ytd-account-item-section-header-renderer #channel-title, ytd-account-item-section-header-renderer #account-name, #account-item ytd-account-item-section-header-renderer').first
-                        if name_el.count() > 0:
-                            profile_name = name_el.inner_text(timeout=3000).strip().split("\n")[0]
-                        # Also try the @handle link text.
-                        if not profile_name:
-                            handle_el = page.locator('a[href^="https://www.youtube.com/@"], #account-item a').first
-                            if handle_el.count() > 0:
-                                h = handle_el.inner_text(timeout=2000).strip()
-                                profile_name = h.lstrip("@") or profile_name
-                        page.keyboard.press("Escape")
-                        time.sleep(0.5)
-                    except Exception:
-                        pass
         else:
             try:
                 page.wait_for_selector(
@@ -936,7 +925,7 @@ def connect_account(username):
                 try:
                     page.goto("https://www.tiktok.com/profile", timeout=15000)
                     try:
-                        page.wait_for_load_state("networkidle", timeout=10000)
+                        page.wait_for_load_state("domcontentloaded", timeout=10000)
                     except TimeoutError:
                         pass
                     time.sleep(2)
