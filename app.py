@@ -129,29 +129,25 @@ def api_logout(username):
 
 @app.route("/live/<path:username>")
 def live(username):
-    # Capture a FRESH frame on every request so the live preview is crisp and
-    # lag-free (the dashboard already re-polls this route ~every 1s).
-    if username in browser_sessions:
-        try:
-            take_screenshot(username)
-        except Exception:
-            pass
-
+    # NOTE: we NEVER call Playwright from this Flask thread — doing so triggers
+    # "cannot switch to a different thread" greenlet errors. The preview frame is
+    # captured by the worker/connect thread (the browser's owner thread) and
+    # stored in `screenshots` as a PIL Image; here we just encode it to JPEG.
     from PIL import Image
     from io import BytesIO
 
-    if username not in screenshots:
-        screenshots[username] = Image.new("RGB", (1280, 720), "#111111")
+    img = screenshots.get(username)
+    if not isinstance(img, Image.Image):
+        img = Image.new("RGB", (1280, 720), "#111111")
+        screenshots[username] = img
 
-    img = screenshots[username]
     # Defensive: if a raw screenshot (bytes) was ever stored, wrap it in a PIL Image.
     if isinstance(img, (bytes, bytearray)):
         try:
             img = Image.open(BytesIO(img)).convert("RGB")
-            screenshots[username] = img
         except Exception:
             img = Image.new("RGB", (1280, 720), "#111111")
-            screenshots[username] = img
+        screenshots[username] = img
 
     buffer = BytesIO()
     # High quality so the preview stays sharp.

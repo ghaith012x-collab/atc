@@ -647,15 +647,25 @@ def create_placeholder(username, text):
 
 
 def take_screenshot(username):
-    """Resilient screenshot: never crashes, keeps last good frame when possible.
+    """Capture a preview frame and store it as a PIL Image for the /live route.
 
-    Always stores a PIL Image (never raw PNG bytes) so the /live route can
-    re-encode it to JPEG reliably. Falls back to the last good frame on error.
+    SAFETY: Playwright's sync API is bound to the thread that started the
+    browser. This function ONLY runs Playwright calls when called from that
+    owner thread; if invoked from another thread (e.g. the Flask /live route)
+    it returns immediately so we never hit 'cannot switch to a different thread'.
+    Falls back to the last good frame on error.
     """
     session = browser_sessions.get(username)
     if not session:
         screenshots[username] = create_placeholder(username, "No browser")
         return
+
+    owner = session.get("owner_thread")
+    if owner is not None and owner is not threading.current_thread():
+        # Called from a non-owner thread (e.g. Flask request) — never touch
+        # Playwright here. Just keep the existing preview frame.
+        return
+
     try:
         page = session.get("page")
         if page is None or page.is_closed():
@@ -721,7 +731,12 @@ def _start_browser_session(username):
         locale="en-US",
     )
     page = context.new_page()
-    session = {"pw": pw, "browser": browser, "context": context, "page": page}
+    # Record the thread that owns this Playwright browser. Playwright's sync API
+    # is bound to the thread that called sync_playwright().start(), so ALL
+    # Playwright calls for this session MUST happen on this thread — never from
+    # the Flask request thread or any other thread (would raise greenlet errors).
+    session = {"pw": pw, "browser": browser, "context": context, "page": page,
+               "owner_thread": threading.current_thread()}
     browser_sessions[username] = session
     return session
 
@@ -813,9 +828,31 @@ def connect_account(username):
                 try:
                     av = page.locator('ytd-masthead #avatar-btn img, #menu #avatar img').first
                     if av.count() > 0:
-                        profile_name = (av.get_attribute("alt") or "").strip()
+                        alt = (av.get_attribute("alt") or "").strip()
+                        # "alt" is usually "Avatar image" — not the real name.
+                        # Prefer the channel handle from the account menu instead.
+                        if alt and alt.lower() not in ("avatar image", "avatar", ""):
+                            profile_name = alt
                 except Exception:
                     pass
+                # Get the real channel name/handle from the account menu.
+                if not profile_name:
+                    try:
+                        page.locator('ytd-masthead #avatar-btn, #end #avatar-btn').first.click(timeout=4000)
+                        time.sleep(1.5)
+                        name_el = page.locator('ytd-account-item-section-header-renderer #channel-title, ytd-account-item-section-header-renderer #account-name, #account-item ytd-account-item-section-header-renderer').first
+                        if name_el.count() > 0:
+                            profile_name = name_el.inner_text(timeout=3000).strip().split("\n")[0]
+                        # Also try the @handle link text.
+                        if not profile_name:
+                            handle_el = page.locator('a[href^="https://www.youtube.com/@"], #account-item a').first
+                            if handle_el.count() > 0:
+                                h = handle_el.inner_text(timeout=2000).strip()
+                                profile_name = h.lstrip("@") or profile_name
+                        page.keyboard.press("Escape")
+                        time.sleep(0.5)
+                    except Exception:
+                        pass
         else:
             try:
                 page.wait_for_selector(
@@ -865,8 +902,17 @@ def connect_account(username):
             update_account(username, connected=1, status="Connected", current_task=task_msg,
                           logged_in_as=profile_name or "")
             print(f"✓ Session verified for {username} ({platform})" + (f" : {profile_name}" if profile_name else ""))
+            # Capture ONE preview on the connect thread (safe — this is the owner),
+            # then CLOSE the verify browser. The worker will start its own fresh
+            # browser on the worker thread, which owns Playwright for the live cam.
             take_screenshot(username)
-            # IMPORTANT: keep the browser alive so the live cam + worker reuse it.
+            try:
+                context.close()
+                session["browser"].close()
+                session["pw"].stop()
+            except Exception:
+                pass
+            browser_sessions.pop(username, None)
         else:
             update_account(username, connected=0, status="Session expired", current_task="Please update session")
             print(f"✗ Session expired or invalid for {username} ({platform})")
@@ -1920,6 +1966,71 @@ def upload_video_to_tiktok(username, file_path, caption):
         return False
 
 
+def _dismiss_youtube_popups(page, username=""):
+    """Auto-dismiss the cookie-consent banner and the various YouTube/Studio
+    onboarding popups ('Review your channel', 'Got it', 'Skip', 'Not now',
+    'Turn on', surveys, etc.) so they never block the upload flow.
+    """
+    # 1) Cookie consent — YouTube's consent dialog uses these buttons.
+    for sel in [
+        'button:has-text("Accept all")',
+        'button:has-text("I agree")',
+        'button:has-text("Reject all")',
+        'tp-yt-paper-button:has-text("Accept all")',
+        'ytd-button-renderer:has-text("Accept all")',
+    ]:
+        try:
+            b = page.locator(sel).first
+            if b.count() > 0 and b.is_visible():
+                b.click(timeout=2000, force=True)
+                print(f"[{username}] dismissed YouTube cookie popup: {sel}")
+                time.sleep(1)
+        except Exception:
+            pass
+
+    # 2) Generic dismiss buttons (dialogs, onboarding, "review your channel", etc.)
+    generic = [
+        'button:has-text("Skip")',
+        'button:has-text("Got it")',
+        'button:has-text("Not now")',
+        'button:has-text("No thanks")',
+        'button:has-text("Dismiss")',
+        'button:has-text("Close")',
+        'button:has-text("Maybe later")',
+        'ytcp-button:has-text("Skip")',
+        'tp-yt-paper-button:has-text("Skip")',
+        '[role="dialog"] button[aria-label="Close"]',
+        'ytd-button-renderer:has-text("Got it")',
+    ]
+    for sel in generic:
+        try:
+            b = page.locator(sel).first
+            if b.count() > 0 and b.is_visible():
+                b.click(timeout=1500, force=True)
+                print(f"[{username}] dismissed YouTube popup: {sel}")
+                time.sleep(0.4)
+        except Exception:
+            pass
+
+    # 3) Remove any leftover modal/overlay elements via JS (reviews surveys etc.)
+    try:
+        page.evaluate("""() => {
+            document.querySelectorAll(
+                'ytd-popup-container, tp-yt-paper-dialog, [role="dialog"], ' +
+                '.ytd-consent-bump, ytd-enforcement-message-renderer, ' +
+                'yt-mealbar-promo-renderer, ytcp-survey, [class*="survey"]'
+            ).forEach(el => {
+                const t = (el.textContent || '').toLowerCase();
+                if (t.includes('review') || t.includes('survey') || t.includes('cookie') ||
+                    t.includes('consent') || t.includes('got it') || t.includes('skip')) {
+                    el.remove();
+                }
+            });
+        }""")
+    except Exception:
+        pass
+
+
 def upload_video_to_youtube(username, file_path, caption, title):
     """Upload a prepared (1080x1920) Short to YouTube Studio with an accurate,
     full caption. Selects 'No, it's not made for kids' + public visibility so it
@@ -1933,6 +2044,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
     SUCCESS = 'text=/uploaded|published|video is live|your video has been|processing|done/i'
 
     try:
+        _dismiss_youtube_popups(page, username)
         print(f"[{username}] === YOUTUBE UPLOAD FLOW ===")
         update_account(username, current_task="Opening YouTube Studio upload...")
 
@@ -1968,6 +2080,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
             return False
 
         print(f"[{username}] Using YouTube upload page: {upload_url_used}")
+        _dismiss_youtube_popups(page, username)
         file_input = _find_file_input(page)
         if file_input is None:
             file_input = page.locator('input[type="file"]').first
@@ -2027,6 +2140,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
         except Exception as ce:
             print(f"[{username}] YouTube description EXCEPTION: {ce}")
 
+        _dismiss_youtube_popups(page, username)
         take_screenshot(username)
 
         # Click "Show more" to reveal Made for kids, then set Not made for kids.
@@ -2124,23 +2238,19 @@ def upload_video_to_youtube(username, file_path, caption, title):
 
 
 def _init_worker_browser(username, account):
-    """Initialize a Playwright browser session for the worker thread.
+    """Launch a FRESH Playwright browser on the worker thread and load cookies.
 
-    Reuses the persistent session that `connect_account` already started (so the
-    live cam + worker share one browser), otherwise launches a fresh one from the
-    stored cookies. Works for both TikTok and YouTube.
+    IMPORTANT: the worker thread is the Playwright owner for this session, so all
+    Playwright calls (including take_screenshot for the live cam) must happen on
+    THIS thread. We never reuse a browser started by connect_account, because
+    that ran on a different thread and would raise greenlet 'cannot switch to a
+    different thread' errors.
     """
     platform = (account.get("platform") or "TikTok")
 
-    # If connect_account already started a live browser, just reuse it.
+    # Tear down any stale session (e.g. leftover from a previous run) so we own a
+    # fresh browser on the worker thread.
     if username in browser_sessions:
-        try:
-            sess = browser_sessions[username]
-            if sess.get("page") is not None and not sess["page"].is_closed():
-                return True
-        except Exception:
-            pass
-        # Stale session — tear down and re-create.
         try:
             browser_sessions[username]["context"].close()
             browser_sessions[username]["browser"].close()
@@ -2174,7 +2284,17 @@ def _init_worker_browser(username, account):
     if not clean_cookies:
         return False
 
-    session["context"].add_cookies(clean_cookies)
+    # Navigate to the platform home first, then add cookies, so the cookie
+    # domain is recognised (same pattern as connect_account).
+    try:
+        page = session["page"]
+        home_url = "https://www.youtube.com" if platform == "YouTube" else "https://www.tiktok.com"
+        page.goto(home_url, timeout=30000)
+        session["context"].add_cookies(clean_cookies)
+        page.reload(timeout=30000)
+        time.sleep(3)
+    except Exception as e:
+        print(f"[{username}] worker cookie load warning: {e}")
     return True
 
 def _posted_ids_path(username):
@@ -2285,6 +2405,9 @@ def automation_worker(username):
             if platform == "YouTube":
                 log(f"[{username}] Step 5: Uploading to YouTube Shorts...")
                 update_account(username, current_task="Step 5: Uploading to YouTube Shorts...")
+                page = _get_page(username)
+                if page:
+                    _dismiss_youtube_popups(page, username)
                 success = upload_video_to_youtube(username, prepared_file, caption, title)
             else:
                 log(f"[{username}] Step 5: Uploading to TikTok...")
@@ -2467,6 +2590,10 @@ def automation_worker(username):
                     step = min(10, remaining - waited)
                     time.sleep(step)
                     waited += step
+                    # Keep the live cam preview fresh while we wait. This runs on
+                    # the worker thread (the Playwright owner), so it's safe.
+                    if waited % 10 == 0:
+                        take_screenshot(username)
             else:
                 log(f"[{username}] Post failed, retrying in 3 min")
                 update_account(username, current_task="Post failed, retrying in 3 min")
@@ -2514,46 +2641,25 @@ def start_automation(username):
 
 
 def stop_automation(username):
-    if username in workers:
-        del workers[username]
-    if username in browser_sessions:
-        try:
-            browser_sessions[username]["context"].close()
-            browser_sessions[username]["browser"].close()
-            browser_sessions[username]["pw"].stop()
-            del browser_sessions[username]
-        except:
-            pass
+    # Signal-only: the worker thread owns the browser, so it must close it (doing
+    # so from the Flask thread would raise greenlet 'different thread' errors).
+    workers.pop(username, None)
+    account = get_account(username)
+    if account:
+        update_account(username, enabled=0, status="Stopped", current_task="Stopped")
 
 
 def logout_account(username):
-    """Log the TikTok account out: end the server session in the live browser
-    (if any), clear cookies, wipe the stored session, and mark it 'Logged out'.
+    """Log the account out: mark it disconnected, clear the stored session, and
+    let the worker thread close the browser (the worker owns Playwright, so the
+    Flask thread must NOT touch the browser — that causes greenlet errors).
+
     The account row is kept so it can be reconnected later with a new session.
     """
     try:
-        sess = browser_sessions.get(username)
-        if sess:
-            try:
-                page = sess.get("page")
-                if page:
-                    page.goto("https://www.tiktok.com/logout", timeout=15000, wait_until="domcontentloaded")
-            except Exception:
-                pass
-            try:
-                sess.get("context").clear_cookies()
-            except Exception:
-                pass
-            try:
-                sess["context"].close()
-                sess["browser"].close()
-                sess["pw"].stop()
-            except Exception:
-                pass
-            browser_sessions.pop(username, None)
-        # Stop the worker loop (it will break once it sees connected=0)
+        # Stop the worker loop (it will break once it sees enabled/connected=0).
         workers.pop(username, None)
-        # Remove any saved session file
+        # Remove any saved session file.
         try:
             import shutil
             sp = f"sessions/{username}"
@@ -2575,16 +2681,9 @@ def logout_account(username):
 
 
 def delete_account_session(username):
-    if username in browser_sessions:
-        try:
-            browser_sessions[username]["context"].close()
-            browser_sessions[username]["browser"].close()
-            browser_sessions[username]["pw"].stop()
-            del browser_sessions[username]
-        except:
-            pass
-    if username in workers:
-        del workers[username]
+    # Signal-only: stop the worker (it owns the browser and will close it on
+    # exit). The Flask thread must NOT close Playwright objects.
+    workers.pop(username, None)
 
     import shutil
     session_path = f"sessions/{username}"
