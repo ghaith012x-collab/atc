@@ -699,10 +699,38 @@ def _cookie_domain_for(c, platform):
     return c.get("domain", ".tiktok.com")
 
 
-def _start_browser_session(username):
+def _get_proxy(account=None):
+    """Build a Playwright proxy dict from (in priority order):
+       1) account['proxy']  (DB field, full URL e.g. http://1.2.3.4:8080)
+       2) env PROXY          (full URL)
+       3) env PROXY_IP + PROXY_PORT  (e.g. your home IP 84.215.85.106:PORT)
+    Returns a dict like {"server": "http://ip:port"} or None.
+    Routing the browser through a residential IP (instead of the server's
+    datacenter IP) greatly reduces YouTube's 'Verify that it's you' prompts.
+    """
+    proxy = None
+    if account and isinstance(account, dict):
+        proxy = account.get("proxy")
+    if not proxy:
+        proxy = os.environ.get("PROXY")
+    if not proxy:
+        ip = os.environ.get("PROXY_IP")
+        port = os.environ.get("PROXY_PORT")
+        if ip and port:
+            proxy = f"http://{ip}:{port}"
+    if not proxy:
+        return None
+    return {"server": proxy}
+
+
+def _start_browser_session(username, account=None):
     """Launch a Playwright browser + context and store it in browser_sessions.
     Closes any pre-existing session for this username first. Returns the
     session dict (with 'context'/'page') or None on failure.
+
+    If a proxy is configured (env PROXY / PROXY_IP+PROXY_PORT, or an account
+    `proxy` field), the browser routes through it — useful for avoiding
+    YouTube bot-verification by using a residential IP.
     """
     if username in browser_sessions:
         try:
@@ -713,8 +741,9 @@ def _start_browser_session(username):
             pass
         del browser_sessions[username]
 
+    proxy = _get_proxy(account)
     pw = sync_playwright().start()
-    browser = pw.chromium.launch(
+    launch_kwargs = dict(
         headless=True,
         args=[
             "--no-sandbox",
@@ -722,6 +751,10 @@ def _start_browser_session(username):
             "--disable-dev-shm-usage",
         ],
     )
+    if proxy:
+        launch_kwargs["proxy"] = proxy
+        print(f"[{username}] launching browser via proxy: {proxy['server']}")
+    browser = pw.chromium.launch(**launch_kwargs)
     context = browser.new_context(
         viewport={"width": 1280, "height": 720},
         user_agent=(
@@ -783,7 +816,7 @@ def connect_account(username):
             update_account(username, status="Invalid Session", current_task="No valid cookies found")
             return False
 
-        session = _start_browser_session(username)
+        session = _start_browser_session(username, account)
         context = session["context"]
         page = session["page"]
 
@@ -2033,13 +2066,35 @@ def _dismiss_youtube_popups(page, username=""):
         pass
 
 
+def _click_dialog_button_js(page, container, label):
+    """Click a button inside `container` (a CSS selector string) by its visible
+    text, via direct DOM .click() (overlay-proof — Playwright's normal click is
+    blocked by the dialog's own backdrop/overlay). Returns True if clicked.
+    """
+    return page.evaluate("""(args) => {
+        const [container, label] = args;
+        const root = document.querySelector(container);
+        if (!root) return false;
+        const want = label.toLowerCase();
+        const btns = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
+        const b = btns.find(el => {
+            const t = (el.textContent || '').trim().toLowerCase();
+            return t === want || t.startsWith(want + ' ') || t.endsWith(' ' + want);
+        });
+        if (b && !b.disabled) { b.click(); return true; }
+        return false;
+    }""", [container, label])
+
+
 def _handle_youtube_auth_dialog(page, username=""):
     """Handle YouTube Studio's 'Verify that it's you' (ytcp-auth-confirmation-dialog).
 
     This dialog intercepts ALL clicks on the upload form, so it MUST be resolved
-    first. We click its primary 'Next'/'Continue' button. If it still doesn't
-    close (e.g. it requires an actual phone/email code from the user), we report
-    it but keep the flow going so the user can complete it in the live cam.
+    first. We click its primary 'Next' button using a DIRECT DOM click (not
+    Playwright's actionability-checked click), because the dialog's own overlay
+    backdrop otherwise blocks Playwright's click. If it still doesn't close (e.g.
+    it requires an actual phone/email code from the user), we report it but keep
+    the flow going so the user can complete it in the live cam.
     Returns True if the dialog was present and we acted on it.
     """
     try:
@@ -2049,21 +2104,37 @@ def _handle_youtube_auth_dialog(page, username=""):
         if not dialog.is_visible():
             return False
         print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected")
-        update_account(username, current_task="Verify that it's you — click Next to confirm")
+        update_account(username, current_task="Verify that it's you — clicking Next...")
 
-        # Click the dialog's primary action button (Next / Continue / Verify).
-        primary = dialog.locator(
-            'ytcp-button#next-button, ytcp-button:has-text("Next"), ' +
-            'tp-yt-paper-button:has-text("Next"), button:has-text("Next"), ' +
-            'ytcp-button:has-text("Continue"), button:has-text("Continue"), ' +
-            'ytcp-button:has-text("Verify"), button:has-text("Verify")'
-        ).first
-        if primary.count() > 0 and primary.is_visible():
-            primary.click(timeout=5000, force=True)
-            print(f"[{username}] ✓ clicked Next/Continue in verify dialog")
+        # Try a real click first, then fall back to a direct DOM click on the
+        # dialog's primary 'Next' button (overlay-proof).
+        clicked = False
+        for label in ("Next", "Continue", "Verify", "Confirm"):
+            # 1) Playwright click (force, ignores overlay)
+            try:
+                b = dialog.locator(
+                    f'ytcp-button#next-button, ytcp-button:has-text("{label}"), '
+                    f'button:has-text("{label}"), tp-yt-paper-button:has-text("{label}")'
+                ).first
+                if b.count() > 0:
+                    b.click(timeout=3000, force=True, no_wait_after=True)
+                    clicked = True
+                    print(f"[{username}] ✓ clicked '{label}' (Playwright) in verify dialog")
+                    break
+            except Exception:
+                pass
+            # 2) Direct DOM click (overlay-proof)
+            try:
+                if _click_dialog_button_js(page, 'ytcp-auth-confirmation-dialog', label):
+                    clicked = True
+                    print(f"[{username}] ✓ clicked '{label}' (DOM) in verify dialog")
+                    break
+            except Exception:
+                pass
+
+        if clicked:
             time.sleep(3)
             take_screenshot(username)
-            # Wait a moment for it to either advance or close.
             for _ in range(10):
                 try:
                     if dialog.count() == 0 or not dialog.is_visible():
@@ -2072,7 +2143,7 @@ def _handle_youtube_auth_dialog(page, username=""):
                 except Exception:
                     pass
                 time.sleep(2)
-            print(f"[{username}] ⚠ verify dialog still present — may need a code")
+            print(f"[{username}] ⚠ verify dialog still present — may need a code in live cam")
         return True
     except Exception as e:
         print(f"[{username}] verify dialog handling err: {e}")
@@ -2084,6 +2155,7 @@ def _click_youtube_next(page):
     several selectors in order, with a JS fallback. Returns True if a click was
     attempted on a visible Next control.
     """
+    # 1) Try Playwright locators with force=True (bypasses overlay/actionability).
     selectors = [
         'ytcp-button#next-button',
         '#next-button',
@@ -2096,14 +2168,14 @@ def _click_youtube_next(page):
         try:
             b = page.locator(sel).first
             if b.count() > 0 and b.is_visible():
-                b.click(timeout=4000, force=True)
+                b.click(timeout=4000, force=True, no_wait_after=True)
                 return True
         except Exception:
             continue
-    # JS fallback: click any element whose text is exactly "Next".
+    # 2) JS fallback: click any visible element whose text is exactly "Next".
     try:
         clicked = page.evaluate("""() => {
-            const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button')];
+            const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
             const next = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
                 && !el.disabled && el.offsetParent !== null);
             if (next) { next.click(); return true; }
@@ -2203,7 +2275,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 t = "Daily Short #Shorts"
             tl = page.locator('#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], input[placeholder*="Title"]').first
             if tl.count() > 0:
-                tl.click(timeout=4000)
+                tl.click(timeout=4000, force=True)
                 time.sleep(0.3)
                 page.keyboard.press("Control+A")
                 page.keyboard.press("Delete")
@@ -2216,14 +2288,14 @@ def upload_video_to_youtube(username, file_path, caption, title):
         try:
             dl = page.locator('#description-textarea, #textbox[label*="Description"], ytcp-mention-textbox[label*="Description"], textarea[placeholder*="Description"]').first
             if dl.count() > 0:
-                dl.click(timeout=4000)
+                dl.click(timeout=4000, force=True)
                 time.sleep(0.3)
                 page.keyboard.press("Control+A")
                 page.keyboard.press("Delete")
                 dl.type(caption, delay=12)
                 print(f"[{username}] ✓ YouTube description set")
         except Exception as ce:
-            print(f"[{username}] YouTube description EXCEPTION (likely blocked by verify dialog): {ce}")
+            print(f"[{username}] YouTube description EXCEPTION: {ce}")
 
         # Resolve the "Verify that it's you" dialog if it appeared (it blocks clicks).
         _handle_youtube_auth_dialog(page, username)
@@ -2368,7 +2440,7 @@ def _init_worker_browser(username, account):
     except Exception:
         return False
 
-    session = _start_browser_session(username)
+    session = _start_browser_session(username, account)
     clean_cookies = []
     for c in cookies:
         if not isinstance(c, dict) or "name" not in c or "value" not in c:
