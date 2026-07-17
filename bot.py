@@ -1421,10 +1421,12 @@ def generate_caption(video_info, category, platform="TikTok"):
         # YouTube Shorts: longer, accurate, searchable caption + #Shorts.
         extra = ["#Shorts", "#YouTubeShorts", "#viralshorts"]
         all_tags = list(set(pool + extra))[:8]
-        topic = plain or base
+        # Use the real video topic when available; otherwise a generic hook.
+        # NOTE: never repeat `base` (it's already the hook line above).
+        topic = plain or "Watch till the end!"
         caption = (
             f"{base}\n\n{topic}\n\n"
-            f"Drop a like and subscribe for more {cat.replace(' ', ' ')} "
+            f"Drop a like and subscribe for more {cat} "
             f"shorts every day! 🔔\n\n"
             f"{' '.join(all_tags)}"
         )
@@ -2431,20 +2433,66 @@ def upload_video_to_youtube(username, file_path, caption, title):
             pass
 
         # Next -> Next -> Next (Details -> Video elements -> Checks -> Public).
-        # YouTube Studio's Next button is often ICON-ONLY (no "Next" text), so we
-        # match #next-button + icon paper-button + text fallback, and also handle
-        # the verify dialog that can appear between steps.
-        for step in range(4):
-            _handle_youtube_auth_dialog(page, username)
-            _log_click_targets(page, username, f"NEXT_STEP_{step+1}")
+        # We VERIFY each click actually advanced the form by comparing a page
+        # "signature" (which dialogs/steps are present) before and after — if the
+        # click didn't advance, we retry with the alternative Next control.
+        def _page_signature():
             try:
-                nb = _click_youtube_next(page)
-                if nb:
-                    print(f"[{username}] ✓ clicked Next (step {step+1})")
-                    time.sleep(random.uniform(1.5, 3.0))
-                    take_screenshot(username)
-            except Exception as ne:
-                print(f"[{username}] Next click err (step {step+1}): {ne}")
+                return page.evaluate("""() => {
+                    const ids = [...document.querySelectorAll('[id]')].map(e => e.id).join('|');
+                    const titles = [...document.querySelectorAll('ytcp-video-metadata-editor, ytcp-upload-renderer, [class*="step"], [role="dialog"]')]
+                        .map(e => (e.textContent||'').slice(0,30)).join('|');
+                    return ids + '###' + titles;
+                }""")
+            except Exception:
+                return str(time.time())
+
+        for step in range(6):
+            _handle_youtube_auth_dialog(page, username)
+
+            # Before each Next: reveal "Made for kids" and set "No" (required to proceed).
+            try:
+                more = page.locator('button:has-text("Show more")').first
+                if more.count() > 0 and more.is_visible():
+                    more.click(timeout=3000, force=True)
+                    time.sleep(0.8)
+            except Exception:
+                pass
+            try:
+                not_kids = page.locator('tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No")').first
+                if not_kids.count() > 0 and not_kids.is_visible():
+                    not_kids.click(timeout=3000, force=True)
+                    time.sleep(0.4)
+            except Exception:
+                pass
+
+            before = _page_signature()
+            _log_click_targets(page, username, f"NEXT_STEP_{step+1}")
+            clicked = _click_youtube_next(page)
+            if not clicked:
+                # Try the dialog's confirm Next as a fallback.
+                try:
+                    if _click_dialog_button_js(page, 'ytcp-upload-renderer, ytcp-video-metadata-editor, [role="dialog"]', 'Next'):
+                        clicked = True
+                        print(f"[{username}] ✓ clicked dialog Next (fallback)")
+                except Exception:
+                    pass
+            if not clicked:
+                print(f"[{username}] ⚠ no Next button found at step {step+1}")
+                time.sleep(3)
+                continue
+
+            print(f"[{username}] ✓ clicked Next (step {step+1})")
+            time.sleep(random.uniform(2.0, 3.5))
+            after = _page_signature()
+            if after == before:
+                print(f"[{username}] ⚠ Next did NOT advance the form (step {step+1}) — retrying with dialog Next")
+                try:
+                    _click_dialog_button_js(page, 'ytcp-upload-renderer, ytcp-video-metadata-editor, [role="dialog"]', 'Next')
+                except Exception:
+                    pass
+                time.sleep(2)
+            take_screenshot(username)
 
         # Set visibility to Public
         _handle_youtube_auth_dialog(page, username)
