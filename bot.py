@@ -1989,17 +1989,18 @@ def _dismiss_youtube_popups(page, username=""):
             pass
 
     # 2) Generic dismiss buttons (dialogs, onboarding, "review your channel", etc.)
+    #    NOTE: we deliberately do NOT click "Dismiss"/"Close" on the
+    #    ytcp-auth-confirmation-dialog ("Verify that it's you") — collapsing it
+    #    without resolving verification just makes it re-block every click. That
+    #    dialog is handled separately by _handle_youtube_auth_dialog().
     generic = [
         'button:has-text("Skip")',
         'button:has-text("Got it")',
         'button:has-text("Not now")',
         'button:has-text("No thanks")',
-        'button:has-text("Dismiss")',
-        'button:has-text("Close")',
         'button:has-text("Maybe later")',
         'ytcp-button:has-text("Skip")',
         'tp-yt-paper-button:has-text("Skip")',
-        '[role="dialog"] button[aria-label="Close"]',
         'ytd-button-renderer:has-text("Got it")',
     ]
     for sel in generic:
@@ -2020,6 +2021,7 @@ def _dismiss_youtube_popups(page, username=""):
                 '.ytd-consent-bump, ytd-enforcement-message-renderer, ' +
                 'yt-mealbar-promo-renderer, ytcp-survey, [class*="survey"]'
             ).forEach(el => {
+                if (el.tagName && el.tagName.toLowerCase().includes('ytcp-auth-confirmation-dialog')) return;
                 const t = (el.textContent || '').toLowerCase();
                 if (t.includes('review') || t.includes('survey') || t.includes('cookie') ||
                     t.includes('consent') || t.includes('got it') || t.includes('skip')) {
@@ -2029,6 +2031,87 @@ def _dismiss_youtube_popups(page, username=""):
         }""")
     except Exception:
         pass
+
+
+def _handle_youtube_auth_dialog(page, username=""):
+    """Handle YouTube Studio's 'Verify that it's you' (ytcp-auth-confirmation-dialog).
+
+    This dialog intercepts ALL clicks on the upload form, so it MUST be resolved
+    first. We click its primary 'Next'/'Continue' button. If it still doesn't
+    close (e.g. it requires an actual phone/email code from the user), we report
+    it but keep the flow going so the user can complete it in the live cam.
+    Returns True if the dialog was present and we acted on it.
+    """
+    try:
+        dialog = page.locator('ytcp-auth-confirmation-dialog').first
+        if dialog.count() == 0:
+            return False
+        if not dialog.is_visible():
+            return False
+        print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected")
+        update_account(username, current_task="Verify that it's you — click Next to confirm")
+
+        # Click the dialog's primary action button (Next / Continue / Verify).
+        primary = dialog.locator(
+            'ytcp-button#next-button, ytcp-button:has-text("Next"), ' +
+            'tp-yt-paper-button:has-text("Next"), button:has-text("Next"), ' +
+            'ytcp-button:has-text("Continue"), button:has-text("Continue"), ' +
+            'ytcp-button:has-text("Verify"), button:has-text("Verify")'
+        ).first
+        if primary.count() > 0 and primary.is_visible():
+            primary.click(timeout=5000, force=True)
+            print(f"[{username}] ✓ clicked Next/Continue in verify dialog")
+            time.sleep(3)
+            take_screenshot(username)
+            # Wait a moment for it to either advance or close.
+            for _ in range(10):
+                try:
+                    if dialog.count() == 0 or not dialog.is_visible():
+                        print(f"[{username}] ✓ verify dialog dismissed")
+                        return True
+                except Exception:
+                    pass
+                time.sleep(2)
+            print(f"[{username}] ⚠ verify dialog still present — may need a code")
+        return True
+    except Exception as e:
+        print(f"[{username}] verify dialog handling err: {e}")
+        return False
+
+
+def _click_youtube_next(page):
+    """Click YouTube Studio's Next button. It is frequently ICON-ONLY, so we try
+    several selectors in order, with a JS fallback. Returns True if a click was
+    attempted on a visible Next control.
+    """
+    selectors = [
+        'ytcp-button#next-button',
+        '#next-button',
+        'tp-yt-paper-button#next-button',
+        'ytcp-button:has-text("Next")',
+        'button:has-text("Next")',
+        'tp-yt-paper-button:has-text("Next")',
+    ]
+    for sel in selectors:
+        try:
+            b = page.locator(sel).first
+            if b.count() > 0 and b.is_visible():
+                b.click(timeout=4000, force=True)
+                return True
+        except Exception:
+            continue
+    # JS fallback: click any element whose text is exactly "Next".
+    try:
+        clicked = page.evaluate("""() => {
+            const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button')];
+            const next = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
+                && !el.disabled && el.offsetParent !== null);
+            if (next) { next.click(); return true; }
+            return false;
+        }""")
+        return bool(clicked)
+    except Exception:
+        return False
 
 
 def upload_video_to_youtube(username, file_path, caption, title):
@@ -2097,6 +2180,8 @@ def upload_video_to_youtube(username, file_path, caption, title):
         details_ready = False
         for sec in range(240):  # up to 8 min
             time.sleep(3)
+            # The "Verify that it's you" dialog can appear during processing.
+            _handle_youtube_auth_dialog(page, username)
             # Title input indicates the details screen is ready
             title_loc = page.locator('#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], input[placeholder*="Title"]').first
             if title_loc.count() > 0 and title_loc.is_visible():
@@ -2138,12 +2223,15 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 dl.type(caption, delay=12)
                 print(f"[{username}] ✓ YouTube description set")
         except Exception as ce:
-            print(f"[{username}] YouTube description EXCEPTION: {ce}")
+            print(f"[{username}] YouTube description EXCEPTION (likely blocked by verify dialog): {ce}")
 
+        # Resolve the "Verify that it's you" dialog if it appeared (it blocks clicks).
+        _handle_youtube_auth_dialog(page, username)
         _dismiss_youtube_popups(page, username)
         take_screenshot(username)
 
         # Click "Show more" to reveal Made for kids, then set Not made for kids.
+        _handle_youtube_auth_dialog(page, username)
         try:
             more = page.locator('button:has-text("Show more")').first
             if more.count() > 0 and more.is_visible():
@@ -2159,18 +2247,23 @@ def upload_video_to_youtube(username, file_path, caption, title):
         except Exception:
             pass
 
-        # Next -> Next -> Next (Details -> Video elements -> Checks -> Public)
-        for step in range(3):
+        # Next -> Next -> Next (Details -> Video elements -> Checks -> Public).
+        # YouTube Studio's Next button is often ICON-ONLY (no "Next" text), so we
+        # match #next-button + icon paper-button + text fallback, and also handle
+        # the verify dialog that can appear between steps.
+        for step in range(4):
+            _handle_youtube_auth_dialog(page, username)
             try:
-                nb = page.locator('ytcp-button#next-button, button:has-text("Next")').first
-                if nb.count() > 0 and nb.is_visible():
-                    nb.click(timeout=4000)
+                nb = _click_youtube_next(page)
+                if nb:
+                    print(f"[{username}] ✓ clicked Next (step {step+1})")
                     time.sleep(random.uniform(1.5, 3.0))
                     take_screenshot(username)
-            except Exception:
-                pass
+            except Exception as ne:
+                print(f"[{username}] Next click err (step {step+1}): {ne}")
 
         # Set visibility to Public
+        _handle_youtube_auth_dialog(page, username)
         try:
             public = page.locator('tp-yt-paper-radio-button:has-text("Public"), paper-radio-button:has-text("Public")').first
             if public.count() > 0:
@@ -2186,13 +2279,24 @@ def upload_video_to_youtube(username, file_path, caption, title):
         # Click Publish
         published = False
         for attempt in range(4):
+            _handle_youtube_auth_dialog(page, username)
             try:
-                pb = page.locator('ytcp-button#publish-button, button:has-text("Publish")').first
+                pb = page.locator('ytcp-button#publish-button, #publish-button, button:has-text("Publish"), ytcp-button:has-text("Publish")').first
                 if pb.count() == 0 or not pb.is_visible():
-                    print(f"[{username}] YouTube publish button not found (attempt {attempt+1})")
-                    time.sleep(4)
-                    continue
-                pb.click(timeout=6000, force=True)
+                    # JS fallback for an icon-only Publish button.
+                    clicked = page.evaluate("""() => {
+                        const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button')];
+                        const p = els.find(el => (el.textContent || '').trim().toLowerCase() === 'publish'
+                            && !el.disabled && el.offsetParent !== null);
+                        if (p) { p.click(); return true; }
+                        return false;
+                    }""")
+                    if not clicked:
+                        print(f"[{username}] YouTube publish button not found (attempt {attempt+1})")
+                        time.sleep(4)
+                        continue
+                else:
+                    pb.click(timeout=6000, force=True)
                 print(f"[{username}] YouTube publish clicked (attempt {attempt+1})")
             except Exception as e:
                 print(f"[{username}] YouTube publish click err: {e}")
