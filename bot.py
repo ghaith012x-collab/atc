@@ -2275,27 +2275,187 @@ def _js_is_disabled(el_expr):
 
 
 def _handle_youtube_auth_dialog(page, username=""):
-    """Handle YouTube Studio's 'Verify that it's you' (ytcp-auth-confirmation-dialog).
+    """Handle YouTube Studio's 'Verify that it's you' dialog.
 
     This dialog intercepts ALL clicks on the upload form, so it MUST be resolved
-    first. Its primary action button is #confirm-button (text 'Next'); we click it
-    via a DIRECT DOM click (JS) because Playwright's actionability check is blocked
-    by the dialog's own overlay backdrop.
+    first. Its primary action button is labelled 'Next' (often #confirm-button).
 
-    IMPORTANT: we NEVER click a DISABLED button. When the dialog has advanced to a
-    step that waits for a verification code/phone (the Next button is disabled), we
-    STOP and let the user finish it in the live cam — we do NOT hammer it (which
-    previously dragged a text selection across the page).
+    Strategy (most reliable first):
+      1) Find the real, visible, ENABLED Next/Confirm button via Playwright
+         locators and click it with Playwright's TRUSTED click (scrolls into
+         view, hits the true center, dispatches trusted events Polymer accepts).
+      2) If locators miss, fall back to a real page.mouse.click() at the button's
+         true bounding-box center (computed from the live element handle).
+      3) Only if both fail do we report "needs_code".
 
-    Returns:
-      False  -> no dialog present
-      "advanced" -> we clicked the enabled Next and the dialog moved on
-      "needs_code" -> dialog still open but Next is disabled (waiting for user input)
+    We NEVER click a DISABLED button. When the dialog has advanced to a step that
+    waits for a verification code/phone (the Next button is disabled), we STOP and
+    let the user finish it (no hammering that drags a text selection).
     """
     try:
-        dialog = page.locator('ytcp-auth-confirmation-dialog').first
-        if dialog.count() == 0:
-            return False
+        # Candidate containers (most specific first).
+        container_sels = [
+            'ytcp-auth-confirmation-dialog',
+            'ytcp-dialog',
+            'ytcp-upload-confirmation-dialog',
+            '[role="dialog"]',
+        ]
+        container = None
+        for cs in container_sels:
+            try:
+                loc = page.locator(cs).first
+                if loc.count() > 0 and loc.is_visible():
+                    container = loc
+                    break
+            except Exception:
+                continue
+        if container is None:
+            # Maybe a dialog exists but isn't matched above; try a broad check.
+            has_dlg = page.evaluate("""() => !!document.querySelector('[role="dialog"], ytcp-auth-confirmation-dialog, ytcp-dialog')""")
+            if not has_dlg:
+                return False
+
+        print(f"[{username}] ⚠ YouTube verify/confirm dialog detected")
+
+        # 1) Playwright locator click on a visible, enabled Next/Confirm button.
+        button_sels = [
+            'ytcp-auth-confirmation-dialog #confirm-button',
+            'ytcp-auth-confirmation-dialog #next-button',
+            '#confirm-button', '#next-button',
+            'ytcp-button:has-text("Next")',
+            'tp-yt-paper-button:has-text("Next")',
+            'button:has-text("Next")',
+            'ytcp-button:has-text("Confirm")',
+            'button:has-text("Confirm")',
+            '[role="dialog"] ytcp-button:visible, [role="dialog"] button:visible',
+        ]
+        clicked_handle = None
+        for sel in button_sels:
+            try:
+                b = page.locator(sel).first
+                if b.count() == 0 or not b.is_visible():
+                    continue
+                if b.is_disabled():
+                    print(f"[{username}] verify button '{sel}' DISABLED — skipping")
+                    continue
+                box = b.bounding_box()
+                if not box or box["width"] <= 0 or box["height"] <= 0:
+                    continue
+                cx = round(box["x"] + box["width"] / 2)
+                cy = round(box["y"] + box["height"] / 2)
+                print(f"[{username}] verify clicking Next via Playwright '{sel}' center=({cx},{cy})")
+                b.click(timeout=5000, force=True, no_wait_after=True)
+                clicked_handle = b
+                break
+            except Exception as e:
+                print(f"[{username}] verify Playwright click '{sel}' failed: {str(e)[:80]}")
+                continue
+
+        # 2) Fallback: JS-driven real mouse click at the true button center.
+        if clicked_handle is None:
+            pick = page.evaluate("""() => {
+                const containers = ['ytcp-auth-confirmation-dialog','ytcp-dialog','ytcp-upload-confirmation-dialog','[role=\"dialog\"]'];
+                let root = null;
+                for (const c of containers) { const el = document.querySelector(c);
+                    if (el && (el.offsetParent !== null || getComputedStyle(el).display !== 'none')) { root = el; break; } }
+                if (!root) return {found:false};
+                const disabled = (el) => {
+                    if (!el) return true;
+                    if (el.disabled === true) return true;
+                    if (el.hasAttribute && (el.hasAttribute('disabled') || el.getAttribute('aria-disabled')==='true')) return true;
+                    const sr = el.shadowRoot;
+                    if (sr) { const i = sr.querySelector('button, [role=\"button\"], tp-yt-paper-button');
+                        if (i && (i.disabled===true || (i.hasAttribute && i.hasAttribute('disabled')) || i.getAttribute('aria-disabled')==='true')) return true; }
+                    return false;
+                };
+                const cands = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role=\"button\"]')];
+                let b = root.querySelector('#confirm-button') || root.querySelector('#next-button');
+                if (b && disabled(b)) b = null;
+                if (!b) b = cands.find(el => { const t=(el.textContent||'').trim().toLowerCase();
+                    return (t==='next'||t==='confirm'||t==='continue') && !disabled(el)
+                        && el.getBoundingClientRect().width>0; });
+                if (!b) return {found:false};
+                const r = b.getBoundingClientRect();
+                return {found:true, id:b.id||'', text:(b.textContent||'').trim().slice(0,30),
+                        cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2),
+                        vw:window.innerWidth, vh:window.innerHeight};
+            }""")
+            if pick and pick.get("found"):
+                cx, cy = pick["cx"], pick["cy"]
+                print(f"[{username}] verify Next <#{pick['id']}> text='{pick['text']}' center=({cx},{cy}) vp=({pick['vw']}x{pick['vh']})")
+                if 0 < cx < pick["vw"] and 0 < cy < pick["vh"]:
+                    _clear_text_selection(page)
+                    try:
+                        page.mouse.click(cx, cy, delay=80, button="left")
+                        clicked_handle = True
+                    except Exception as me:
+                        print(f"[{username}] verify mouse click err: {me}")
+
+        _clear_text_selection(page)
+        if clicked_handle is None:
+            # Dump the dialog DOM so we can see the real structure.
+            try:
+                html = page.evaluate("""() => {
+                    const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','[role=\"dialog\"]'];
+                    for (const x of c) { const d=document.querySelector(x); if (d) return d.outerHTML.slice(0,5000); }
+                    return 'NO DIALOG IN DOM';
+                }""")
+                print(f"[{username}] ⚠ verify Next NOT clickable. Dialog DOM:\n{html}")
+            except Exception as e:
+                print(f"[{username}] ⚠ verify Next NOT clickable (dump err {e})")
+            # Is the dialog actually waiting for a code? (Next present but disabled)
+            waiting = page.evaluate("""() => {
+                const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','[role=\"dialog\"]'];
+                for (const x of c) { const root=document.querySelector(x); if(!root) continue;
+                    const b = root.querySelector('#confirm-button')||root.querySelector('#next-button')
+                        || [...root.querySelectorAll('ytcp-button,button,[role=\"button\"]')].find(el=>(el.textContent||'').trim().toLowerCase()==='next');
+                    if (b) return {present:true, disabled: !!(b.disabled || (b.hasAttribute && b.hasAttribute('disabled')))};
+                }
+                return {present:false};
+            }""")
+            if waiting.get("present") and waiting.get("disabled"):
+                update_account(username, current_task="Verify that it's you — enter the code in live cam")
+                return "needs_code"
+            update_account(username, current_task="Verify that it's you — could not click Next (see log)")
+            return "needs_code"
+
+        print(f"[{username}] ✓ clicked verify Next")
+        update_account(username, current_task="Verify that it's you — clicked Next, waiting...")
+        time.sleep(3)
+        take_screenshot(username)
+        # Wait to see if the dialog advances / closes.
+        for _ in range(8):
+            try:
+                still = page.evaluate("""() => {
+                    const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','ytcp-upload-confirmation-dialog','[role=\"dialog\"]'];
+                    for (const x of c) { const d=document.querySelector(x);
+                        if (d && d.offsetParent !== null) return true; }
+                    return false;
+                }""")
+                if not still:
+                    print(f"[{username}] ✓ verify dialog dismissed")
+                    return "advanced"
+            except Exception:
+                pass
+            time.sleep(2)
+        # Still open: code-entry step?
+        waiting = page.evaluate("""() => {
+            const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','[role=\"dialog\"]'];
+            for (const x of c) { const root=document.querySelector(x); if(!root) continue;
+                const b = root.querySelector('#confirm-button')||root.querySelector('#next-button')
+                    || [...root.querySelectorAll('ytcp-button,button,[role=\"button\"]')].find(el=>(el.textContent||'').trim().toLowerCase()==='next');
+                if (b) return {present:true, disabled: !!(b.disabled || (b.hasAttribute && b.hasAttribute('disabled')))};
+            }
+            return {present:false};
+        }""")
+        if waiting.get("present") and waiting.get("disabled"):
+            print(f"[{username}] ⚠ verify advanced to code-entry step — waiting for user")
+            update_account(username, current_task="Verify that it's you — enter the code in live cam")
+            return "needs_code"
+        return "advanced"
+    except Exception as e:
+        print(f"[{username}] verify dialog handling err: {e}")
+        return False
         if not dialog.is_visible():
             return False
         print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected")
