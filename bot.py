@@ -2448,37 +2448,44 @@ def _handle_youtube_auth_dialog(page, username=""):
         print(f"[{username}] ✓ clicked verify Next")
         log_event(username, "Verify dialog: clicked Next successfully")
         update_account(username, current_task="Verify that it's you — clicked Next, waiting...")
-        time.sleep(3)
-        take_screenshot(username)
-        # Wait to see if the dialog advances / closes.
+        # Poll up to ~19s. ONLY return "advanced" if the dialog is GONE. If it is
+        # still present (next step of the wizard, or a code-entry step), we stop
+        # and wait for the user — otherwise we'd loop forever clicking greyed
+        # buttons and the upload form would never become usable.
         for _ in range(8):
-            try:
-                still = page.evaluate("""() => {
-                    const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','ytcp-upload-confirmation-dialog','[role=\"dialog\"]'];
-                    for (const x of c) { const d=document.querySelector(x);
-                        if (d && d.offsetParent !== null) return true; }
-                    return false;
-                }""")
-                if not still:
-                    print(f"[{username}] ✓ verify dialog dismissed")
-                    log_event(username, "Verify dialog: dismissed after Next")
-                    return "advanced"
-            except Exception:
-                pass
             time.sleep(2)
-        # Still open: code-entry step?
+            take_screenshot(username)  # keep the live view in sync
+            still = page.evaluate("""() => {
+                const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','ytcp-upload-confirmation-dialog','[role=\"dialog\"]'];
+                for (const x of c) { const d=document.querySelector(x);
+                    if (d && d.offsetParent !== null) return true; }
+                return false;
+            }""")
+            if not still:
+                print(f"[{username}] ✓ verify dialog dismissed")
+                log_event(username, "Verify dialog: dismissed after Next")
+                return "advanced"
+        # Dialog still present after clicking Next — wait for the user to finish
+        # (this is a multi-step wizard: choose method -> enter code, etc).
         waiting = page.evaluate("""() => {
             const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','[role=\"dialog\"]'];
             for (const x of c) { const root=document.querySelector(x); if(!root) continue;
                 const b = root.querySelector('#confirm-button')||root.querySelector('#next-button')
                     || [...root.querySelectorAll('ytcp-button,button,[role=\"button\"]')].find(el=>(el.textContent||'').trim().toLowerCase()==='next');
-                if (b) return {present:true, disabled: !!(b.disabled || (b.hasAttribute && b.hasAttribute('disabled')))};
+                if (b) return {present:true, disabled: !!(b.disabled || (b.hasAttribute && b.hasAttribute('disabled'))),
+                              text:(root.textContent||'').replace(/\\s+/g,' ').slice(0,120)};
             }
             return {present:false};
         }""")
-        if waiting.get("present") and waiting.get("disabled"):
-            print(f"[{username}] ⚠ verify advanced to code-entry step — waiting for user")
-            update_account(username, current_task="Verify that it's you — enter the code in live cam")
+        if waiting.get("present"):
+            if waiting.get("disabled"):
+                print(f"[{username}] ⚠ verify Next now DISABLED — waiting for user to enter code")
+                log_event(username, "Verify dialog: Next disabled — waiting for user code/action. Dialog: " + str(waiting.get("text")))
+            else:
+                print(f"[{username}] ⚠ verify dialog still open after Next (more steps) — waiting for user")
+                log_event(username, "Verify dialog: still open after Next (multi-step) — waiting. Dialog: " + str(waiting.get("text")))
+            update_account(username, current_task="Verify that it's you — complete the step in live cam")
+            take_screenshot(username)
             return "needs_code"
         return "advanced"
     except Exception as e:
@@ -2694,13 +2701,23 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 time.sleep(1)
         except Exception:
             pass
+        # Robustly select "No, it's not made for kids" (matches "No" inside the
+        # radio whose label contains "made for kids" / "not made for kids").
         try:
-            not_kids = page.locator('tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No")').first
-            if not_kids.count() > 0:
-                not_kids.click(timeout=4000)
+            not_kids = page.locator(
+                'tp-yt-paper-radio-button:has-text("No"), '
+                'paper-radio-button:has-text("No"), '
+                'ytcp-radio-button:has-text("No"), '
+                '[role="radio"]:has-text("No")'
+            ).first
+            if not_kids.count() > 0 and not_kids.is_visible():
+                not_kids.click(timeout=4000, force=True)
                 time.sleep(0.5)
-        except Exception:
-            pass
+                print(f"[{username}] ✓ set Not made for kids = No")
+                log_event(username, "Set 'Not made for kids' = No")
+        except Exception as e:
+            print(f"[{username}] ⚠ could not set Not-made-for-kids: {e}")
+            log_event(username, f"Could not set Not-made-for-kids: {e}")
 
         # Next -> Next -> Next (Details -> Video elements -> Checks -> Public).
         # We VERIFY each click actually advanced the form by comparing a page
@@ -2718,7 +2735,15 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 return str(time.time())
 
         for step in range(6):
-            _handle_youtube_auth_dialog(page, username)
+            # If the verify dialog needs user action (code / multi-step), STOP the
+            # whole upload here — don't hammer Next behind the dialog. The worker
+            # will wait and we surface it in the live cam + Logs.
+            auth = _handle_youtube_auth_dialog(page, username)
+            if auth == "needs_code":
+                print(f"[{username}] ⚠ verify dialog needs user action — aborting upload step, will wait")
+                log_event(username, "Verify dialog needs user action — upload paused, waiting in live cam")
+                take_screenshot(username)
+                return "VERIFY_WAIT"
 
             # Before each Next: reveal "Made for kids" and set "No" (required to proceed).
             try:
@@ -2729,7 +2754,10 @@ def upload_video_to_youtube(username, file_path, caption, title):
             except Exception:
                 pass
             try:
-                not_kids = page.locator('tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No")').first
+                not_kids = page.locator(
+                    'tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No"), '
+                    'ytcp-radio-button:has-text("No"), [role="radio"]:has-text("No")'
+                ).first
                 if not_kids.count() > 0 and not_kids.is_visible():
                     not_kids.click(timeout=3000, force=True)
                     time.sleep(0.4)
@@ -2764,15 +2792,22 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 time.sleep(2)
             take_screenshot(username)
 
-        # Set visibility to Public
+        # Set visibility to Public (Everyone)
         _handle_youtube_auth_dialog(page, username)
         try:
-            public = page.locator('tp-yt-paper-radio-button:has-text("Public"), paper-radio-button:has-text("Public")').first
-            if public.count() > 0:
-                public.click(timeout=4000)
+            public = page.locator(
+                'tp-yt-paper-radio-button:has-text("Public"), paper-radio-button:has-text("Public"), '
+                'ytcp-radio-button:has-text("Public"), [role="radio"]:has-text("Public"), '
+                'tp-yt-paper-radio-button:has-text("Everyone"), paper-radio-button:has-text("Everyone")'
+            ).first
+            if public.count() > 0 and public.is_visible():
+                public.click(timeout=4000, force=True)
                 time.sleep(0.5)
-        except Exception:
-            pass
+                print(f"[{username}] ✓ set visibility = Public")
+                log_event(username, "Set visibility = Public")
+        except Exception as e:
+            print(f"[{username}] ⚠ could not set Public visibility: {e}")
+            log_event(username, f"Could not set Public visibility: {e}")
 
         take_screenshot(username)
         _save_debug_screenshot(page, "yt_pre_publish", username)
@@ -2781,7 +2816,12 @@ def upload_video_to_youtube(username, file_path, caption, title):
         # Click Publish
         published = False
         for attempt in range(4):
-            _handle_youtube_auth_dialog(page, username)
+            auth = _handle_youtube_auth_dialog(page, username)
+            if auth == "needs_code":
+                print(f"[{username}] ⚠ verify dialog needs user action before Publish — waiting")
+                log_event(username, "Verify dialog blocks Publish — waiting for user in live cam")
+                take_screenshot(username)
+                return "VERIFY_WAIT"
             _log_click_targets(page, username, f"PUBLISH_ATTEMPT_{attempt+1}")
             try:
                 pb = page.locator('ytcp-button#publish-button, #publish-button, button:has-text("Publish"), ytcp-button:has-text("Publish")').first
@@ -3053,6 +3093,13 @@ def automation_worker(username):
                 if page:
                     _dismiss_youtube_popups(page, username)
                 success = upload_video_to_youtube(username, prepared_file, caption, title)
+                if success == "VERIFY_WAIT":
+                    # Verify dialog needs manual action (code / multi-step). Pause
+                    # the cycle and wait so the user can finish it in the live cam.
+                    update_account(username, current_task="Verify that it's you — paused, complete in live cam")
+                    log(f"[{username}] VERIFY_WAIT: pausing cycle, waiting for user")
+                    time.sleep(180)
+                    continue
             else:
                 log(f"[{username}] Step 5: Uploading to TikTok...")
                 update_account(username, current_task="Step 5: Uploading to TikTok...")
