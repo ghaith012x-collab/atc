@@ -2183,11 +2183,22 @@ def _click_dialog_button_js(page, container, label):
         const root = document.querySelector(container);
         if (!root) return false;
         const want = label.toLowerCase();
-        const btns = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
-        const b = btns.find(el => {
-            const t = (el.textContent || '').trim().toLowerCase();
-            return t === want || t.startsWith(want + ' ') || t.endsWith(' ' + want);
-        });
+        // Recurse into shadow roots; prefer the inner <button> that owns the
+        // real click handler (the custom <ytcp-button> host ignores .click()).
+        const findInner = (r) => {
+            const els = [...r.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
+            let hit = els.find(el => {
+                const t = (el.textContent || '').trim().toLowerCase();
+                return (t === want || t.startsWith(want + ' ') || t.endsWith(' ' + want)) && !el.disabled;
+            });
+            if (hit) {
+                const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
+                return inner || hit;
+            }
+            for (const el of els) { if (el.shadowRoot) { const r2 = findInner(el.shadowRoot); if (r2) return r2; } }
+            return null;
+        };
+        const b = findInner(root);
         if (b && !b.disabled) { b.click(); return true; }
         return false;
     }""", [container, label])
@@ -2280,17 +2291,20 @@ def _handle_youtube_auth_dialog(page, username=""):
             return "needs_code"
         _clear_text_selection(page)
         res = {"ok": False}
-        # Use a REAL Playwright locator click on the actual Next button. Playwright
-        # clicks the element's true center with a trusted event and force=True
-        # bypasses the overlay's actionability/backdrop hit-testing (so we never
-        # land on the backdrop and drag a text selection). This is the reliable
-        # method that actually fires Polymer's click handler.
+        # REAL fix: the #confirm-button is a custom Polymer <ytcp-button> whose true
+        # clickable target is the inner <button>/<tp-yt-paper-button> (shadow DOM).
+        # Clicking the wrapper (or page.mouse at its center) misses that inner
+        # control and lands on the dialog backdrop -> drags a text selection across
+        # the whole page instead of clicking. So we target the inner <button> where
+        # YouTube's own handler actually lives. force=True bypasses the overlay
+        # backdrop hit-test; no_wait_after avoids hanging on navigation.
         button_sels = [
-            'ytcp-auth-confirmation-dialog #confirm-button',
-            'ytcp-auth-confirmation-dialog #next-button',
-            '#confirm-button', '#next-button',
-            'ytcp-button:has-text("Next")', 'tp-yt-paper-button:has-text("Next")',
-            'button:has-text("Next")',
+            'ytcp-auth-confirmation-dialog #confirm-button button',
+            'ytcp-auth-confirmation-dialog #next-button button',
+            '#confirm-button button', '#next-button button',
+            'ytcp-auth-confirmation-dialog ytcp-button:has-text("Next") button',
+            'ytcp-auth-confirmation-dialog tp-yt-paper-button:has-text("Next")',
+            'ytcp-auth-confirmation-dialog button:has-text("Next")',
         ]
         for sel in button_sels:
             try:
@@ -2303,14 +2317,27 @@ def _handle_youtube_auth_dialog(page, username=""):
                 print(f"[{username}] verify locator click '{sel}' failed: {str(e)[:60]}")
                 continue
         if not res.get("ok"):
-            # Last-resort: trusted JS click on the host element.
+            # Last-resort: trusted JS click on the WRAPPER's inner <button>. We
+            # descend into shadow roots so we hit the real <button>/<tp-yt-paper-button>
+            # that owns the click handler (the custom <ytcp-button> host ignores .click()).
             try:
                 page.evaluate("""() => {
                     const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
                     if (!dlg) return;
+                    const findInner = (root, txt) => {
+                        const els = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
+                        let hit = els.find(el => (el.textContent||'').trim().toLowerCase()===txt && !el.disabled);
+                        if (hit) {
+                            const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
+                            return inner || hit;
+                        }
+                        for (const el of els) {
+                            if (el.shadowRoot) { const r = findInner(el.shadowRoot, txt); if (r) return r; }
+                        }
+                        return null;
+                    };
                     let b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button');
-                    if (!b) b = [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
-                        .find(el => (el.textContent||'').trim().toLowerCase()==='next');
+                    if (!b) b = findInner(dlg, 'next');
                     if (b) b.click();
                 }""")
                 res = {"ok": True, "id": pick["id"], "cx": pick["cx"], "cy": pick["cy"]}
@@ -2352,7 +2379,7 @@ def _handle_youtube_auth_dialog(page, username=""):
                             _log_event(username, f"Verify dialog: typed code {code}")
                             clear_verify_code(username)
                             try:
-                                b = page.locator('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button, #next-button, ytcp-button:has-text("Next"), ytcp-button:has-text("Submit"), ytcp-button:has-text("Verify"), button:has-text("Next"), button:has-text("Submit"), button:has-text("Verify")').first
+                                b = page.locator('ytcp-auth-confirmation-dialog #confirm-button button, #confirm-button button, #next-button button, ytcp-auth-confirmation-dialog button:has-text("Next"), ytcp-auth-confirmation-dialog button:has-text("Submit"), ytcp-auth-confirmation-dialog button:has-text("Verify")').first
                                 if b.count() > 0 and b.is_visible() and not b.is_disabled():
                                     b.click(timeout=5000, force=True)
                             except Exception:
@@ -2417,9 +2444,20 @@ def _click_youtube_next(page):
     # 2) JS fallback: click a visible, ENABLED element whose text is exactly "Next".
     try:
         res = page.evaluate("""() => {
-            const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
-            const next = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
-                && !el.disabled && el.offsetParent !== null);
+            // Recurse shadow roots; prefer the inner <button> that owns the
+            // real click handler (the custom <ytcp-button> host ignores .click()).
+            const findInner = (r) => {
+                const els = [...r.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
+                let hit = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
+                    && !el.disabled && el.offsetParent !== null);
+                if (hit) {
+                    const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
+                    return inner || hit;
+                }
+                for (const el of els) { if (el.shadowRoot) { const r2 = findInner(el.shadowRoot); if (r2) return r2; } }
+                return null;
+            };
+            const next = findInner(document);
             if (next) {
                 const r = next.getBoundingClientRect();
                 next.click();
