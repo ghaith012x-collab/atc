@@ -198,7 +198,7 @@
             <div class="btn-row">
                 <button class="btn-primary" onclick="googleLogin('{{ acc.username }}')">Google Login</button>
             </div>
-            <div class="hint">Opens a real (visible) browser on the Google sign-in page. Log in manually — when Google redirects back to YouTube the session is saved automatically and reused next time. Needs a display (run under xvfb-run on headless servers).</div>
+            <div class="hint">Opens a browser on the Google sign-in page for you to log in MANUALLY (you type the Gmail + password + any code yourself). Once it returns to YouTube the session is saved and reused. <b>Needs a visible display</b> — on a headless container (Cosyra/xvfb) you cannot click it, so instead paste a real YouTube <b>cookie session</b> via "Save Session" above, which works without a window.</div>
             {% endif %}
         </div>
         {% else %}

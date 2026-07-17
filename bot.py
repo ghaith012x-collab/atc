@@ -700,6 +700,23 @@ def _profile_dir_for(username):
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", username or "default")
     return os.path.join(PROFILE_BASE, safe)
 
+def _clear_stale_profile_lock(profile_dir):
+    """Remove a leftover SingletonLock / SingletonCookie so a crashed previous
+    run doesn't make Chromium refuse the profile ('Target ... has been closed').
+    Only removes the lock files, never your cookies or the profile itself."""
+    try:
+        import glob
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            lock = os.path.join(profile_dir, name)
+            if os.path.exists(lock):
+                os.remove(lock)
+        # Sometimes the lock lives one level deeper in a 'Default' subdir.
+        for lock in glob.glob(os.path.join(profile_dir, "*", "SingletonLock")):
+            try: os.remove(lock)
+            except Exception: pass
+    except Exception:
+        pass
+
 def _chrome_channel_available():
     """Return 'chrome' if a real Google Chrome is installed, else None."""
     try:
@@ -782,12 +799,17 @@ def _start_browser_session(username, account=None, no_proxy=False):
     channel = _chrome_channel_available()
     # launch_persistent_context keeps cookies/localStorage in `profile_dir`
     # between runs, so a logged-in YouTube/Google session is reused. We run
-    # HEADED (headless=False) because Google blocks headless automation logins;
-    # on a headless server use `xvfb-run`. The persistent profile means we never
-    # clear cookies or the profile between runs.
-    launch_kwargs = dict(
+    # HEADED (headless=False) because you log in MANUALLY in the visible window
+    # (Google blocks headless automation logins). On a headless server this must
+    # run under a virtual display (xvfb-run) so a window can actually open.
+    #
+    # IMPORTANT: a leftover SingletonLock from a crashed previous run makes
+    # Chromium refuse to reuse the profile and immediately close the context
+    # ("Target ... has been closed"). Remove any stale lock before launching.
+    _clear_stale_profile_lock(profile_dir)
+
+    base_kwargs = dict(
         user_data_dir=profile_dir,
-        headless=False,
         viewport={"width": 1280, "height": 720},
         user_agent=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -807,22 +829,42 @@ def _start_browser_session(username, account=None, no_proxy=False):
         ],
     )
     if channel:
-        launch_kwargs["channel"] = channel
+        base_kwargs["channel"] = channel
     if proxy:
-        launch_kwargs["proxy"] = proxy
+        base_kwargs["proxy"] = proxy
         print(f"[{username}] launching persistent browser (profile={profile_dir}) via proxy: {proxy['server']}")
     else:
         print(f"[{username}] launching persistent browser (profile={profile_dir}) DIRECT")
 
-    try:
-        context = pw.chromium.launch_persistent_context(**launch_kwargs)
-    except Exception as le:
-        if "channel" in launch_kwargs:
-            print(f"[{username}] chrome channel launch failed ({le}); using bundled chromium")
-            launch_kwargs.pop("channel", None)
+    # Try HEADED first (so you can log in manually). If that fails — e.g. no
+    # display available — fall back to headless so the app still runs; manual
+    # login then isn't possible, but cookie sessions still work.
+    context = None
+    last_err = None
+    for attempt_headless in (False, True):
+        launch_kwargs = dict(base_kwargs, headless=attempt_headless)
+        try:
             context = pw.chromium.launch_persistent_context(**launch_kwargs)
-        else:
-            raise
+            if attempt_headless:
+                print(f"[{username}] NOTE: headed launch failed (no display?); fell back to headless. Manual Google login needs a display (run under xvfb-run).")
+            break
+        except Exception as le:
+            last_err = le
+            print(f"[{username}] persistent launch (headless={attempt_headless}) failed: {le}")
+            # If the chrome channel was the problem, drop it and retry once.
+            if "channel" in launch_kwargs:
+                base_kwargs.pop("channel", None)
+                try:
+                    context = pw.chromium.launch_persistent_context(**dict(base_kwargs, headless=attempt_headless))
+                    if attempt_headless:
+                        print(f"[{username}] NOTE: fell back to headless (no display). Manual login needs xvfb-run.")
+                    break
+                except Exception as le2:
+                    last_err = le2
+                    print(f"[{username}] retry without chrome channel also failed: {le2}")
+            continue
+    if context is None:
+        raise last_err or RuntimeError("Could not launch persistent browser")
 
     # launch_persistent_context returns a BrowserContext directly (no separate
     # browser object). We keep `browser` === context so all existing
