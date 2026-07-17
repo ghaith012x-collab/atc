@@ -743,7 +743,7 @@ def _start_browser_session(username, account=None, no_proxy=False):
             pass
         del browser_sessions[username]
 
-    proxy = _get_proxy(account)
+    proxy = None if no_proxy else _get_proxy(account)
     pw = sync_playwright().start()
     launch_kwargs = dict(
         headless=True,
@@ -756,6 +756,8 @@ def _start_browser_session(username, account=None, no_proxy=False):
     if proxy:
         launch_kwargs["proxy"] = proxy
         print(f"[{username}] launching browser via proxy: {proxy['server']}")
+    else:
+        print(f"[{username}] launching browser DIRECT (no proxy)")
     browser = pw.chromium.launch(**launch_kwargs)
     context = browser.new_context(
         viewport={"width": 1280, "height": 720},
@@ -818,6 +820,7 @@ def connect_account(username):
             update_account(username, status="Invalid Session", current_task="No valid cookies found")
             return False
 
+        proxy_cfg = _get_proxy(account)
         session = _start_browser_session(username, account)
         context = session["context"]
         page = session["page"]
@@ -827,11 +830,34 @@ def connect_account(username):
 
         home_url = "https://www.youtube.com" if platform == "YouTube" else "https://www.tiktok.com"
         update_account(username, current_task="Verifying session...")
-        page.goto(home_url, timeout=30000)
+
+        def _goto_home(p, ctx, url):
+            p.goto(url, timeout=30000)
+            try:
+                p.wait_for_load_state("networkidle", timeout=15000)
+            except TimeoutError:
+                pass
+
         try:
-            page.wait_for_load_state("networkidle", timeout=15000)
-        except TimeoutError:
-            pass
+            _goto_home(page, context, home_url)
+        except Exception as ge:
+            # If a proxy was configured and the site timed out, the proxy is
+            # likely unreachable — retry the whole session DIRECT (no proxy) so a
+            # bad proxy setting never kills the bot.
+            if proxy_cfg and ("TIMED_OUT" in str(ge) or "net::" in str(ge)):
+                print(f"[{username}] proxy goto failed ({ge}); retrying WITHOUT proxy")
+                try:
+                    context.close(); session["browser"].close(); session["pw"].stop()
+                except Exception:
+                    pass
+                browser_sessions.pop(username, None)
+                session = _start_browser_session(username, account, no_proxy=True)
+                context = session["context"]
+                page = session["page"]
+                context.add_cookies(clean_cookies)
+                _goto_home(page, context, home_url)
+            else:
+                raise
         time.sleep(3)
         handle_captcha_if_present(page, username)
         take_screenshot(username)
@@ -2541,6 +2567,7 @@ def _init_worker_browser(username, account):
     except Exception:
         return False
 
+    proxy_cfg = _get_proxy(account)
     session = _start_browser_session(username, account)
     clean_cookies = []
     for c in cookies:
@@ -2571,7 +2598,26 @@ def _init_worker_browser(username, account):
         page.reload(timeout=30000)
         time.sleep(3)
     except Exception as e:
-        print(f"[{username}] worker cookie load warning: {e}")
+        # If a proxy was configured and the site timed out, fall back to a DIRECT
+        # (no proxy) browser so a bad proxy setting never kills the worker.
+        if proxy_cfg and ("TIMED_OUT" in str(e) or "net::" in str(e)):
+            print(f"[{username}] worker proxy goto failed ({e}); retrying WITHOUT proxy")
+            try:
+                session["context"].close(); session["browser"].close(); session["pw"].stop()
+            except Exception:
+                pass
+            browser_sessions.pop(username, None)
+            session = _start_browser_session(username, account, no_proxy=True)
+            try:
+                page = session["page"]
+                page.goto(home_url, timeout=30000)
+                session["context"].add_cookies(clean_cookies)
+                page.reload(timeout=30000)
+                time.sleep(3)
+            except Exception as e2:
+                print(f"[{username}] worker direct retry warning: {e2}")
+        else:
+            print(f"[{username}] worker cookie load warning: {e}")
     return True
 
 def _posted_ids_path(username):
