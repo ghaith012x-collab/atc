@@ -35,11 +35,10 @@ def init_db():
             ("platform", "ALTER TABLE accounts ADD COLUMN platform TEXT DEFAULT 'TikTok'"),
             ("logged_in_as", "ALTER TABLE accounts ADD COLUMN logged_in_as TEXT"),
             ("logs", "ALTER TABLE accounts ADD COLUMN logs TEXT"),
+            ("verify_code", "ALTER TABLE accounts ADD COLUMN verify_code TEXT"),
         ]:
             if col not in cols:
                 conn.execute(sql)
-            if "verify_code" not in cols:
-                conn.execute("ALTER TABLE accounts ADD COLUMN verify_code TEXT")
     except Exception:
         pass
     conn.commit()
@@ -77,13 +76,6 @@ def add_account(username, category="dance", platform="TikTok"):
         return False
     finally:
         conn.close()
-
-def delete_account(username):
-    conn = get_db()
-    conn.execute("DELETE FROM accounts WHERE username = ?", (username,))
-    conn.commit()
-    conn.close()
-
 
 def append_log(username, message):
     """Append a timestamped line to the account's rolling log (max ~500 lines)."""
@@ -127,3 +119,10 @@ def clear_verify_code(username):
         conn.close()
     except Exception:
         pass
+
+
+def delete_account(username):
+    conn = get_db()
+    conn.execute("DELETE FROM accounts WHERE username = ?", (username,))
+    conn.commit()
+    conn.close()

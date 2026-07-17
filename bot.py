@@ -768,11 +768,6 @@ def _start_browser_session(username, account=None, no_proxy=False):
         locale="en-US",
     )
     page = context.new_page()
-    try:
-        page.set_default_timeout(25000)
-        page.set_default_navigation_timeout(35000)
-    except Exception:
-        pass
     # Record the thread that owns this Playwright browser. Playwright's sync API
     # is bound to the thread that called sync_playwright().start(), so ALL
     # Playwright calls for this session MUST happen on this thread — never from
@@ -781,6 +776,16 @@ def _start_browser_session(username, account=None, no_proxy=False):
                "owner_thread": threading.current_thread()}
     browser_sessions[username] = session
     return session
+
+
+def _log_event(username, message):
+    """Print + persist a timestamped line to the account's rolling log."""
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{username}] {message}")
+    try:
+        append_log(username, message)
+    except Exception:
+        pass
 
 
 def connect_account(username):
@@ -795,7 +800,7 @@ def connect_account(username):
 
     platform = account.get("platform") or "TikTok"
     update_account(username, status="Connecting", current_task="Starting browser...")
-    log_event(username, f"Connecting to {platform}...")
+    _log_event(username, f"Connecting to {platform}...")
 
     try:
         cookies = json.loads(account["session_data"])
@@ -840,7 +845,7 @@ def connect_account(username):
         def _goto_home(p, ctx, url):
             p.goto(url, timeout=30000)
             try:
-                p.wait_for_load_state("domcontentloaded", timeout=15000)
+                p.wait_for_load_state("networkidle", timeout=15000)
             except TimeoutError:
                 pass
 
@@ -873,52 +878,54 @@ def connect_account(username):
         profile_name = ""
 
         if platform == "YouTube":
-            # Instant, JS-based logged-in detection (no blocking waits). We treat
-            # the account as logged in if a SIGN-IN button is absent AND an
-            # account avatar / account menu is present. We also log the raw
-            # signals so a failure is debuggable in the Logs panel.
-            time.sleep(2)  # let the page settle after navigation
-            # --- Logged-in detection (robust + bounded) ---
-            # We scope the "Sign in" search to the MASTHEAD only (a stray "Sign in"
-            # promo link elsewhere on the page must NOT count against us). A real
-            # logged-in session never shows a Sign-in button in the top bar.
-            diag = {}
+            # Logged-in YouTube shows the avatar / "You" menu.
             try:
-                diag = page.evaluate("""() => {
-                    const out = {};
-                    const q = (sel) => document.querySelector(sel);
-                    const qa = (sel) => Array.from(document.querySelectorAll(sel));
-                    const mast = q('ytd-masthead');
-                    out.hasMasthead = !!mast;
-                    // Only look inside the masthead for a "Sign in" button.
-                    const scope = mast ? mast : document.body;
-                    const signEls = qa('a[href*="accounts.google.com"], ytd-button-renderer, tp-yt-paper-button, button').filter(e => scope.contains(e));
-                    const signIn = signEls.find(el => {
-                        const t = (el.textContent || '').trim().toLowerCase();
-                        return t === 'sign in' || t.startsWith('sign in') || t === 'signin';
-                    });
-                    out.signInText = signIn ? (signIn.textContent||'').trim().slice(0,40) : '';
-                    out.hasSignIn = !!signIn;
-                    const av = q('ytd-masthead #avatar-btn img, #avatar-btn img, #menu #avatar img, ytd-masthead #account-button img, #account-button img');
-                    out.hasAvatar = !!av;
-                    out.url = location.href;
-                    return out;
-                }""")
-            except Exception as ee:
-                log_event(username, f"YT connect diag evaluate err: {ee}")
-            has_avatar = bool(diag.get("hasAvatar"))
-            has_sign_in = bool(diag.get("hasSignIn")) and "sign in" in (diag.get("signInText") or "").lower()
-            # Logged in if: no Sign-in button in the masthead, OR an avatar is shown.
-            logged_in = (not has_sign_in) or has_avatar
-            log_event(username, f"YT connect diag: avatar={has_avatar} mastheadSignIn={has_sign_in} url={diag.get('url','')[:60]} -> logged_in={logged_in}")
-            try:
-                av = page.locator('ytd-masthead #avatar-btn img, #avatar-btn img, #menu #avatar img').first
-                if av.count() > 0:
-                    alt = (av.get_attribute("alt") or "").strip()
-                    if alt and alt.lower() not in ("avatar image", "avatar", ""):
-                        profile_name = alt
-            except Exception:
+                page.wait_for_selector(
+                    'ytd-masthead #avatar-btn, #end #buttons ytd-button-renderer, a[href*="account.google.com"]',
+                    timeout=10000,
+                )
+                # If a Sign in button is present, we are NOT logged in.
+                sign_in = page.locator('a[href*="accounts.google.com"] ytd-button-renderer, #buttons ytd-button-renderer:has-text("Sign in")')
+                logged_in = sign_in.count() == 0
+            except TimeoutError:
                 pass
+            if not logged_in:
+                # Fallback: presence of the "You" / avatar indicates a session
+                try:
+                    if page.locator('ytd-masthead #avatar-btn, #menu #avatar').count() > 0:
+                        logged_in = True
+                except Exception:
+                    pass
+            if logged_in:
+                try:
+                    av = page.locator('ytd-masthead #avatar-btn img, #menu #avatar img').first
+                    if av.count() > 0:
+                        alt = (av.get_attribute("alt") or "").strip()
+                        # "alt" is usually "Avatar image" — not the real name.
+                        # Prefer the channel handle from the account menu instead.
+                        if alt and alt.lower() not in ("avatar image", "avatar", ""):
+                            profile_name = alt
+                except Exception:
+                    pass
+                # Get the real channel name/handle from the account menu.
+                if not profile_name:
+                    try:
+                        page.locator('ytd-masthead #avatar-btn, #end #avatar-btn').first.click(timeout=4000)
+                        time.sleep(1.5)
+                        name_el = page.locator('ytd-account-item-section-header-renderer #channel-title, ytd-account-item-section-header-renderer #account-name, #account-item ytd-account-item-section-header-renderer').first
+                        if name_el.count() > 0:
+                            profile_name = name_el.inner_text(timeout=3000).strip().split("\n")[0]
+                        # Also try the @handle link text.
+                        if not profile_name:
+                            handle_el = page.locator('a[href^="https://www.youtube.com/@"], #account-item a').first
+                            if handle_el.count() > 0:
+                                h = handle_el.inner_text(timeout=2000).strip()
+                                profile_name = h.lstrip("@") or profile_name
+                        page.keyboard.press("Escape")
+                        time.sleep(0.5)
+                    except Exception:
+                        pass
+        else:
             try:
                 page.wait_for_selector(
                     '[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]',
@@ -939,7 +946,7 @@ def connect_account(username):
                 try:
                     page.goto("https://www.tiktok.com/profile", timeout=15000)
                     try:
-                        page.wait_for_load_state("domcontentloaded", timeout=10000)
+                        page.wait_for_load_state("networkidle", timeout=10000)
                     except TimeoutError:
                         pass
                     time.sleep(2)
@@ -979,6 +986,7 @@ def connect_account(username):
                 pass
             browser_sessions.pop(username, None)
         else:
+            _log_event(username, "Session NOT verified (expired or invalid cookies)")
             update_account(username, connected=0, status="Session expired", current_task="Please update session")
             print(f"✗ Session expired or invalid for {username} ({platform})")
             # Close the browser so we don't leave a dead session around.
@@ -2012,12 +2020,12 @@ def upload_video_to_tiktok(username, file_path, caption):
             except Exception as hde:
                 print(f"[{username}] content dialog err: {hde}")
             _save_debug_html(page, "FINAL_SUCCESS", username)
-            log_event(username, "TikTok: post confirmed/published")
+            _log_event(username, "TikTok: post published")
             return True
         else:
             print(f"[{username}] ❌ Post never confirmed (see debug HTMLs / screenshots above)")
             _save_debug_html(page, "FINAL_FAIL", username)
-            log_event(username, "TikTok: post NOT confirmed (FINAL_FAIL)")
+            _log_event(username, "TikTok: post NOT confirmed")
             take_screenshot(username)
             return False
 
@@ -2170,7 +2178,7 @@ def _click_dialog_button_js(page, container, label):
     text, via direct DOM .click() (overlay-proof — Playwright's normal click is
     blocked by the dialog's own backdrop/overlay). Returns True if clicked.
     """
-    return page.evaluate("""(args, clickSrc) => {
+    return page.evaluate("""(args) => {
         const [container, label] = args;
         const root = document.querySelector(container);
         if (!root) return false;
@@ -2180,23 +2188,9 @@ def _click_dialog_button_js(page, container, label):
             const t = (el.textContent || '').trim().toLowerCase();
             return t === want || t.startsWith(want + ' ') || t.endsWith(' ' + want);
         });
-        const disabled = (function(el){
-            if (!el) return true;
-            if (el.disabled === true) return true;
-            if (el.hasAttribute && (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true')) return true;
-            const sr = el.shadowRoot;
-            if (sr) { const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button');
-                if (inner && (inner.disabled === true || (inner.hasAttribute && inner.hasAttribute('disabled'))
-                    || inner.getAttribute('aria-disabled') === 'true')) return true; }
-            return false;
-        })(b);
-        if (b && !disabled) {
-            const fn = new Function('el', clickSrc);
-            fn(b);
-            return true;
-        }
+        if (b && !b.disabled) { b.click(); return true; }
         return false;
-    }""", [[container, label], _js_click_element_js()])
+    }""", [container, label])
 
 
 def _clear_text_selection(page):
@@ -2208,323 +2202,125 @@ def _clear_text_selection(page):
         pass
 
 
-_log_lock = threading.Lock()
-
-def log_event(username, message):
-    """Print + persist a timestamped line to the account's rolling log.
-
-    This is what the per-account "Logs" button in the dashboard reads, so it
-    captures everything needed to debug issues (verify dialog, Next clicks, etc).
-    """
-    ts = datetime.now().strftime("%H:%M:%S")
-    line = f"[{ts}] {message}"
-    print(f"[{username}] {message}")
-    try:
-        with _log_lock:
-            append_log(username, message)
-    except Exception:
-        pass
-
-
-def _js_click_element_js():
-    """Return the JS source for a robust DOM click that actually triggers
-    Polymer/Angular handlers.
-
-    YouTube's buttons are custom elements (ytcp-button / tp-yt-paper-button) that
-    wrap the real <button> inside a shadow root. A bare `.click()` on the host
-    custom element frequently does NOT fire the dialog's action listener, so the
-    dialog just sits there. We fix this by:
-      1) Walking into the shadow root to find the inner real button.
-      2) Dispatching a full native event sequence (pointerdown -> mousedown ->
-         pointerup -> mouseup -> click) with proper coordinates on the element,
-         which Polymer listeners react to.
-    """
-    return """(el) => {
-        if (!el) return false;
-        // Resolve the actually-clickable element (real <button> inside shadow DOM).
-        let target = el;
-        const sr = el.shadowRoot;
-        if (sr) {
-            const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button, ytcp-button')
-                       || sr.querySelector('*');
-            if (inner) target = inner;
-        }
-        // Also handle nested custom elements (tp-yt-paper-button might itself wrap).
-        let probe = target;
-        for (let i = 0; i < 5 && probe && probe.shadowRoot; i++) {
-            const deeper = probe.shadowRoot.querySelector('button, [role="button"]');
-            if (deeper) { target = deeper; probe = deeper; } else break;
-        }
-        const r = target.getBoundingClientRect();
-        const cx = Math.round(r.x + r.width / 2);
-        const cy = Math.round(r.y + r.height / 2);
-        const opts = (type) => ({ view: window, bubbles: true, cancelable: true,
-                                  composed: true, clientX: cx, clientY: cy,
-                                  button: 0, buttons: 1, pointerId: 1,
-                                  pointerType: 'mouse' });
-        try {
-            if (typeof target.dispatchEvent === 'function') {
-                target.dispatchEvent(new PointerEvent('pointerdown', opts('pointerdown')));
-                target.dispatchEvent(new MouseEvent('mousedown', opts('mousedown')));
-                target.dispatchEvent(new PointerEvent('pointerup', opts('pointerup')));
-                target.dispatchEvent(new MouseEvent('mouseup', opts('mouseup')));
-                target.dispatchEvent(new MouseEvent('click', opts('click')));
-            }
-        } catch (e) {}
-        // Fallback: native click on whichever element is clickable.
-        try { (target.click ? target : el).click(); } catch (e) {}
-        return true;
-    }"""
-
-
-def _js_is_disabled(el_expr):
-    """JS expression (returns bool) evaluating whether `el` (a DOM node) is
-    disabled, checking native prop, the [disabled] attribute on the host AND on
-    any shadow-root inner button — Polymer reflects disabled in several places."""
-    return """(() => {
-        const el = %s;
-        if (!el) return true;
-        if (el.disabled === true) return true;
-        if (el.hasAttribute && (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true')) return true;
-        const sr = el.shadowRoot;
-        if (sr) {
-            const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button');
-            if (inner) {
-                if (inner.disabled === true) return true;
-                if (inner.hasAttribute && (inner.hasAttribute('disabled') || inner.getAttribute('aria-disabled') === 'true')) return true;
-            }
-        }
-        return false;
-    })()""" % el_expr
-
-
 def _handle_youtube_auth_dialog(page, username=""):
-    """Handle YouTube Studio's 'Verify that it's you' dialog.
+    """Handle YouTube Studio's 'Verify that it's you' (ytcp-auth-confirmation-dialog).
 
     This dialog intercepts ALL clicks on the upload form, so it MUST be resolved
-    first. Its primary action button is labelled 'Next' (often #confirm-button).
+    first. Its primary action button is #confirm-button (text 'Next'); we click it
+    via a DIRECT DOM click (JS) because Playwright's actionability check is blocked
+    by the dialog's own overlay backdrop.
 
-    Strategy (most reliable first):
-      1) Find the real, visible, ENABLED Next/Confirm button via Playwright
-         locators and click it with Playwright's TRUSTED click (scrolls into
-         view, hits the true center, dispatches trusted events Polymer accepts).
-      2) If locators miss, fall back to a real page.mouse.click() at the button's
-         true bounding-box center (computed from the live element handle).
-      3) Only if both fail do we report "needs_code".
+    IMPORTANT: we NEVER click a DISABLED button. When the dialog has advanced to a
+    step that waits for a verification code/phone (the Next button is disabled), we
+    STOP and let the user finish it in the live cam — we do NOT hammer it (which
+    previously dragged a text selection across the page).
 
-    We NEVER click a DISABLED button. When the dialog has advanced to a step that
-    waits for a verification code/phone (the Next button is disabled), we STOP and
-    let the user finish it (no hammering that drags a text selection).
+    Returns:
+      False  -> no dialog present
+      "advanced" -> we clicked the enabled Next and the dialog moved on
+      "needs_code" -> dialog still open but Next is disabled (waiting for user input)
     """
     try:
-        # Candidate containers (most specific first).
-        container_sels = [
-            'ytcp-auth-confirmation-dialog',
-            'ytcp-dialog',
-            'ytcp-upload-confirmation-dialog',
-            '[role="dialog"]',
-        ]
-        container = None
-        for cs in container_sels:
-            try:
-                loc = page.locator(cs).first
-                if loc.count() > 0 and loc.is_visible():
-                    container = loc
-                    break
-            except Exception:
-                continue
-        if container is None:
-            # Maybe a dialog exists but isn't matched above; try a broad check.
-            has_dlg = page.evaluate("""() => !!document.querySelector('[role="dialog"], ytcp-auth-confirmation-dialog, ytcp-dialog')""")
-            if not has_dlg:
-                return False
+        dialog = page.locator('ytcp-auth-confirmation-dialog').first
+        if dialog.count() == 0:
+            return False
+        if not dialog.is_visible():
+            return False
+        print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected")
 
-        print(f"[{username}] ⚠ YouTube verify/confirm dialog detected")
-        log_event(username, "YouTube 'Verify that's you' dialog detected")
+        # Inspect the dialog's primary Next button (enabled or disabled?).
+        info = page.evaluate("""() => {
+            const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+            if (!dlg) return {present:false};
+            const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
+                || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
+                    .find(el => (el.textContent||'').trim().toLowerCase() === 'next');
+            if (!b) return {present:true, hasNext:false};
+            const r = b.getBoundingClientRect();
+            return {present:true, hasNext:true, id:b.id||'',
+                    text:(b.textContent||'').trim().slice(0,30),
+                    disabled: !!b.disabled,
+                    cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
+        }""")
 
-        # 1) Playwright locator click on a visible, enabled Next/Confirm button.
-        button_sels = [
-            'ytcp-auth-confirmation-dialog #confirm-button',
-            'ytcp-auth-confirmation-dialog #next-button',
-            '#confirm-button', '#next-button',
-            'ytcp-button:has-text("Next")',
-            'tp-yt-paper-button:has-text("Next")',
-            'button:has-text("Next")',
-            'ytcp-button:has-text("Confirm")',
-            'button:has-text("Confirm")',
-            '[role="dialog"] ytcp-button:visible, [role="dialog"] button:visible',
-        ]
-        clicked_handle = None
-        for sel in button_sels:
-            try:
-                b = page.locator(sel).first
-                if b.count() == 0 or not b.is_visible():
-                    continue
-                if b.is_disabled():
-                    print(f"[{username}] verify button '{sel}' DISABLED — skipping")
-                    continue
-                box = b.bounding_box()
-                if not box or box["width"] <= 0 or box["height"] <= 0:
-                    continue
-                cx = round(box["x"] + box["width"] / 2)
-                cy = round(box["y"] + box["height"] / 2)
-                print(f"[{username}] verify clicking Next via Playwright '{sel}' center=({cx},{cy})")
-                log_event(username, f"Verify dialog: clicking Next via '{sel}' at ({cx},{cy})")
-                b.click(timeout=5000, force=True, no_wait_after=True)
-                clicked_handle = b
-                break
-            except Exception as e:
-                print(f"[{username}] verify Playwright click '{sel}' failed: {str(e)[:80]}")
-                continue
+        if not info or not info.get("present"):
+            return False
 
-        # 2) Fallback: JS-driven real mouse click at the true button center.
-        if clicked_handle is None:
-            pick = page.evaluate("""() => {
-                const containers = ['ytcp-auth-confirmation-dialog','ytcp-dialog','ytcp-upload-confirmation-dialog','[role=\"dialog\"]'];
-                let root = null;
-                for (const c of containers) { const el = document.querySelector(c);
-                    if (el && (el.offsetParent !== null || getComputedStyle(el).display !== 'none')) { root = el; break; } }
-                if (!root) return {found:false};
-                const disabled = (el) => {
-                    if (!el) return true;
-                    if (el.disabled === true) return true;
-                    if (el.hasAttribute && (el.hasAttribute('disabled') || el.getAttribute('aria-disabled')==='true')) return true;
-                    const sr = el.shadowRoot;
-                    if (sr) { const i = sr.querySelector('button, [role=\"button\"], tp-yt-paper-button');
-                        if (i && (i.disabled===true || (i.hasAttribute && i.hasAttribute('disabled')) || i.getAttribute('aria-disabled')==='true')) return true; }
-                    return false;
-                };
-                const cands = [...root.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role=\"button\"]')];
-                let b = root.querySelector('#confirm-button') || root.querySelector('#next-button');
-                if (b && disabled(b)) b = null;
-                if (!b) b = cands.find(el => { const t=(el.textContent||'').trim().toLowerCase();
-                    return (t==='next'||t==='confirm'||t==='continue') && !disabled(el)
-                        && el.getBoundingClientRect().width>0; });
-                if (!b) return {found:false};
-                const r = b.getBoundingClientRect();
-                return {found:true, id:b.id||'', text:(b.textContent||'').trim().slice(0,30),
-                        cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2),
-                        vw:window.innerWidth, vh:window.innerHeight};
-            }""")
-            if pick and pick.get("found"):
-                cx, cy = pick["cx"], pick["cy"]
-                print(f"[{username}] verify Next <#{pick['id']}> text='{pick['text']}' center=({cx},{cy}) vp=({pick['vw']}x{pick['vh']})")
-                log_event(username, f"Verify dialog: Next <#{pick['id']}> text='{pick['text']}' center=({cx},{cy})")
-                if 0 < cx < pick["vw"] and 0 < cy < pick["vh"]:
-                    _clear_text_selection(page)
-                    try:
-                        page.mouse.click(cx, cy, delay=80, button="left")
-                        clicked_handle = True
-                    except Exception as me:
-                        print(f"[{username}] verify mouse click err: {me}")
-
-        _clear_text_selection(page)
-        if clicked_handle is None:
-            # Dump the dialog DOM so we can see the real structure.
-            try:
-                html = page.evaluate("""() => {
-                    const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','[role=\"dialog\"]'];
-                    for (const x of c) { const d=document.querySelector(x); if (d) return d.outerHTML.slice(0,5000); }
-                    return 'NO DIALOG IN DOM';
-                }""")
-                print(f"[{username}] ⚠ verify Next NOT clickable. Dialog DOM:\n{html}")
-                log_event(username, f"Verify Next NOT clickable. Dialog DOM: {html[:1500]}")
-            except Exception as e:
-                print(f"[{username}] ⚠ verify Next NOT clickable (dump err {e})")
-                log_event(username, f"Verify Next NOT clickable (dump err {e})")
-            # Is the dialog actually waiting for a code? (Next present but disabled)
-            waiting = page.evaluate("""() => {
-                const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','[role=\"dialog\"]'];
-                for (const x of c) { const root=document.querySelector(x); if(!root) continue;
-                    const b = root.querySelector('#confirm-button')||root.querySelector('#next-button')
-                        || [...root.querySelectorAll('ytcp-button,button,[role=\"button\"]')].find(el=>(el.textContent||'').trim().toLowerCase()==='next');
-                    if (b) return {present:true, disabled: !!(b.disabled || (b.hasAttribute && b.hasAttribute('disabled')))};
-                }
-                return {present:false};
-            }""")
-            if waiting.get("present") and waiting.get("disabled"):
-                update_account(username, current_task="Verify that it's you — enter the code in live cam")
-                return "needs_code"
-            update_account(username, current_task="Verify that it's you — could not click Next (see log)")
+        if not info.get("hasNext"):
+            print(f"[{username}] ⚠ verify dialog has no Next button — may need a code")
+            update_account(username, current_task="Verify that it's you — enter code in live cam")
             return "needs_code"
 
-        log_event(username, "Verify dialog: clicked Next successfully")
-        update_account(username, current_task="Verify that it's you \u2014 clicked Next, waiting...")
-        # After clicking Next the verify wizard may: (a) close, (b) move to another
-        # step (e.g. "choose a method"), or (c) ask for a 6-digit code. We poll for
-        # up to ~5 min, handling code entry automatically when the user supplies a
-        # code via the dashboard. Automation is NEVER stopped by this dialog \u2014 we
-        # only return once the dialog is actually gone (or after the long timeout).
-        def _dialog_present():
-            try:
-                return page.evaluate("""() => {
-                    const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','ytcp-upload-confirmation-dialog','[role=\"dialog\"]'];
-                    for (const x of c) { const d=document.querySelector(x);
-                        if (d && d.offsetParent !== null) return true; }
-                    return false;
-                }""")
-            except Exception:
-                return False
+        if info.get("disabled"):
+            # Button is disabled => waiting for the user to enter a code/phone.
+            # STOP here; do NOT click. Clear any stray selection.
+            _clear_text_selection(page)
+            print(f"[{username}] ⚠ verify Next <#{info['id']}> is DISABLED — waiting for code (user action needed)")
+            update_account(username, current_task="Verify that it's you — enter the code in live cam")
+            return "needs_code"
 
-        def _enter_code_and_submit():
-            # Look for a visible numeric/text input inside the dialog and type the
-            # user-provided 6-digit code, then click Next/Submit/Verify.
-            code = get_verify_code(username)
-            if not code:
-                return False
-            filled = page.evaluate("""(code) => {
-                const c = ['ytcp-auth-confirmation-dialog','ytcp-dialog','[role=\"dialog\"]'];
-                let root = null;
-                for (const x of c) { const d=document.querySelector(x); if (d && d.offsetParent!==null) { root=d; break; } }
-                if (!root) return false;
-                // Prefer an input inside the dialog (code entry fields).
-                const inp = root.querySelector('input[type=\"text\"], input[type=\"tel\"], input[type=\"number\"], input:not([type]), textarea');
-                if (!inp) return false;
-                const settable = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                if (settable) { settable.call(inp, code); inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                else { inp.value = code; inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                return true;
-            }""", code)
-            if not filled:
-                return False
-            log_event(username, f"Verify dialog: typed code '{code}' into input")
-            # Clear the code so it is only used once.
-            clear_verify_code(username)
-            time.sleep(0.5)
-            # Click the enabled Next/Submit/Verify button.
-            try:
-                b = page.locator('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button, #next-button, ytcp-button:has-text("Next"), ytcp-button:has-text("Submit"), ytcp-button:has-text("Verify"), button:has-text("Next"), button:has-text("Submit"), button:has-text("Verify")').first
-                if b.count() > 0 and b.is_visible() and not b.is_disabled():
-                    b.click(timeout=5000, force=True)
-                    return True
-            except Exception:
-                pass
-            return True
-
-        deadline = time.time() + 300  # up to 5 minutes
-        while time.time() < deadline:
-            take_screenshot(username)  # keep the live view in sync
-            if not _dialog_present():
-                print(f"[{username}] \u2713 verify dialog dismissed")
-                log_event(username, "Verify dialog: dismissed")
-                return "advanced"
-            # Code step? If a code is available in the DB, enter it and submit.
-            if get_verify_code(username):
-                update_account(username, current_task="Verify that it's you \u2014 entering code from dashboard...")
-                _enter_code_and_submit()
-                time.sleep(3)
-                continue
-            # Still on a step (choose method etc.) \u2014 wait for the user, but keep
-            # the dialog alive (do NOT abort automation).
-            update_account(username, current_task="Verify that it's you \u2014 waiting for your code/method in live cam")
-            time.sleep(5)
-        # Timed out waiting (no code supplied) \u2014 return advanced so the flow
-        # retries; automation keeps running regardless.
-        log_event(username, "Verify dialog: timed out waiting for code \u2014 continuing")
-        return "advanced"
+        # Enabled Next -> click exactly once (overlay-proof JS click).
+        res = page.evaluate("""() => {
+            const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+            const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
+                || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
+                    .find(el => (el.textContent||'').trim().toLowerCase()==='next' && !el.disabled);
+            if (!b || b.disabled) return {ok:false, reason:'no enabled button'};
+            const r = b.getBoundingClientRect();
+            b.click();
+            return {ok:true, id:b.id||'', cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
+        }""")
+        _clear_text_selection(page)
+        if res and res.get("ok"):
+            print(f"[{username}] ✓ clicked verify-dialog Next <#{res['id']}> at ({res['cx']},{res['cy']})")
+            _log_event(username, "Verify dialog: clicked Next")
+            update_account(username, current_task="Verify that it's you — clicked Next, waiting...")
+            time.sleep(3)
+            take_screenshot(username)
+            # Poll up to ~5 min. If a 6-digit code is supplied via the dashboard,
+            # type it into the dialog and submit; otherwise wait for the user.
+            deadline = time.time() + 300
+            while time.time() < deadline:
+                take_screenshot(username)
+                try:
+                    d2 = page.locator('ytcp-auth-confirmation-dialog').first
+                    if d2.count() == 0 or not d2.is_visible():
+                        print(f"[{username}] ✓ verify dialog dismissed")
+                        _log_event(username, "Verify dialog: dismissed")
+                        return "advanced"
+                except Exception:
+                    pass
+                code = get_verify_code(username)
+                if code:
+                    try:
+                        filled = page.evaluate("""(c) => {
+                            const d = document.querySelector('ytcp-auth-confirmation-dialog');
+                            if (!d) return false;
+                            const inp = d.querySelector('input[type=\"text\"], input[type=\"tel\"], input[type=\"number\"], input:not([type]), textarea');
+                            if (!inp) return false;
+                            const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            if (set) { set.call(inp, c); inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                            else { inp.value = c; inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                            return true;
+                        }""", code)
+                        if filled:
+                            _log_event(username, f"Verify dialog: typed code {code}")
+                            clear_verify_code(username)
+                            try:
+                                b = page.locator('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button, #next-button, ytcp-button:has-text("Next"), ytcp-button:has-text("Submit"), ytcp-button:has-text("Verify"), button:has-text("Next"), button:has-text("Submit"), button:has-text("Verify")').first
+                                if b.count() > 0 and b.is_visible() and not b.is_disabled():
+                                    b.click(timeout=5000, force=True)
+                            except Exception:
+                                pass
+                    except Exception as ce:
+                        _log_event(username, f"Verify code entry err: {ce}")
+                update_account(username, current_task="Verify that it's you — waiting for your code/method in live cam")
+                time.sleep(5)
+            _log_event(username, "Verify dialog: timed out waiting for code — continuing")
+            return "advanced"
+        print(f"[{username}] ⚠ verify-dialog Next click failed: {res}")
+        return "needs_code"
     except Exception as e:
-        print(f"[{username}] verify dialog handling err: {e}")
-        return False
         print(f"[{username}] verify dialog handling err: {e}")
         return False
 
@@ -2575,32 +2371,19 @@ def _click_youtube_next(page):
             continue
     # 2) JS fallback: click a visible, ENABLED element whose text is exactly "Next".
     try:
-        res = page.evaluate("""(clickSrc) => {
+        res = page.evaluate("""() => {
             const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
-            const next = els.find(el => {
-                const disabled = (function(d){
-                    if (!d) return true;
-                    if (d.disabled === true) return true;
-                    if (d.hasAttribute && (d.hasAttribute('disabled') || d.getAttribute('aria-disabled') === 'true')) return true;
-                    const sr = d.shadowRoot;
-                    if (sr) { const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button');
-                        if (inner && (inner.disabled === true || (inner.hasAttribute && inner.hasAttribute('disabled'))
-                            || inner.getAttribute('aria-disabled') === 'true')) return true; }
-                    return false;
-                })(el);
-                return (el.textContent || '').trim().toLowerCase() === 'next'
-                    && !disabled && el.offsetParent !== null;
-            });
+            const next = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
+                && !el.disabled && el.offsetParent !== null);
             if (next) {
                 const r = next.getBoundingClientRect();
-                const fn = new Function('el', clickSrc);
-                fn(next);
+                next.click();
                 return {clicked: true, tag: next.tagName.toLowerCase(), id: next.id || '',
                          text: (next.textContent||'').trim().slice(0,40),
                          cx: Math.round(r.x + r.width/2), cy: Math.round(r.y + r.height/2)};
             }
             return {clicked: false};
-        }""", _js_click_element_js())
+        }""")
         _clear_text_selection(page)
         if res and res.get("clicked"):
             print(f"[NEXT] ✓ clicked via JS <{res['tag']}#{res['id']}> text='{res['text']}' at ({res['cx']},{res['cy']})")
@@ -2737,23 +2520,13 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 time.sleep(1)
         except Exception:
             pass
-        # Robustly select "No, it's not made for kids" (matches "No" inside the
-        # radio whose label contains "made for kids" / "not made for kids").
         try:
-            not_kids = page.locator(
-                'tp-yt-paper-radio-button:has-text("No"), '
-                'paper-radio-button:has-text("No"), '
-                'ytcp-radio-button:has-text("No"), '
-                '[role="radio"]:has-text("No")'
-            ).first
-            if not_kids.count() > 0 and not_kids.is_visible():
-                not_kids.click(timeout=4000, force=True)
+            not_kids = page.locator('tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No")').first
+            if not_kids.count() > 0:
+                not_kids.click(timeout=4000)
                 time.sleep(0.5)
-                print(f"[{username}] ✓ set Not made for kids = No")
-                log_event(username, "Set 'Not made for kids' = No")
-        except Exception as e:
-            print(f"[{username}] ⚠ could not set Not-made-for-kids: {e}")
-            log_event(username, f"Could not set Not-made-for-kids: {e}")
+        except Exception:
+            pass
 
         # Next -> Next -> Next (Details -> Video elements -> Checks -> Public).
         # We VERIFY each click actually advanced the form by comparing a page
@@ -2771,20 +2544,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 return str(time.time())
 
         for step in range(6):
-            # If the verify dialog needs user action (code / multi-step), STOP the
-            # whole upload here — don't hammer Next behind the dialog. The worker
-            # will wait and we surface it in the live cam + Logs.
-            auth = _handle_youtube_auth_dialog(page, username)
-            if auth == "needs_code":
-                print(f"[{username}] ⚠ verify dialog needs user action — aborting upload step, will wait")
-                log_event(username, "Verify dialog needs user action — upload paused, waiting in live cam")
-                take_screenshot(username)
-            if auth == "needs_code":
-                # Verify dialog still needs user input — keep automation running.
-                log_event(username, "Verify dialog still needs input — automation continues")
-                take_screenshot(username)
-                time.sleep(5)
-                continue
+            _handle_youtube_auth_dialog(page, username)
 
             # Before each Next: reveal "Made for kids" and set "No" (required to proceed).
             try:
@@ -2795,10 +2555,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
             except Exception:
                 pass
             try:
-                not_kids = page.locator(
-                    'tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No"), '
-                    'ytcp-radio-button:has-text("No"), [role="radio"]:has-text("No")'
-                ).first
+                not_kids = page.locator('tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No")').first
                 if not_kids.count() > 0 and not_kids.is_visible():
                     not_kids.click(timeout=3000, force=True)
                     time.sleep(0.4)
@@ -2833,22 +2590,15 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 time.sleep(2)
             take_screenshot(username)
 
-        # Set visibility to Public (Everyone)
+        # Set visibility to Public
         _handle_youtube_auth_dialog(page, username)
         try:
-            public = page.locator(
-                'tp-yt-paper-radio-button:has-text("Public"), paper-radio-button:has-text("Public"), '
-                'ytcp-radio-button:has-text("Public"), [role="radio"]:has-text("Public"), '
-                'tp-yt-paper-radio-button:has-text("Everyone"), paper-radio-button:has-text("Everyone")'
-            ).first
-            if public.count() > 0 and public.is_visible():
-                public.click(timeout=4000, force=True)
+            public = page.locator('tp-yt-paper-radio-button:has-text("Public"), paper-radio-button:has-text("Public")').first
+            if public.count() > 0:
+                public.click(timeout=4000)
                 time.sleep(0.5)
-                print(f"[{username}] ✓ set visibility = Public")
-                log_event(username, "Set visibility = Public")
-        except Exception as e:
-            print(f"[{username}] ⚠ could not set Public visibility: {e}")
-            log_event(username, f"Could not set Public visibility: {e}")
+        except Exception:
+            pass
 
         take_screenshot(username)
         _save_debug_screenshot(page, "yt_pre_publish", username)
@@ -2857,17 +2607,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
         # Click Publish
         published = False
         for attempt in range(4):
-            auth = _handle_youtube_auth_dialog(page, username)
-            if auth == "needs_code":
-                print(f"[{username}] ⚠ verify dialog needs user action before Publish — waiting")
-                log_event(username, "Verify dialog blocks Publish — waiting for user in live cam")
-                take_screenshot(username)
-            if auth == "needs_code":
-                # Verify dialog still needs user input — keep automation running.
-                log_event(username, "Verify dialog still needs input — automation continues")
-                take_screenshot(username)
-                time.sleep(5)
-                continue
+            _handle_youtube_auth_dialog(page, username)
             _log_click_targets(page, username, f"PUBLISH_ATTEMPT_{attempt+1}")
             try:
                 pb = page.locator('ytcp-button#publish-button, #publish-button, button:has-text("Publish"), ytcp-button:has-text("Publish")').first
@@ -2925,7 +2665,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
 
         if published:
             _save_debug_html(page, "YT_SUCCESS", username)
-            log_event(username, "YouTube: video published")
+            _log_event(username, "YouTube: video published")
             try:
                 page.goto("https://studio.youtube.com", timeout=20000)
             except Exception:
@@ -2933,7 +2673,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
             return True
         else:
             _save_debug_html(page, "YT_FAIL", username)
-            log_event(username, "YouTube: publish NOT confirmed (YT_FAIL)")
+            _log_event(username, "YouTube: publish NOT confirmed")
             take_screenshot(username)
             return False
 
@@ -3050,7 +2790,6 @@ def save_posted_ids(username, ids):
 
 def automation_worker(username):
     log(f"[{username}] === AUTOMATION WORKER STARTED ===")
-    log_event(username, "Worker started")
     # Load the history of already-posted videos so we NEVER repeat a clip,
     # even across restarts of the worker/bot.
     posted_video_ids = load_posted_ids(username)
@@ -3365,7 +3104,6 @@ def automation_worker(username):
 def start_automation(username):
     if username in workers:
         return
-    log_event(username, "Automation started")
     thread = threading.Thread(target=automation_worker, args=(username,), daemon=True)
     workers[username] = thread
     thread.start()
@@ -3374,7 +3112,6 @@ def start_automation(username):
 def stop_automation(username):
     # Signal-only: the worker thread owns the browser, so it must close it (doing
     # so from the Flask thread would raise greenlet 'different thread' errors).
-    log_event(username, "Automation stopped")
     workers.pop(username, None)
     account = get_account(username)
     if account:
