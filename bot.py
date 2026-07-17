@@ -2164,7 +2164,7 @@ def _click_dialog_button_js(page, container, label):
     text, via direct DOM .click() (overlay-proof — Playwright's normal click is
     blocked by the dialog's own backdrop/overlay). Returns True if clicked.
     """
-    return page.evaluate("""(args) => {
+    return page.evaluate("""(args, clickSrc) => {
         const [container, label] = args;
         const root = document.querySelector(container);
         if (!root) return false;
@@ -2174,9 +2174,23 @@ def _click_dialog_button_js(page, container, label):
             const t = (el.textContent || '').trim().toLowerCase();
             return t === want || t.startsWith(want + ' ') || t.endsWith(' ' + want);
         });
-        if (b && !b.disabled) { b.click(); return true; }
+        const disabled = (function(el){
+            if (!el) return true;
+            if (el.disabled === true) return true;
+            if (el.hasAttribute && (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true')) return true;
+            const sr = el.shadowRoot;
+            if (sr) { const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button');
+                if (inner && (inner.disabled === true || (inner.hasAttribute && inner.hasAttribute('disabled'))
+                    || inner.getAttribute('aria-disabled') === 'true')) return true; }
+            return false;
+        })(b);
+        if (b && !disabled) {
+            const fn = new Function('el', clickSrc);
+            fn(b);
+            return true;
+        }
         return false;
-    }""", [container, label])
+    }""", [[container, label], _js_click_element_js()])
 
 
 def _clear_text_selection(page):
@@ -2186,6 +2200,78 @@ def _clear_text_selection(page):
         page.evaluate("() => { window.getSelection() && window.getSelection().removeAllRanges(); }")
     except Exception:
         pass
+
+
+def _js_click_element_js():
+    """Return the JS source for a robust DOM click that actually triggers
+    Polymer/Angular handlers.
+
+    YouTube's buttons are custom elements (ytcp-button / tp-yt-paper-button) that
+    wrap the real <button> inside a shadow root. A bare `.click()` on the host
+    custom element frequently does NOT fire the dialog's action listener, so the
+    dialog just sits there. We fix this by:
+      1) Walking into the shadow root to find the inner real button.
+      2) Dispatching a full native event sequence (pointerdown -> mousedown ->
+         pointerup -> mouseup -> click) with proper coordinates on the element,
+         which Polymer listeners react to.
+    """
+    return """(el) => {
+        if (!el) return false;
+        // Resolve the actually-clickable element (real <button> inside shadow DOM).
+        let target = el;
+        const sr = el.shadowRoot;
+        if (sr) {
+            const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button, ytcp-button')
+                       || sr.querySelector('*');
+            if (inner) target = inner;
+        }
+        // Also handle nested custom elements (tp-yt-paper-button might itself wrap).
+        let probe = target;
+        for (let i = 0; i < 5 && probe && probe.shadowRoot; i++) {
+            const deeper = probe.shadowRoot.querySelector('button, [role="button"]');
+            if (deeper) { target = deeper; probe = deeper; } else break;
+        }
+        const r = target.getBoundingClientRect();
+        const cx = Math.round(r.x + r.width / 2);
+        const cy = Math.round(r.y + r.height / 2);
+        const opts = (type) => ({ view: window, bubbles: true, cancelable: true,
+                                  composed: true, clientX: cx, clientY: cy,
+                                  button: 0, buttons: 1, pointerId: 1,
+                                  pointerType: 'mouse' });
+        try {
+            if (typeof target.dispatchEvent === 'function') {
+                target.dispatchEvent(new PointerEvent('pointerdown', opts('pointerdown')));
+                target.dispatchEvent(new MouseEvent('mousedown', opts('mousedown')));
+                target.dispatchEvent(new PointerEvent('pointerup', opts('pointerup')));
+                target.dispatchEvent(new MouseEvent('mouseup', opts('mouseup')));
+                target.dispatchEvent(new MouseEvent('click', opts('click')));
+            }
+        } catch (e) {}
+        // Fallback: native click on whichever element is clickable.
+        try { (target.click ? target : el).click(); } catch (e) {}
+        return true;
+    }"""
+
+
+def _js_is_disabled(el_expr):
+    """JS expression (returns bool) evaluating whether `el` (a DOM node) is
+    disabled, checking native prop, the [disabled] attribute on the host AND on
+    any shadow-root inner button — Polymer reflects disabled in several places."""
+    return """(() => {
+        const el = %s;
+        if (!el) return true;
+        if (el.disabled === true) return true;
+        if (el.hasAttribute && (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true')) return true;
+        const sr = el.shadowRoot;
+        if (sr) {
+            const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button');
+            if (inner) {
+                if (inner.disabled === true) return true;
+                if (inner.hasAttribute && (inner.hasAttribute('disabled') || inner.getAttribute('aria-disabled') === 'true')) return true;
+            }
+        }
+        return false;
+    })()""" % el_expr
 
 
 def _handle_youtube_auth_dialog(page, username=""):
@@ -2223,9 +2309,19 @@ def _handle_youtube_auth_dialog(page, username=""):
                     .find(el => (el.textContent||'').trim().toLowerCase() === 'next');
             if (!b) return {present:true, hasNext:false};
             const r = b.getBoundingClientRect();
+            const disabled = (function(el){
+                if (!el) return true;
+                if (el.disabled === true) return true;
+                if (el.hasAttribute && (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true')) return true;
+                const sr = el.shadowRoot;
+                if (sr) { const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button');
+                    if (inner && (inner.disabled === true || (inner.hasAttribute && inner.hasAttribute('disabled'))
+                        || inner.getAttribute('aria-disabled') === 'true')) return true; }
+                return false;
+            })(b);
             return {present:true, hasNext:true, id:b.id||'',
                     text:(b.textContent||'').trim().slice(0,30),
-                    disabled: !!b.disabled,
+                    disabled: disabled,
                     cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
         }""")
 
@@ -2245,17 +2341,30 @@ def _handle_youtube_auth_dialog(page, username=""):
             update_account(username, current_task="Verify that it's you — enter the code in live cam")
             return "needs_code"
 
-        # Enabled Next -> click exactly once (overlay-proof JS click).
-        res = page.evaluate("""() => {
+        # Enabled Next -> click exactly once (overlay-proof JS click that
+        # actually fires Polymer's handler, penetrating shadow DOM).
+        res = page.evaluate("""(clickSrc) => {
+            const clickEl = %s;
             const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
             const b = dlg.querySelector('#confirm-button') || dlg.querySelector('#next-button')
                 || [...dlg.querySelectorAll('ytcp-button, tp-yt-paper-button, button')]
-                    .find(el => (el.textContent||'').trim().toLowerCase()==='next' && !el.disabled);
-            if (!b || b.disabled) return {ok:false, reason:'no enabled button'};
+                    .find(el => (el.textContent||'').trim().toLowerCase()==='next');
+            const disabled = (function(el){
+                if (!el) return true;
+                if (el.disabled === true) return true;
+                if (el.hasAttribute && (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true')) return true;
+                const sr = el.shadowRoot;
+                if (sr) { const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button');
+                    if (inner && (inner.disabled === true || (inner.hasAttribute && inner.hasAttribute('disabled'))
+                        || inner.getAttribute('aria-disabled') === 'true')) return true; }
+                return false;
+            })(b);
+            if (!b || disabled) return {ok:false, reason:'no enabled button'};
             const r = b.getBoundingClientRect();
-            b.click();
+            const fn = new Function('el', clickSrc);
+            fn(b);
             return {ok:true, id:b.id||'', cx:Math.round(r.x+r.width/2), cy:Math.round(r.y+r.height/2)};
-        }""")
+        }""" % _js_click_element_js(), )
         _clear_text_selection(page)
         if res and res.get("ok"):
             print(f"[{username}] ✓ clicked verify-dialog Next <#{res['id']}> at ({res['cx']},{res['cy']})")
@@ -2338,19 +2447,32 @@ def _click_youtube_next(page):
             continue
     # 2) JS fallback: click a visible, ENABLED element whose text is exactly "Next".
     try:
-        res = page.evaluate("""() => {
+        res = page.evaluate("""(clickSrc) => {
             const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
-            const next = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
-                && !el.disabled && el.offsetParent !== null);
+            const next = els.find(el => {
+                const disabled = (function(d){
+                    if (!d) return true;
+                    if (d.disabled === true) return true;
+                    if (d.hasAttribute && (d.hasAttribute('disabled') || d.getAttribute('aria-disabled') === 'true')) return true;
+                    const sr = d.shadowRoot;
+                    if (sr) { const inner = sr.querySelector('button, [role="button"], tp-yt-paper-button');
+                        if (inner && (inner.disabled === true || (inner.hasAttribute && inner.hasAttribute('disabled'))
+                            || inner.getAttribute('aria-disabled') === 'true')) return true; }
+                    return false;
+                })(el);
+                return (el.textContent || '').trim().toLowerCase() === 'next'
+                    && !disabled && el.offsetParent !== null;
+            });
             if (next) {
                 const r = next.getBoundingClientRect();
-                next.click();
+                const fn = new Function('el', clickSrc);
+                fn(next);
                 return {clicked: true, tag: next.tagName.toLowerCase(), id: next.id || '',
                          text: (next.textContent||'').trim().slice(0,40),
                          cx: Math.round(r.x + r.width/2), cy: Math.round(r.y + r.height/2)};
             }
             return {clicked: false};
-        }""")
+        }""", _js_click_element_js())
         _clear_text_selection(page)
         if res and res.get("clicked"):
             print(f"[NEXT] ✓ clicked via JS <{res['tag']}#{res['id']}> text='{res['text']}' at ({res['cx']},{res['cy']})")
