@@ -745,20 +745,49 @@ def _start_browser_session(username, account=None, no_proxy=False):
 
     proxy = None if no_proxy else _get_proxy(account)
     pw = sync_playwright().start()
+    # Anti-detection launch args. The critical one is
+    # --disable-blink-features=AutomationControlled, which strips the
+    # navigator.webdriver / automation signals Google uses to reject Playwright
+    # logins with "This browser or app may not be secure."
     launch_kwargs = dict(
         headless=True,
         args=[
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-infobars",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-popup-blocking",
+            "--window-size=1280,720",
+            "--start-maximized",
         ],
     )
+    # Prefer REAL Google Chrome (channel="chrome") when available — Google trusts
+    # it far more than Playwright's bundled Chromium. Fall back silently if not installed.
+    try:
+        import shutil
+        if shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("google-chrome-stable"):
+            launch_kwargs["channel"] = "chrome"
+    except Exception:
+        pass
     if proxy:
         launch_kwargs["proxy"] = proxy
         print(f"[{username}] launching browser via proxy: {proxy['server']}")
     else:
         print(f"[{username}] launching browser DIRECT (no proxy)")
-    browser = pw.chromium.launch(**launch_kwargs)
+    try:
+        browser = pw.chromium.launch(**launch_kwargs)
+    except Exception as le:
+        # If the chrome channel isn't actually installed, retry with bundled chromium.
+        if "channel" in launch_kwargs:
+            print(f"[{username}] chrome channel launch failed ({le}); using bundled chromium")
+            launch_kwargs.pop("channel", None)
+            browser = pw.chromium.launch(**launch_kwargs)
+        else:
+            raise
     context = browser.new_context(
         viewport={"width": 1280, "height": 720},
         user_agent=(
@@ -766,7 +795,18 @@ def _start_browser_session(username, account=None, no_proxy=False):
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
         locale="en-US",
+        ignore_https_errors=True,
     )
+    # Extra stealth: kill the automation flag on every new document so Google
+    # can't tell this is a controlled browser.
+    try:
+        context.add_init_script("""() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = window.chrome || {};
+            window.chrome.runtime = window.chrome.runtime || {};
+        }""")
+    except Exception:
+        pass
     page = context.new_page()
     # Record the thread that owns this Playwright browser. Playwright's sync API
     # is bound to the thread that called sync_playwright().start(), so ALL
@@ -1157,6 +1197,18 @@ def google_login_youtube(username):
         else:
             print(f"[{username}] Google login: no email field (account may already be chosen)")
             update_account(username, current_task="Google account screen — no email field")
+
+        # Detect Google's "Couldn't sign you in / browser not secure" block.
+        try:
+            body_txt = (page.inner_text("body", timeout=2000) or "").lower()
+            if "couldn't sign you in" in body_txt or "may not be secure" in body_txt:
+                msg = "Google blocked login: 'This browser or app may not be secure'. Use real cookies or a trusted browser."
+                update_account(username, status="Google blocked", current_task=msg)
+                _log_event(username, "Google login: " + msg)
+                print(f"[{username}] {msg}")
+                return True
+        except Exception:
+            pass
 
         # 4) If a password step appears, the user asked us to click
         #    "Forgot password" then "Try another way".
