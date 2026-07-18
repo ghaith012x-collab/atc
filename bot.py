@@ -2559,7 +2559,10 @@ def _handle_youtube_auth_dialog(page, username=""):
                                 target.click();
                                 return {clicked:true, text};
                             }
-                            return {clicked:false, disabled:true, text};
+                            // This element may only be a disabled-looking wrapper;
+                            // keep walking its descendants/shadow root for the real
+                            // interactive control instead of aborting the search.
+                            continue;
                         }
                         if (el.shadowRoot) {
                             const hit = walk(el.shadowRoot);
@@ -2607,14 +2610,19 @@ def _handle_youtube_auth_dialog(page, username=""):
                 res = page.evaluate("""() => {
                     const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
                     if (!b) return {ok:false, reason:'no-confirm'};
-                    if (b.disabled) return {ok:false, disabled:true};
-                    const roots = [b, b.shadowRoot].filter(Boolean);
+                    const roots = [];
+                    const collect = root => {
+                        if (!root || roots.includes(root)) return;
+                        roots.push(root);
+                        for (const el of root.querySelectorAll('*')) if (el.shadowRoot) collect(el.shadowRoot);
+                    };
+                    collect(b);
                     let target = null;
                     const visible = el => { const r=el.getBoundingClientRect(), c=getComputedStyle(el); return r.width>0 && r.height>0 && c.display!=='none' && c.visibility!=='hidden'; };
                     for (const root of roots) {
                         const candidates = [...root.querySelectorAll('button,[role="button"],tp-yt-paper-button,ytcp-button')];
-                        target = candidates.find(x => visible(x) && /^(next|continue|verify|submit|confirm)$/i.test((x.textContent||'').trim()))
-                              || candidates.find(x => visible(x) && !x.disabled);
+                        target = candidates.find(x => visible(x) && /^(next|continue|verify|submit|confirm)$/i.test((x.textContent||'').trim()) && !x.disabled && String(x.getAttribute('aria-disabled')||'').toLowerCase()!=='true')
+                              || candidates.find(x => visible(x) && !x.disabled && String(x.getAttribute('aria-disabled')||'').toLowerCase()!=='true');
                         if (target) break;
                     }
                     target = target || b;
