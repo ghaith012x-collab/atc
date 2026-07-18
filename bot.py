@@ -1583,32 +1583,32 @@ def generate_caption(video_info, category, platform="TikTok"):
 def _save_debug_html(page, label, username):
     """Save full page HTML for debugging (PRE-POST, ATTEMPT, etc)."""
     try:
-        os.makedirs("/home/user/debug_htmls", exist_ok=True)
+        os.makedirs("debug_htmls", exist_ok=True)
         html = page.content()
         ts = int(time.time())
-        path = f"/home/user/debug_htmls/{username}_{label}_{ts}.html"
+        path = f"debug_htmls/{username}_{label}_{ts}.html"
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
-        latest = f"/home/user/debug_htmls/LATEST_{label}.html"
+        latest = f"debug_htmls/LATEST_{label}.html"
         with open(latest, "w", encoding="utf-8") as f:
             f.write(html)
-        print(f"[{username}] DEBUG HTML saved: {path}")
+        print(f"[{username}] DEBUG HTML saved: {path}", flush=True)
         return path
     except Exception as e:
-        print(f"[{username}] debug_html save error: {e}")
+        print(f"[{username}] debug_html save error: {e}", flush=True)
         return None
 
 def _save_debug_screenshot(page, label, username):
     """Explicit debug screenshot to disk (before/after/+5s)."""
     try:
-        os.makedirs("/home/user/debug_htmls", exist_ok=True)
+        os.makedirs("debug_htmls", exist_ok=True)
         ts = int(time.time())
-        path = f"/home/user/debug_htmls/{username}_{label}_{ts}.png"
+        path = f"debug_htmls/{username}_{label}_{ts}.png"
         page.screenshot(path=path, timeout=8000)
-        print(f"[{username}] DEBUG SCREENSHOT: {path}")
+        print(f"[{username}] DEBUG SCREENSHOT: {path}", flush=True)
         return path
     except Exception as e:
-        print(f"[{username}] debug_screenshot error: {e}")
+        print(f"[{username}] debug_screenshot error: {e}", flush=True)
         return None
 
 # ---------------------------------------------------------------------------
@@ -2348,6 +2348,53 @@ def _clear_text_selection(page):
         pass
 
 
+def _debug_dump_yt_buttons(page, username, label):
+    """EXTREME DEBUG: dump every visible button-like element on the page (incl.
+    shadow DOM) so we can see exactly what the 'Verify that's you' / Next dialog
+    looks like — text, disabled state, tag, id, and bounding box."""
+    try:
+        dump = page.evaluate("""() => {
+            const out = [];
+            const walk = (root, depth) => {
+                const els = [...root.querySelectorAll('*')];
+                for (const el of els) {
+                    const tag = el.tagName ? el.tagName.toLowerCase() : '?';
+                    const txt = (el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 40);
+                    const isBtn = /button|ytcp-button|tp-yt-paper-button|paper-button/.test(tag)
+                        || el.getAttribute && el.getAttribute('role') === 'button'
+                        || el.hasAttribute && (el.hasAttribute('role'));
+                    const clickableTxt = /next|continue|verify|confirm|done|submit|publish|post|skip|dismiss|cancel/i.test(txt);
+                    if ((isBtn || clickableTxt) && txt) {
+                        let disabled = false;
+                        try { disabled = el.disabled; } catch(e){}
+                        let rect = null;
+                        try { const r = el.getBoundingClientRect(); rect = {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}; } catch(e){}
+                        out.push({tag, id: el.id||'', cls: (el.className||'').toString().slice(0,40), txt, disabled, rect, depth});
+                    }
+                    if (el.shadowRoot) walk(el.shadowRoot, depth+1);
+                }
+            };
+            try { walk(document, 0); } catch(e) { out.push({err: String(e)}); }
+            return out.slice(0, 60);
+        }""")
+        print(f"[{username}] === DEBUG BUTTONS [{label}] (url={page.url}) ===", flush=True)
+        for d in dump:
+            print(f"[{username}]   - tag={d.get('tag')} id='{d.get('id')}' cls='{d.get('cls')}' "
+                  f"txt='{d.get('txt')}' disabled={d.get('disabled')} rect={d.get('rect')}", flush=True)
+        # Also save full HTML for offline inspection.
+        try:
+            os.makedirs("debug_htmls", exist_ok=True)
+            ts = int(time.time())
+            p = f"debug_htmls/{username}_{label}_{ts}.html"
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(page.content())
+            print(f"[{username}] DEBUG HTML -> {p}", flush=True)
+        except Exception as he:
+            print(f"[{username}] debug html err: {he}", flush=True)
+    except Exception as e:
+        print(f"[{username}] _debug_dump_yt_buttons err: {e}", flush=True)
+
+
 def _handle_youtube_auth_dialog(page, username=""):
     """Handle YouTube Studio's 'Verify that it's you' (ytcp-auth-confirmation-dialog).
 
@@ -2379,7 +2426,8 @@ def _handle_youtube_auth_dialog(page, username=""):
         if not dlg_present:
             # also accept the literal upload-step dialog that reuses #confirm-button
             return False
-        print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected")
+        print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected", flush=True)
+        _debug_dump_yt_buttons(page, username, "VERIFY_DIALOG")
 
         # Resolve the dialog's primary Next/Continue button. The real clickable
         # target is the INNER <button> inside the <ytcp-button> shadow DOM. We click
@@ -2428,11 +2476,13 @@ def _handle_youtube_auth_dialog(page, username=""):
         _clear_text_selection(page)
 
         if disabled:
-            print(f"[{username}] ⚠ verify Next is DISABLED — waiting for code/method (user action needed)")
+            print(f"[{username}] ⚠ verify Next is DISABLED — waiting for code/method (user action needed)", flush=True)
+            _debug_dump_yt_buttons(page, username, "VERIFY_DISABLED")
             update_account(username, current_task="Verify that it's you — enter the code in live cam")
             return "needs_code"
         if not clicked:
-            print(f"[{username}] ⚠ verify Next not clickable")
+            print(f"[{username}] ⚠ verify Next not clickable", flush=True)
+            _debug_dump_yt_buttons(page, username, "VERIFY_NO_CLICK")
             update_account(username, current_task="Verify that it's you — enter code in live cam")
             return "needs_code"
 
@@ -2603,7 +2653,8 @@ def upload_video_to_youtube(username, file_path, caption, title):
 
     try:
         _dismiss_youtube_popups(page, username)
-        print(f"[{username}] === YOUTUBE UPLOAD FLOW ===")
+        print(f"[{username}] === YOUTUBE UPLOAD FLOW ===", flush=True)
+        _debug_dump_yt_buttons(page, username, "UPLOAD_START")
         update_account(username, current_task="Opening YouTube Studio upload...")
 
         upload_url_used = None
@@ -2758,6 +2809,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
 
             before = _page_signature()
             _log_click_targets(page, username, f"NEXT_STEP_{step+1}")
+            _debug_dump_yt_buttons(page, username, f"NEXT_STEP_{step+1}_PRE")
             clicked = _click_youtube_next(page)
             if not clicked:
                 # Try the dialog's confirm Next as a fallback.
