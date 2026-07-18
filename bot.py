@@ -2531,6 +2531,53 @@ def _handle_youtube_auth_dialog(page, username=""):
         print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected — {info.get('text')}", flush=True)
         _debug_dump_yt_buttons(page, username, "VERIFY_DIALOG")
 
+        # First try a shadow-DOM-aware search for the actual visible Next control.
+        # YouTube sometimes nests the button two or three shadow roots deep; a
+        # normal '#confirm-button button' locator can then see the host but not the
+        # real clickable control. Do not label this as a code step until Next has
+        # actually been pressed and the dialog changes.
+        try:
+            first = page.evaluate("""() => {
+                const visible = (el) => {
+                    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
+                };
+                const disabled = (el) => el.disabled === true ||
+                    String(el.getAttribute && el.getAttribute('aria-disabled') || '').toLowerCase() === 'true' ||
+                    el.hasAttribute && el.hasAttribute('disabled');
+                const walk = (root) => {
+                    for (const el of root.querySelectorAll('*')) {
+                        const text = (el.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
+                        if ((text === 'next' || text === 'continue') && visible(el)) {
+                            const inner = el.shadowRoot && [...el.shadowRoot.querySelectorAll('button,[role="button"],tp-yt-paper-button')]
+                                .find(x => visible(x));
+                            const target = inner || el;
+                            if (!disabled(target) && !disabled(el)) {
+                                target.click();
+                                return {clicked:true, text};
+                            }
+                            return {clicked:false, disabled:true, text};
+                        }
+                        if (el.shadowRoot) {
+                            const hit = walk(el.shadowRoot);
+                            if (hit) return hit;
+                        }
+                    }
+                    return null;
+                };
+                const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+                return dlg ? (walk(dlg.shadowRoot || dlg) || {clicked:false}) : {clicked:false};
+            }""")
+            if first and first.get('disabled'):
+                update_account(username, current_task="Verify that it's you — click Next in live cam")
+                print(f"[{username}] ⚠ verify Next is disabled or not ready", flush=True)
+                return "needs_code"
+            if first and first.get('clicked'):
+                clicked = True
+                print(f"[{username}] ✓ clicked verify-dialog Next (shadow DOM)", flush=True)
+        except Exception as e:
+            print(f"[{username}] shadow-DOM verify click failed: {str(e)[:100]}", flush=True)
+
         # Resolve the dialog's primary Next/Continue button. The real clickable
         # target is the INNER <button> inside the <ytcp-button> shadow DOM. We click
         # that inner <button> directly with Playwright (force=True bypasses the
@@ -2544,7 +2591,7 @@ def _handle_youtube_auth_dialog(page, username=""):
         ).first
         clicked = False
         disabled = False
-        if inner_btn.count() > 0:
+        if not clicked and inner_btn.count() > 0:
             if inner_btn.is_disabled():
                 disabled = True
             else:
@@ -2585,7 +2632,7 @@ def _handle_youtube_auth_dialog(page, username=""):
         if not clicked:
             print(f"[{username}] ⚠ verify Next not clickable", flush=True)
             _debug_dump_yt_buttons(page, username, "VERIFY_NO_CLICK")
-            update_account(username, current_task="Verify that it's you — enter code in live cam")
+            update_account(username, current_task="Verify that it's you — click Next in live cam")
             return "needs_code"
 
         print(f"[{username}] ✓ clicked verify-dialog Next")
