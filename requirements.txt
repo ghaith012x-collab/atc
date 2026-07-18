@@ -6,3 +6,4 @@ greenlet
 requests
 opencv-python-headless
 numpy
+psycopg2-binary
