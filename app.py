@@ -1,5 +1,7 @@
 import os
+import sys
 import json
+import traceback
 import threading
 from flask import Flask, render_template, jsonify, request, Response
 from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account, get_logs
@@ -11,17 +13,29 @@ from bot import (
 
 app = Flask(__name__)
 
-# Auto install Chromium on Railway
+# Auto install Chromium on Railway (non-fatal — never block startup).
 def install_browser():
     try:
         import subprocess
         subprocess.run(["playwright", "install", "chromium"], check=True, capture_output=True)
-        print("✓ Chromium installed")
+        print("✓ Chromium installed", flush=True)
     except Exception as e:
-        print(f"Browser install note: {e}")
+        print(f"Browser install note: {e}", flush=True)
 
-install_browser()
-init_db()
+try:
+    install_browser()
+    init_db()
+    print("✓ App startup init complete", flush=True)
+except Exception as e:
+    # Print the FULL traceback so Railway logs show the real launch error
+    # instead of a silent "application failed to respond".
+    print("!!! STARTUP ERROR !!!", flush=True)
+    traceback.print_exc()
+
+
+@app.route("/healthz")
+def healthz():
+    return jsonify({"status": "ok"})
 
 
 @app.route("/")
@@ -193,3 +207,8 @@ def live_meta(username):
     import time as _time
     ts = last_frame_ts.get(username)
     return jsonify({"username": username, "ts": ts, "now": _time.time()})
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
