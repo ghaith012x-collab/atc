@@ -2626,8 +2626,8 @@ def _handle_youtube_auth_dialog(page, username=""):
                     _log_event(username, f"Verify code entry err: {ce}")
             update_account(username, current_task="Verify that it's you — waiting for your code/method in live cam")
             time.sleep(5)
-        _log_event(username, "Verify dialog: timed out waiting for code — continuing")
-        return "advanced"
+        _log_event(username, "Verify dialog: timed out waiting for code — still blocked")
+        return "needs_code"
     except Exception as e:
         print(f"[{username}] verify dialog handling err: {e}")
         return False
@@ -2745,8 +2745,8 @@ def upload_video_to_youtube(username, file_path, caption, title):
 
         upload_url_used = None
         for u in ["https://studio.youtube.com/channel/upload",
-                  "https://www.youtube.com/upload",
-                  "https://studio.youtube.com"]:
+                  "https://studio.youtube.com",
+                  "https://www.youtube.com/upload"]:
             try:
                 print(f"[{username}] Trying: {u}")
                 page.goto(u, timeout=45000, wait_until="domcontentloaded")
@@ -2790,17 +2790,45 @@ def upload_video_to_youtube(username, file_path, caption, title):
         # Wait for processing + the details form to appear
         print(f"[{username}] Waiting for YouTube processing + details form...")
         details_ready = False
+        verify_blocked = False
         for sec in range(240):  # up to 8 min
             time.sleep(3)
-            # The "Verify that it's you" dialog can appear during processing.
+            # The "Verify that it's you" dialog can appear during processing and
+            # BLOCKS the details form from ever rendering. Surface it loudly
+            # instead of spinning silently for 8 minutes.
             _handle_youtube_auth_dialog(page, username)
+            # Did the verify dialog actually block us?
+            try:
+                still_verify = page.evaluate("""() => {
+                    const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+                    if (!b) return false;
+                    const t = (b.textContent || '').trim().toLowerCase();
+                    return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
+                }""")
+                if still_verify:
+                    verify_blocked = True
+                    print(f"[{username}] ⚠ VERIFY DIALOG STILL BLOCKING — details form cannot appear. Resolve it in the live cam.")
+            except Exception:
+                pass
+            # Report upload progress so we know if the file is actually uploading.
+            pct = _read_upload_percent(page)
+            if pct is not None and sec % 5 == 0:
+                print(f"[{username}] YouTube upload progress: {pct}%")
             # Title input indicates the details screen is ready
             title_loc = page.locator('#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], input[placeholder*="Title"]').first
             if title_loc.count() > 0 and title_loc.is_visible():
                 details_ready = True
+                print(f"[{username}] ✓ YouTube details form detected (after ~{sec*3}s)")
                 break
             if sec % 15 == 0:
                 take_screenshot(username)
+
+        if verify_blocked and not details_ready:
+            print(f"[{username}] ❌ YouTube upload blocked by 'Verify that it's you' dialog. "
+                  f"Manually complete verification in the live cam, then re-run. Skipping upload.")
+            _save_debug_html(page, "YT_VERIFY_BLOCKED", username)
+            take_screenshot(username)
+            return False
 
         if not details_ready:
             print(f"[{username}] ⚠ YouTube details form not detected, attempting anyway")
