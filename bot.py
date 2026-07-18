@@ -1293,6 +1293,68 @@ def find_viral_video(username, category, exclude=None):
     return info
 
 
+def scrape_profile_videos(username, profile_link, exclude=None):
+    """TikTok PROFILE mode: collect videos from ONE specific profile only.
+
+    Navigates to the given profile, scrolls to load more, and returns a list of
+    candidate dicts (same shape as find_viral_video) — most-recent first. Already
+    posted ids (in `exclude`) are dropped so a clip is never reused. Falls back to
+    [] on any failure so the worker can retry.
+    """
+    exclude = exclude or set()
+    page = _get_page(username)
+    if page is None:
+        return []
+    candidates = []
+    try:
+        url = profile_link
+        if not url.startswith("http"):
+            url = "https://" + url
+        print(f"[{username}] PROFILE MODE: opening {url}")
+        update_account(username, current_task="PROFILE MODE: browsing source profile...")
+        try:
+            page.goto(url, timeout=45000, wait_until="domcontentloaded")
+        except Exception as ge:
+            print(f"[{username}] profile goto err: {str(ge)[:60]}")
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass
+        time.sleep(3)
+        handle_captcha_if_present(page, username)
+        take_screenshot(username)
+
+        # Scroll down to lazy-load more videos.
+        for _ in range(5):
+            page.mouse.wheel(0, 1500)
+            time.sleep(1.5)
+        take_screenshot(username)
+
+        links = page.eval_on_selector_all('a[href*="/video/"]', "els => els.map(e => e.href)")
+        seen = set()
+        for link in links:
+            m = re.search(r"tiktok\.com/@[^/]+/video/(\d+)", link)
+            if m and m.group(1) not in seen:
+                seen.add(m.group(1))
+                if m.group(1) in exclude:
+                    continue
+                candidates.append({
+                    "url": link.split("?")[0],
+                    "video_id": m.group(1),
+                    "title": "",
+                    "play_count": 0,
+                    "digg_count": 0,
+                    "play": "",
+                    "from_profile": True,
+                })
+            if len(candidates) >= 20:
+                break
+        print(f"[{username}] PROFILE MODE: found {len(candidates)} unused videos on profile")
+    except Exception as e:
+        print(f"[{username}] PROFILE MODE scrape error: {e}")
+    return candidates
+
+
 def download_video_no_watermark(username, video_info):
     """Step 3: Download the video WITHOUT watermark via the tikwm.com API.
 
@@ -3084,30 +3146,45 @@ def automation_worker(username):
 
             category = account.get("category") or "dance"
             platform = account.get("platform") or "TikTok"
-
-            # --- Step 1: search TikTok in the browser ---
-            # NOTE: searches ALWAYS happen on TikTok (never YouTube) to source
-            # the clips — both platforms reuse the TikTok search.
-            log(f"[{username}] Step 1: Searching TikTok '{category}' (platform={platform})")
-            update_account(username, current_task=f"Step 1: Searching '{category}'...")
+            profile_link = (account.get("profile_link") or "").strip()
 
             page = _get_page(username)
             if page:
                 handle_captcha_if_present(page, username)
                 handle_content_check_dialog(page, username)
 
-            search_ok = search_on_tiktok(username, category)
-            if not search_ok:
-                log(f"[{username}] search step failed, using API fallback")
+            # --- TikTok PROFILE mode: only post videos from the given profile ---
+            if platform == "TikTok" and profile_link:
+                log(f"[{username}] Step 1-2: PROFILE MODE — sourcing from {profile_link}")
+                update_account(username, current_task="PROFILE MODE: picking a video from source profile...")
+                candidates = scrape_profile_videos(username, profile_link, exclude=posted_video_ids)
+                if not candidates:
+                    update_account(username, current_task="No unused profile videos found, retrying in 2 min")
+                    time.sleep(120)
+                    continue
+                # Most-recent first; pick randomly within the first few to vary captions.
+                pool = candidates[:6]
+                video_info = random.choice(pool)
+                print(f"[{username}] PROFILE MODE selected {video_info['url']}")
+            else:
+                # --- Step 1: search TikTok in the browser ---
+                # NOTE: searches ALWAYS happen on TikTok (never YouTube) to source
+                # the clips — both platforms reuse the TikTok search.
+                log(f"[{username}] Step 1: Searching TikTok '{category}' (platform={platform})")
+                update_account(username, current_task=f"Step 1: Searching '{category}'...")
 
-            # --- Step 2: find a viral video in the results ---
-            log(f"[{username}] Step 2: Finding viral video...")
-            update_account(username, current_task="Step 2: Finding viral video...")
-            video_info = find_viral_video(username, category, exclude=posted_video_ids)
-            if not video_info:
-                update_account(username, current_task="No viral video found, retrying in 2 min")
-                time.sleep(120)
-                continue
+                search_ok = search_on_tiktok(username, category)
+                if not search_ok:
+                    log(f"[{username}] search step failed, using API fallback")
+
+                # --- Step 2: find a viral video in the results ---
+                log(f"[{username}] Step 2: Finding viral video...")
+                update_account(username, current_task="Step 2: Finding viral video...")
+                video_info = find_viral_video(username, category, exclude=posted_video_ids)
+                if not video_info:
+                    update_account(username, current_task="No viral video found, retrying in 2 min")
+                    time.sleep(120)
+                    continue
 
             if video_info.get("video_id") in posted_video_ids:
                 update_account(username, current_task="Already posted that one, searching again...")

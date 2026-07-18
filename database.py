@@ -30,6 +30,7 @@ DEFAULT_FIELDS = {
     "email": None,
     "password": None,
     "login_method": "cookie",
+    "profile_link": None,
     "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 }
 

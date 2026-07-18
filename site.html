@@ -132,6 +132,9 @@
             <button class="btn-primary" onclick="addAccount()">Add Account</button>
         </div>
         <div class="row" style="margin-top:10px;">
+            <input type="text" id="new-profile-link" placeholder="TikTok profile link (optional, TikTok only) — posts only this profile's videos" style="flex:1;min-width:240px;">
+        </div>
+        <div class="row" style="margin-top:10px;">
             <select id="new-login-method">
                 <option value="cookie">Login: Cookie session</option>
             </select>
@@ -283,11 +286,12 @@
             const category = document.getElementById('new-category').value;
             const platform = document.getElementById('new-platform').value;
             const login_method = document.getElementById('new-login-method').value;
+            const profile_link = (document.getElementById('new-profile-link') || {}).value || '';
             if (!username) { showToast('Enter a username', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, category, platform, login_method})
+                body: JSON.stringify({username, category, platform, login_method, profile_link})
             })
             .then(r => r.json())
             .then(d => {

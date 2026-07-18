@@ -67,10 +67,16 @@ def add_new_account():
         username = "@" + username
 
     if add_account(username, category, platform):
-        # Store optional login method if provided.
+        # Store optional settings if provided.
+        kwargs = {}
         login_method = (data.get("login_method") or "cookie").strip()
         if login_method:
-            update_account(username, login_method=login_method)
+            kwargs["login_method"] = login_method
+        profile_link = (data.get("profile_link") or "").strip()
+        if profile_link:
+            kwargs["profile_link"] = profile_link
+        if kwargs:
+            update_account(username, **kwargs)
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Account already exists"})
 
