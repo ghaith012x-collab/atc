@@ -6,7 +6,7 @@ from database import init_db, get_all_accounts, get_account, update_account, add
 from bot import (
     connect_account, start_automation, stop_automation,
     delete_account_session, logout_account,
-    screenshots, browser_sessions, take_screenshot
+    screenshots, last_frame_ts, browser_sessions, take_screenshot
 )
 
 app = Flask(__name__)
@@ -181,9 +181,18 @@ def live(username):
     # High quality so the preview stays sharp.
     img.save(buffer, "JPEG", quality=95)
     buffer.seek(0)
-    return Response(buffer.getvalue(), mimetype="image/jpeg")
+    resp = Response(buffer.getvalue(), mimetype="image/jpeg")
+    # Never let any proxy/browser cache the frame — otherwise the cam freezes.
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+@app.route("/api/live_meta/<path:username>")
+def live_meta(username):
+    """Return the timestamp (epoch seconds) of the last captured frame so the
+    frontend can show 'updated Ns ago' on the live cam."""
+    import time as _time
+    ts = last_frame_ts.get(username)
+    return jsonify({"username": username, "ts": ts, "now": _time.time()})
