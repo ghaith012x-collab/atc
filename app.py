@@ -53,12 +53,10 @@ def add_new_account():
         username = "@" + username
 
     if add_account(username, category, platform):
-        # Store optional Google login credentials if provided.
-        email = (data.get("email") or "").strip()
-        password = (data.get("password") or "").strip()
+        # Store optional login method if provided.
         login_method = (data.get("login_method") or "cookie").strip()
-        if email or password:
-            update_account(username, email=email, password=password, login_method=login_method)
+        if login_method:
+            update_account(username, login_method=login_method)
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Account already exists"})
 
@@ -84,11 +82,10 @@ def save_session(username):
             return jsonify({"success": False, "error": "Invalid cookie format. Expected array of {name, value, domain} objects."})
             
         # Save to DB
-        email = (data.get("email") or "").strip()
-        password = (data.get("password") or "").strip()
         kwargs = dict(session_data=session_json, status="Session saved", current_task="Ready to connect")
-        if email or password:
-            kwargs.update(email=email, password=password, login_method=(data.get("login_method") or "cookie").strip())
+        login_method = (data.get("login_method") or "cookie").strip()
+        if login_method:
+            kwargs.update(login_method=login_method)
         update_account(username, **kwargs)
         
         # Connect to verify

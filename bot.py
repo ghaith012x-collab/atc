@@ -1118,37 +1118,8 @@ def connect_account(username):
 
 
 # ---------------------------------------------------------------------------
-# Google login for YouTube (email + "Forgot password" -> "Try another way")
+# YouTube session helpers
 # ---------------------------------------------------------------------------
-
-def _glogin_click(page, selectors, timeout=8000):
-    """Click the first matching visible element from a list of CSS selectors.
-    Returns the selector that worked, or None."""
-    for sel in selectors:
-        try:
-            el = page.locator(sel).first
-            if el.count() > 0 and el.is_visible(timeout=2000):
-                el.click(timeout=timeout, force=True)
-                return sel
-        except Exception:
-            continue
-    return None
-
-
-def _glogin_fill(page, selectors, value, timeout=8000):
-    """Type `value` into the first matching visible input. Returns True on success."""
-    for sel in selectors:
-        try:
-            el = page.locator(sel).first
-            if el.count() > 0 and el.is_visible(timeout=2000):
-                el.click(timeout=3000, force=True)
-                time.sleep(0.3)
-                el.fill(value, timeout=timeout)
-                return True
-        except Exception:
-            continue
-    return False
-
 
 def _is_logged_in_youtube(page):
     """Return True if a YouTube/Google session is already authenticated."""
