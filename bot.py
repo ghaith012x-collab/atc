@@ -2531,6 +2531,9 @@ def _handle_youtube_auth_dialog(page, username=""):
         print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected — {info.get('text')}", flush=True)
         _debug_dump_yt_buttons(page, username, "VERIFY_DIALOG")
 
+        clicked = False
+        disabled = False
+
         # First try a shadow-DOM-aware search for the actual visible Next control.
         # YouTube sometimes nests the button two or three shadow roots deep; a
         # normal '#confirm-button button' locator can then see the host but not the
@@ -2569,9 +2572,9 @@ def _handle_youtube_auth_dialog(page, username=""):
                 return dlg ? (walk(dlg.shadowRoot || dlg) || {clicked:false}) : {clicked:false};
             }""")
             if first and first.get('disabled'):
-                update_account(username, current_task="Verify that it's you — click Next in live cam")
-                print(f"[{username}] ⚠ verify Next is disabled or not ready", flush=True)
-                return "needs_code"
+                # The custom-element wrapper can report disabled while its inner
+                # shadow button is enabled. Keep going and inspect the real target.
+                print(f"[{username}] verify wrapper reported disabled; checking inner control", flush=True)
             if first and first.get('clicked'):
                 clicked = True
                 print(f"[{username}] ✓ clicked verify-dialog Next (shadow DOM)", flush=True)
@@ -2589,8 +2592,6 @@ def _handle_youtube_auth_dialog(page, username=""):
             'ytcp-auth-confirmation-dialog #confirm-button button, '
             '#confirm-button button'
         ).first
-        clicked = False
-        disabled = False
         if not clicked and inner_btn.count() > 0:
             if inner_btn.is_disabled():
                 disabled = True
@@ -2607,11 +2608,20 @@ def _handle_youtube_auth_dialog(page, username=""):
                     const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
                     if (!b) return {ok:false, reason:'no-confirm'};
                     if (b.disabled) return {ok:false, disabled:true};
-                    const inner = b.shadowRoot && b.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
-                    const target = inner || b;
+                    const roots = [b, b.shadowRoot].filter(Boolean);
+                    let target = null;
+                    const visible = el => { const r=el.getBoundingClientRect(), c=getComputedStyle(el); return r.width>0 && r.height>0 && c.display!=='none' && c.visibility!=='hidden'; };
+                    for (const root of roots) {
+                        const candidates = [...root.querySelectorAll('button,[role="button"],tp-yt-paper-button,ytcp-button')];
+                        target = candidates.find(x => visible(x) && /^(next|continue|verify|submit|confirm)$/i.test((x.textContent||'').trim()))
+                              || candidates.find(x => visible(x) && !x.disabled);
+                        if (target) break;
+                    }
+                    target = target || b;
+                    if (target.disabled || String(target.getAttribute && target.getAttribute('aria-disabled')||'').toLowerCase()==='true') return {ok:false, disabled:true};
                     const r = target.getBoundingClientRect();
                     const cx = r.x + r.width/2, cy = r.y + r.height/2;
-                    target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, isTrusted:true, detail:1}));
+                    target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, detail:1}));
                     try { target.click(); } catch(e){}
                     return {ok:true, tag:target.tagName, id:b.id||'', cx:Math.round(cx), cy:Math.round(cy)};
                 }""")
