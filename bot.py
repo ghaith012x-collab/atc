@@ -2507,7 +2507,7 @@ def _handle_youtube_auth_dialog(page, username=""):
     """Handle YouTube Studio's 'Verify that it's you' (ytcp-auth-confirmation-dialog).
 
     This dialog intercepts ALL clicks on the upload form, so it MUST be resolved
-    first. Its primary action button is #confirm-button (text 'Next'); we click it
+    first. Its primary action button is #next-button (text 'Next'); we click it
     via a DIRECT DOM click (JS) because Playwright's actionability check is blocked
     by the dialog's own overlay backdrop.
 
@@ -2585,15 +2585,15 @@ def _handle_youtube_auth_dialog(page, username=""):
             print(f"[{username}] shadow-DOM verify click failed: {str(e)[:100]}", flush=True)
 
         # Resolve the dialog's primary Next/Continue button. The real clickable
-        # target is the INNER <button> inside the <ytcp-button> shadow DOM. We click
+        # target is the INNER <button> inside the enabled #next-button shadow DOM. We click
         # that inner <button> directly with Playwright (force=True bypasses the
         # dialog backdrop hit-test). This is what actually fires Polymer's handler —
         # clicking the wrapper (or page.mouse at its center) misses the inner
         # control and lands on the backdrop, which drags a text selection across
         # the whole page instead of advancing.
         inner_btn = page.locator(
-            'ytcp-auth-confirmation-dialog #confirm-button button, '
-            '#confirm-button button'
+            'ytcp-auth-confirmation-dialog #next-button button, '
+            '#next-button button, ytcp-auth-confirmation-dialog #confirm-button button'
         ).first
         if not clicked and inner_btn.count() > 0:
             if inner_btn.is_disabled():
@@ -2605,10 +2605,10 @@ def _handle_youtube_auth_dialog(page, username=""):
                 except Exception as e:
                     print(f"[{username}] verify inner-button click failed: {str(e)[:60]}")
         if not clicked:
-            # Fallback: trusted JS click on #confirm-button's inner <button>.
+            # Fallback: trusted JS click on #next-button's inner <button>.
             try:
                 res = page.evaluate("""() => {
-                    const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+                    const b = document.querySelector('ytcp-auth-confirmation-dialog #next-button, #next-button, ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
                     if (!b) return {ok:false, reason:'no-confirm'};
                     const roots = [];
                     const collect = root => {
@@ -2659,9 +2659,25 @@ def _handle_youtube_auth_dialog(page, username=""):
         time.sleep(3)
         take_screenshot(username)
 
+        # Do not treat a transient overlay repaint as success. YouTube can briefly
+        # hide the custom element while rebuilding the same verification dialog.
+        # Require it to remain absent across several checks before resuming upload.
+        gone_since = None
+        for _ in range(8):
+            present_now = page.evaluate(_verify_dialog_present_js())
+            if present_now and present_now.get("present"):
+                gone_since = None
+                break
+            if gone_since is None:
+                gone_since = time.time()
+            if time.time() - gone_since >= 2:
+                break
+            time.sleep(0.5)
+
         # Poll up to ~5 min. If a 6-digit code is supplied via the dashboard,
         # type it into the dialog and submit; otherwise wait for the user.
         deadline = time.time() + 300
+        absent_checks = 0
         while time.time() < deadline:
             take_screenshot(username)
             # The dialog may change its button from Next to Verify/Submit while
@@ -2676,10 +2692,15 @@ def _handle_youtube_auth_dialog(page, username=""):
                 return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
             }""")
             if not still:
+                absent_checks += 1
+                if absent_checks < 3:
+                    time.sleep(0.7)
+                    continue
                 print(f"[{username}] ✓ verify dialog dismissed")
                 _log_event(username, "Verify dialog: dismissed")
                 update_account(username, current_task="Verification complete — resuming upload")
                 return "advanced"
+            absent_checks = 0
             code = get_verify_code(username)
             if code:
                 try:
@@ -2697,7 +2718,7 @@ def _handle_youtube_auth_dialog(page, username=""):
                         clear_verify_code(username)
                         try:
                             page.evaluate("""() => {
-                                const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+                                const b = document.querySelector('ytcp-auth-confirmation-dialog #next-button, #next-button, ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
                                 if (!b || b.disabled) return;
                                 const inner = b.shadowRoot && b.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
                                 const target = inner || b;
