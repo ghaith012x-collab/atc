@@ -2457,6 +2457,36 @@ def _debug_dump_yt_buttons(page, username, label):
         print(f"[{username}] _debug_dump_yt_buttons err: {e}", flush=True)
 
 
+def _verify_dialog_present_js():
+    """JS that returns truthy info if YouTube's 'Verify that it's you' dialog is
+    open. We match BROADLY (the dialog container itself, or any confirm button
+    whose text mentions verify/confirm/next/continue) because YouTube changes the
+    exact wording/locator — the old strict '#confirm-button text===next' check
+    missed the dialog entirely and the upload hung forever."""
+    return """() => {
+        const dlg = document.querySelector('ytcp-auth-confirmation-dialog, ytcp-auth-confirmation-dialog');
+        if (dlg && dlg.offsetParent !== null) {
+            const btns = [...dlg.querySelectorAll('button, ytcp-button, tp-yt-paper-button, [role="button"]')];
+            const next = btns.find(b => /next|continue|verify|confirm|ok|got it|done|submit/i.test((b.textContent||'')) && !b.disabled);
+            const disabledNext = btns.find(b => /next|continue|verify|confirm|ok|got it|done|submit/i.test((b.textContent||'')) && b.disabled);
+            return {present:true, hasEnabledNext: !!next, hasDisabledNext: !!disabledNext,
+                    text: (dlg.textContent||'').replace(/\\s+/g,' ').slice(0,80)};
+        }
+        // Fallback: any visible confirm button anywhere on the page.
+        const all = [...document.querySelectorAll('button, ytcp-button, tp-yt-paper-button, [role="button"]')];
+        const hit = all.find(b => {
+            const t = (b.textContent||'').trim().toLowerCase();
+            return b.offsetParent !== null && (/verify that|verify it|confirm your|it.s you|not a robot|unusual activity|suspicious/i.test((b.closest('[role=dialog], ytcp-auth-confirmation-dialog, ytcp-upload-renderer')||document).textContent||'') || /next|continue|verify|confirm/i.test(t));
+        });
+        if (hit) {
+            const box = hit.getBoundingClientRect();
+            return {present:true, hasEnabledNext: !hit.disabled, hasDisabledNext: !!hit.disabled,
+                    text: (hit.textContent||'').replace(/\\s+/g,' ').slice(0,80)};
+        }
+        return {present:false};
+    }"""
+
+
 def _handle_youtube_auth_dialog(page, username=""):
     """Handle YouTube Studio's 'Verify that it's you' (ytcp-auth-confirmation-dialog).
 
@@ -2476,19 +2506,13 @@ def _handle_youtube_auth_dialog(page, username=""):
       "needs_code" -> dialog still open but Next is disabled (waiting for user input)
     """
     try:
-        # Detect the dialog by its primary action button #confirm-button (text
-        # 'Next'). We do NOT rely on a flaky is_visible()/tag check — the dialog IS
-        # present whenever this button exists in the DOM.
-        dlg_present = page.evaluate("""() => {
-            const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
-            if (!b) return false;
-            const t = (b.textContent || '').trim().toLowerCase();
-            return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
-        }""")
+        # Detect the dialog BROADLY (the old strict '#confirm-button text===next'
+        # check missed it and the upload hung forever).
+        info = page.evaluate(_verify_dialog_present_js())
+        dlg_present = bool(info and info.get("present"))
         if not dlg_present:
-            # also accept the literal upload-step dialog that reuses #confirm-button
             return False
-        print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected", flush=True)
+        print(f"[{username}] ⚠ YouTube 'Verify that it's you' dialog detected — {info.get('text')}", flush=True)
         _debug_dump_yt_buttons(page, username, "VERIFY_DIALOG")
 
         # Resolve the dialog's primary Next/Continue button. The real clickable
