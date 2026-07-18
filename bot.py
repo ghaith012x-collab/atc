@@ -2458,12 +2458,20 @@ def _debug_dump_yt_buttons(page, username, label):
 
 
 def _verify_dialog_present_js():
-    """JS that returns truthy info if YouTube's 'Verify that it's you' dialog is
-    open. We match BROADLY (the dialog container itself, or any confirm button
-    whose text mentions verify/confirm/next/continue) because YouTube changes the
-    exact wording/locator — the old strict '#confirm-button text===next' check
-    missed the dialog entirely and the upload hung forever."""
+    """JS that returns truthy info ONLY if YouTube's real 'Verify that it's you'
+    dialog is actually open.
+
+    Critical: we must NOT match a generic 'Continue'/'Next' button that happens
+    to exist elsewhere on the Studio page (the left-nav, banners, upload wizard).
+    The old loose fallback matched any 'Continue' text and made the bot think the
+    auth dialog was up forever — it then spun clicking nothing while the real
+    upload wizard sat ready. So detection now requires EITHER the dedicated
+    ytcp-auth-confirmation-dialog element to be visible, OR visible page text that
+    actually mentions verification ('verify that it's you', 'unusual activity',
+    'not a robot', etc.).
+    """
     return """() => {
+        // 1) The dedicated auth dialog element, if present and visible.
         const dlg = document.querySelector('ytcp-auth-confirmation-dialog, ytcp-auth-confirmation-dialog');
         if (dlg && dlg.offsetParent !== null) {
             const btns = [...dlg.querySelectorAll('button, ytcp-button, tp-yt-paper-button, [role="button"]')];
@@ -2472,16 +2480,22 @@ def _verify_dialog_present_js():
             return {present:true, hasEnabledNext: !!next, hasDisabledNext: !!disabledNext,
                     text: (dlg.textContent||'').replace(/\\s+/g,' ').slice(0,80)};
         }
-        // Fallback: any visible confirm button anywhere on the page.
-        const all = [...document.querySelectorAll('button, ytcp-button, tp-yt-paper-button, [role="button"]')];
-        const hit = all.find(b => {
-            const t = (b.textContent||'').trim().toLowerCase();
-            return b.offsetParent !== null && (/verify that|verify it|confirm your|it.s you|not a robot|unusual activity|suspicious/i.test((b.closest('[role=dialog], ytcp-auth-confirmation-dialog, ytcp-upload-renderer')||document).textContent||'') || /next|continue|verify|confirm/i.test(t));
-        });
-        if (hit) {
-            const box = hit.getBoundingClientRect();
-            return {present:true, hasEnabledNext: !hit.disabled, hasDisabledNext: !!hit.disabled,
-                    text: (hit.textContent||'').replace(/\\s+/g,' ').slice(0,80)};
+        // 2) No dedicated element — only treat as a verify dialog if visible page
+        //    text actually mentions verification. A bare 'Continue'/'Next' button
+        //    on the rest of the page is NOT sufficient.
+        const bodyText = (document.body && document.body.innerText || '').toLowerCase();
+        const verifyPhrases = ['verify that', 'verify it', 'confirm it', 'confirm your',
+                                "it's you", 'not a robot', 'unusual activity',
+                                'suspicious', 'verify your identity', 'prove you'];
+        if (verifyPhrases.some(p => bodyText.includes(p))) {
+            // Make sure the visible text is inside an actual dialog/overlay, not
+            // a random help article in the page.
+            const dialogs = [...document.querySelectorAll('[role="dialog"], ytcp-auth-confirmation-dialog, tp-yt-paper-dialog, ytcp-dialog')];
+            const inDialog = dialogs.some(d => d.offsetParent !== null && verifyPhrases.some(p => (d.innerText||'').toLowerCase().includes(p)));
+            if (inDialog) {
+                return {present:true, hasEnabledNext:false, hasDisabledNext:false,
+                        text: bodyText.match(new RegExp(verifyPhrases.join('|'),'i'))[0]};
+            }
         }
         return {present:false};
     }"""
@@ -2814,8 +2828,16 @@ def upload_video_to_youtube(username, file_path, caption, title):
             pct = _read_upload_percent(page)
             if pct is not None and sec % 5 == 0:
                 print(f"[{username}] YouTube upload progress: {pct}%")
-            # Title input indicates the details screen is ready
-            title_loc = page.locator('#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], input[placeholder*="Title"]').first
+            # Title input indicates the details screen is ready. YouTube's Studio
+            # upload wizard uses several possible structures for the title field
+            # across redesigns, so check all of them + the upload dialog container
+            # (which only exists once the wizard actually opened).
+            title_loc = page.locator(
+                '#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], '
+                'input[placeholder*="Title"], tp-yt-paper-input[label*="Title"], '
+                'div#title-container textarea, #title-container input, '
+                'ytcp-upload-dialog #title, ytcp-video-metadata-editor'
+            ).first
             if title_loc.count() > 0 and title_loc.is_visible():
                 details_ready = True
                 print(f"[{username}] ✓ YouTube details form detected (after ~{sec*3}s)")
@@ -2841,7 +2863,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 t = (title[:58] + " #Shorts") if len(title) <= 58 else (title[:58] + "…")
             else:
                 t = "Daily Short #Shorts"
-            tl = page.locator('#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], input[placeholder*="Title"]').first
+            tl = page.locator('#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], input[placeholder*="Title"], tp-yt-paper-input[label*="Title"], div#title-container textarea, #title-container input, ytcp-upload-dialog #title').first
             if tl.count() > 0:
                 tl.click(timeout=4000, force=True)
                 time.sleep(0.3)
@@ -2849,12 +2871,32 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 page.keyboard.press("Delete")
                 tl.type(t, delay=25)
                 print(f"[{username}] ✓ YouTube title set: {t}")
+            else:
+                # JS fallback: set the title via Polymer/React value setter on the
+                # first visible text input/fields inside the upload editor.
+                set_ok = page.evaluate("""(val) => {
+                    const root = document.querySelector('ytcp-upload-dialog, ytcp-video-metadata-editor') || document;
+                    const inp = [...root.querySelectorAll('textarea, input[type="text"], [contenteditable]')]
+                        .find(e => (e.placeholder||'').toLowerCase().includes('title') || (e.getAttribute('label')||'').toLowerCase().includes('title') || (e.id||'').toLowerCase().includes('title'));
+                    if (!inp) return false;
+                    inp.focus();
+                    if (inp.tagName === 'TEXTAREA' || inp.tagName === 'INPUT') {
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+                                   || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        if (setter) { setter.call(inp, val); inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                        else { inp.value = val; inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                    } else {
+                        inp.innerText = val; inp.dispatchEvent(new Event('input', {bubbles:true}));
+                    }
+                    return true;
+                }""", t)
+                print(f"[{username}] {'✓' if set_ok else '⚠'} YouTube title set via JS fallback: {t}") if set_ok else print(f"[{username}] YouTube title NOT found")
         except Exception as ce:
             print(f"[{username}] YouTube title EXCEPTION: {ce}")
 
         # Description — paste the full accurate caption.
         try:
-            dl = page.locator('#description-textarea, #textbox[label*="Description"], ytcp-mention-textbox[label*="Description"], textarea[placeholder*="Description"]').first
+            dl = page.locator('#description-textarea, #textbox[label*="Description"], ytcp-mention-textbox[label*="Description"], textarea[placeholder*="Description"], div#description-container textarea, #description-container textarea').first
             if dl.count() > 0:
                 dl.click(timeout=4000, force=True)
                 time.sleep(0.3)
@@ -2862,6 +2904,20 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 page.keyboard.press("Delete")
                 dl.type(caption, delay=12)
                 print(f"[{username}] ✓ YouTube description set")
+            else:
+                set_ok = page.evaluate("""(val) => {
+                    const root = document.querySelector('ytcp-upload-dialog, ytcp-video-metadata-editor') || document;
+                    const inp = [...root.querySelectorAll('textarea, input[type="text"]')]
+                        .find(e => (e.placeholder||'').toLowerCase().includes('description') || (e.getAttribute('label')||'').toLowerCase().includes('description') || (e.id||'').toLowerCase().includes('description'));
+                    if (!inp) return false;
+                    inp.focus();
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+                               || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    if (setter) { setter.call(inp, val); inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                    else { inp.value = val; inp.dispatchEvent(new Event('input', {bubbles:true})); }
+                    return true;
+                }""", caption)
+                print(f"[{username}] {'✓' if set_ok else '⚠'} YouTube description set via JS fallback") if set_ok else print(f"[{username}] YouTube description NOT found")
         except Exception as ce:
             print(f"[{username}] YouTube description EXCEPTION: {ce}")
 
