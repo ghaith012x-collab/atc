@@ -2655,12 +2655,16 @@ def _click_youtube_next(page):
     _handle_youtube_auth_dialog (which skips disabled buttons). Returns True if a
     real (enabled) Next was clicked.
     """
-    # 0) If the verify dialog is up, let the dedicated handler deal with it
-    #    (it clicks the real inner Next button). The dialog blocks the upload
-    #    form's #next-button, so we must NOT fall through to clicking that.
+    # 0) If the REAL verify dialog is up, let the dedicated handler deal with it.
+    #    IMPORTANT: only match the dedicated ytcp-auth-confirmation-dialog
+    #    container — NOT a bare '#confirm-button', because other dialogs on the
+    #    Studio page can also have a #confirm-button and we must not hijack the
+    #    upload wizard's own Next.
     try:
         if page.evaluate("""() => {
-            const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+            const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+            if (!dlg || dlg.offsetParent === null) return false;
+            const b = dlg.querySelector('#confirm-button');
             if (!b) return false;
             const t = (b.textContent || '').trim().toLowerCase();
             return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
@@ -2672,14 +2676,66 @@ def _click_youtube_next(page):
     except Exception:
         pass
 
-    # 1) Try Playwright locators with force=True. Skip disabled buttons.
+    # Robust JS click: scope to the upload dialog, recurse shadow DOM, and
+    # detect "disabled" correctly on custom ytcp-button hosts (which don't
+    # always expose a .disabled property on the outer element — check the
+    # inner paper-button / aria-disabled too). This is the reliable path.
+    try:
+        res = page.evaluate("""() => {
+            const isDisabled = (el) => {
+                if (!el) return true;
+                if (el.disabled) return true;
+                if ((el.getAttribute && (el.getAttribute('aria-disabled')||'').toLowerCase()) === 'true') return true;
+                if ((el.getAttribute && (el.getAttribute('disabled')||'')) !== null) return true;
+                const cs = el.classList;
+                if (cs && /disabled/.test(cs.toString())) return true;
+                // inner control
+                const inner = el.shadowRoot && el.shadowRoot.querySelector('button, paper-button, [role="button"]');
+                return inner ? isDisabled(inner) : false;
+            };
+            const clickEl = (el) => {
+                const r = el.getBoundingClientRect();
+                const cx = r.x + r.width/2, cy = r.y + r.height/2;
+                el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, isTrusted:true, detail:1}));
+                try { el.click(); } catch(e){}
+                return {tag: el.tagName.toLowerCase(), id: el.id||'', cx: Math.round(cx), cy: Math.round(cy)};
+            };
+            const findInner = (r) => {
+                const els = [...r.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
+                let hit = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
+                    && !isDisabled(el) && el.offsetParent !== null);
+                if (hit) {
+                    const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
+                    return inner || hit;
+                }
+                for (const el of els) { if (el.shadowRoot) { const r2 = findInner(el.shadowRoot); if (r2) return r2; } }
+                return null;
+            };
+            // Prefer the upload dialog's own Next button.
+            const root = document.querySelector('ytcp-upload-dialog, ytcp-video-metadata-editor, ytcp-upload-renderer') || document;
+            const next = findInner(root);
+            if (next) {
+                const info = clickEl(next);
+                return {clicked: true, tag: info.tag, id: info.id, cx: info.cx, cy: info.cy};
+            }
+            return {clicked: false};
+        }""")
+        _clear_text_selection(page)
+        if res and res.get("clicked"):
+            print(f"[NEXT] ✓ clicked via scoped JS <{res['tag']}#{res['id']}> at ({res['cx']},{res['cy']})")
+            return True
+        print(f"[NEXT] no enabled 'Next' element found in upload dialog")
+    except Exception as e:
+        print(f"[NEXT] JS click err: {e}")
+
+    # Last resort: Playwright locators with force=True.
     selectors = [
+        'ytcp-upload-dialog ytcp-button#next-button',
         'ytcp-button#next-button',
         '#next-button',
         'tp-yt-paper-button#next-button',
         'ytcp-button:has-text("Next")',
         'button:has-text("Next")',
-        'tp-yt-paper-button:has-text("Next")',
     ]
     for sel in selectors:
         try:
@@ -2701,44 +2757,12 @@ def _click_youtube_next(page):
         except Exception as e:
             print(f"[NEXT] selector '{sel}' failed: {e}")
             continue
-    # 2) JS fallback: click a visible, ENABLED element whose text is exactly "Next".
+    print(f"[NEXT] ⚠ no Next button clickable anywhere")
     try:
-        res = page.evaluate("""() => {
-            // Recurse shadow roots; prefer the inner <button> that owns the
-            // real click handler (the custom <ytcp-button> host ignores .click()).
-            const findInner = (r) => {
-                const els = [...r.querySelectorAll('ytcp-button, tp-yt-paper-button, button, [role="button"]')];
-                let hit = els.find(el => (el.textContent || '').trim().toLowerCase() === 'next'
-                    && !el.disabled && el.offsetParent !== null);
-                if (hit) {
-                    const inner = hit.shadowRoot && hit.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
-                    return inner || hit;
-                }
-                for (const el of els) { if (el.shadowRoot) { const r2 = findInner(el.shadowRoot); if (r2) return r2; } }
-                return null;
-            };
-            const next = findInner(document);
-            if (next) {
-                const r = next.getBoundingClientRect();
-                const cx = r.x + r.width/2, cy = r.y + r.height/2;
-                // Trusted MouseEvent so Polymer's handler actually fires.
-                next.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, isTrusted:true, detail:1}));
-                try { next.click(); } catch(e){}
-                return {clicked: true, tag: next.tagName.toLowerCase(), id: next.id || '',
-                         text: (next.textContent||'').trim().slice(0,40),
-                         cx: Math.round(cx), cy: Math.round(cy)};
-            }
-            return {clicked: false};
-        }""")
-        _clear_text_selection(page)
-        if res and res.get("clicked"):
-            print(f"[NEXT] ✓ clicked via JS <{res['tag']}#{res['id']}> text='{res['text']}' at ({res['cx']},{res['cy']})")
-            return True
-        print(f"[NEXT] no enabled 'Next' element found")
-        return False
-    except Exception as e:
-        print(f"[NEXT] JS fallback err: {e}")
-        return False
+        _save_debug_html(page, "YT_NEXT_NOT_FOUND", username or "")
+    except Exception:
+        pass
+    return False
 
 
 def upload_video_to_youtube(username, file_path, caption, title):
@@ -2813,10 +2837,15 @@ def upload_video_to_youtube(username, file_path, caption, title):
             # BLOCKS the details form from ever rendering. Surface it loudly
             # instead of spinning silently for 8 minutes.
             _handle_youtube_auth_dialog(page, username)
-            # Did the verify dialog actually block us?
+            # Did the REAL verify dialog actually block us? Only match the
+            # dedicated ytcp-auth-confirmation-dialog container — a bare
+            # '#confirm-button' elsewhere on the page (e.g. the upload wizard)
+            # must NOT be treated as the auth dialog.
             try:
                 still_verify = page.evaluate("""() => {
-                    const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
+                    const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
+                    if (!dlg || dlg.offsetParent === null) return false;
+                    const b = dlg.querySelector('#confirm-button');
                     if (!b) return false;
                     const t = (b.textContent || '').trim().toLowerCase();
                     return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
@@ -2938,24 +2967,51 @@ def upload_video_to_youtube(username, file_path, caption, title):
         except Exception:
             pass
         try:
-            not_kids = page.locator('tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No")').first
-            if not_kids.count() > 0:
-                not_kids.click(timeout=4000)
-                time.sleep(0.5)
+            # "Made for kids" — YouTube's current Studio uses a
+            # ytkc-made-for-kids-select with tp-yt-paper-radio-button elements
+            # (name="NOT_MADE_FOR_KIDS" / "MADE_FOR_KIDS"). Click via JS so the
+            # shadow-DOM inner control actually fires (a Playwright click on the
+            # wrapper often misses). Match broadly on the "No" option.
+            page.evaluate("""() => {
+                const opts = [...document.querySelectorAll(
+                    'tp-yt-paper-radio-button, ytkc-made-for-kids-select tp-yt-paper-radio-button, [name="NOT_MADE_FOR_KIDS"]'
+                )];
+                const no = opts.find(el => {
+                    const t = (el.textContent||'').trim().toLowerCase();
+                    const name = (el.getAttribute('name')||'') ;
+                    return /no/.test(t) || name === 'NOT_MADE_FOR_KIDS';
+                });
+                if (no && !no.disabled) {
+                    const inner = no.shadowRoot && no.shadowRoot.querySelector('button, paper-button, [role="button"]');
+                    const target = inner || no;
+                    target.click();
+                }
+            }""")
+            time.sleep(0.6)
         except Exception:
             pass
 
         # Next -> Next -> Next (Details -> Video elements -> Checks -> Public).
-        # We VERIFY each click actually advanced the form by comparing a page
-        # "signature" (which dialogs/steps are present) before and after — if the
-        # click didn't advance, we retry with the alternative Next control.
+        # We VERIFY each click actually advanced the form. Studio keeps every
+        # wizard step in the DOM at once (visibility-toggled) and the upload
+        # progress text changes constantly, so a raw text signature is useless.
+        # Instead we track the ACTIVE step: the visible title of the current
+        # step panel (ytcp-video-metadata-editor / ytcp-upload-renderer) plus
+        # whether the Publish button exists yet. That changes only when the
+        # wizard actually moves forward.
         def _page_signature():
             try:
                 return page.evaluate("""() => {
-                    const ids = [...document.querySelectorAll('[id]')].map(e => e.id).join('|');
-                    const titles = [...document.querySelectorAll('ytcp-video-metadata-editor, ytcp-upload-renderer, [class*="step"], [role="dialog"]')]
-                        .map(e => (e.textContent||'').slice(0,30)).join('|');
-                    return ids + '###' + titles;
+                    const root = document.querySelector('ytcp-upload-dialog, ytcp-video-metadata-editor, ytcp-upload-renderer') || document;
+                    // The step indicator: which step chip is active (Details/Checks/Visibility).
+                    const steps = [...root.querySelectorAll('[class*="step"], [role="tab"], tp-yt-paper-tab, [class*="stepChip"]')]
+                        .map(e => (e.className||'') + ':' + (!!(e.offsetParent) && /active|selected/.test(e.className||''))).join('|');
+                    // Active panel heading text (the visible step's label).
+                    const panels = [...root.querySelectorAll('ytcp-video-metadata-editor, [class*="metadata"], [class*="upload"]')]
+                        .filter(e => e.offsetParent !== null)
+                        .map(e => (e.textContent||'').replace(/\\s+/g,' ').slice(0,40)).join('|');
+                    const hasPublish = !!document.querySelector('ytcp-button#publish-button, #publish-button, ytcp-button:has-text("Publish")');
+                    return steps + '###' + panels + '###PUB:' + hasPublish;
                 }""")
             except Exception:
                 return str(time.time())
@@ -2972,10 +3028,22 @@ def upload_video_to_youtube(username, file_path, caption, title):
             except Exception:
                 pass
             try:
-                not_kids = page.locator('tp-yt-paper-radio-button:has-text("No"), paper-radio-button:has-text("No")').first
-                if not_kids.count() > 0 and not_kids.is_visible():
-                    not_kids.click(timeout=3000, force=True)
-                    time.sleep(0.4)
+                page.evaluate("""() => {
+                    const opts = [...document.querySelectorAll(
+                        'tp-yt-paper-radio-button, ytkc-made-for-kids-select tp-yt-paper-radio-button, [name="NOT_MADE_FOR_KIDS"]'
+                    )];
+                    const no = opts.find(el => {
+                        const t = (el.textContent||'').trim().toLowerCase();
+                        const name = (el.getAttribute('name')||'') ;
+                        return /no/.test(t) || name === 'NOT_MADE_FOR_KIDS';
+                    });
+                    if (no && !no.disabled) {
+                        const inner = no.shadowRoot && no.shadowRoot.querySelector('button, paper-button, [role="button"]');
+                        const target = inner || no;
+                        target.click();
+                    }
+                }""")
+                time.sleep(0.4)
             except Exception:
                 pass
 
