@@ -2684,13 +2684,12 @@ def _handle_youtube_auth_dialog(page, username=""):
             # waiting for the user's phone, passkey, or 6-digit code.  Looking only
             # at the button label made the bot declare success too early and click
             # the upload wizard behind the still-open overlay.
-            still = page.evaluate("""() => {
-                const d = document.querySelector('ytcp-auth-confirmation-dialog');
-                if (!d) return false;
-                const r = d.getBoundingClientRect();
-                const cs = getComputedStyle(d);
-                return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
-            }""")
+            # Use the same broad detector used before clicking. The dialog may
+            # be rendered as a tp-yt-paper-dialog/overlay rather than the custom
+            # ytcp-auth-confirmation-dialog host, so checking only that tag gives
+            # a false dismissal while the overlay is still blocking the wizard.
+            still_info = page.evaluate(_verify_dialog_present_js())
+            still = bool(still_info and still_info.get("present"))
             if not still:
                 absent_checks += 1
                 if absent_checks < 3:
