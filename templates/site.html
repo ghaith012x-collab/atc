@@ -110,21 +110,31 @@
         <div class="row">
             <input type="text" id="new-username" placeholder="@username" style="flex:1;min-width:160px;">
             <select id="new-category">
-                <option value="dance">Dance</option>
-                <option value="comedy">Comedy</option>
-                <option value="gaming">Gaming</option>
-                <option value="horror">Horror</option>
-                <option value="story">Story Animation</option>
-                <option value="memes">Memes</option>
+                <option value="Dance">Dance</option>
+                <option value="Horror">Horror</option>
+                <option value="Viral Clips">Viral Clips</option>
+                <option value="Funny Clips">Funny Clips</option>
+                <option value="Scary Story Animation">Scary Story Animation</option>
+                <option value="Fruit Story Animation">Fruit Story Animation</option>
+                <option value="Horror Animations">Horror Animations</option>
+                <option value="Edits">Edits</option>
+                <option value="Story Animation">Story Animation</option>
+                <option value="Gin Stories">Gin Stories</option>
+                <option value="Scary facts">Scary facts</option>
+                <option value="Funny Videos">Funny Videos</option>
+                <option value="Predator Catches">Predator Catches</option>
             </select>
-            <select id="new-platform">
+            <select id="new-platform" onchange="updateCategoryOptions()">
                 <option value="TikTok">TikTok</option>
                 <option value="YouTube">YouTube</option>
             </select>
             <button class="btn-primary" onclick="addAccount()">Add Account</button>
         </div>
         <div class="row" style="margin-top:10px;">
+<<<<<<< ours
             <input type="email" id="new-email" placeholder="Gmail (stored for reference only)" style="flex:1;min-width:200px;">
+=======
+>>>>>>> theirs
             <select id="new-login-method">
                 <option value="cookie">Login: Cookie session</option>
             </select>
@@ -250,17 +260,36 @@
         }
 
         // ==================== ADD ACCOUNT ====================
+        const PLATFORM_CATEGORIES = {
+            "TikTok": [
+                "Dance", "Horror", "Viral Clips", "Funny Clips",
+                "Scary Story Animation", "Fruit Story Animation",
+                "Horror Animations", "Edits", "Story Animation",
+                "Gin Stories", "Scary facts", "Funny Videos", "Predator Catches"
+            ],
+            "YouTube": [
+                "Viral Clips", "Funny Clips", "Scary Story Animation",
+                "Fruit Story Animation", "Horror Animations", "Edits"
+            ]
+        };
+
+        function updateCategoryOptions() {
+            const platform = document.getElementById('new-platform').value;
+            const sel = document.getElementById('new-category');
+            const cats = PLATFORM_CATEGORIES[platform] || PLATFORM_CATEGORIES["TikTok"];
+            sel.innerHTML = cats.map(c => `<option value="${c}">${c}</option>`).join('');
+        }
+
         function addAccount() {
             const username = document.getElementById('new-username').value.trim();
             const category = document.getElementById('new-category').value;
             const platform = document.getElementById('new-platform').value;
-            const email = document.getElementById('new-email').value.trim();
             const login_method = document.getElementById('new-login-method').value;
             if (!username) { showToast('Enter a username', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, category, platform, email, login_method})
+                body: JSON.stringify({username, category, platform, login_method})
             })
             .then(r => r.json())
             .then(d => {
@@ -285,13 +314,12 @@
                 return;
             }
 
-            const email = (document.getElementById('new-email') || {}).value || '';
             const login_method = (document.getElementById('new-login-method') || {}).value || 'cookie';
             showToast('Saving and verifying session...', '');
             fetch('/api/session/' + username, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session: raw, email, login_method})
+                body: JSON.stringify({session: raw, login_method})
             })
             .then(r => r.json())
             .then(d => {
@@ -305,7 +333,11 @@
             });
         }
 
+<<<<<<< ours
         // ==================== GOOGLE LOGIN (YouTube) ====================
+=======
+        // ==================== CONNECT STATUS POLLING ====================
+>>>>>>> theirs
         function pollConnected(username, attempts) {
             if (attempts > 40) {
                 showToast('Verification timed out — check session', 'error');
@@ -488,6 +520,7 @@
         setInterval(refreshCams, 1000);
         setInterval(updateInfo, 4000);
         setInterval(updateCountdowns, 1000);  // live every second
+        updateCategoryOptions();  // populate categories for the default platform
     </script>
 </body>
 </html>
