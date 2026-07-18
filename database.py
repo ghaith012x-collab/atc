@@ -5,6 +5,13 @@ from datetime import datetime
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is not set. "
+        "In Railway: open your service → Variables tab → add DATABASE_URL "
+        "or use 'Add Reference' to link your Postgres service."
+    )
+
 
 def get_db():
     conn = psycopg2.connect(DATABASE_URL)
