@@ -124,10 +124,9 @@
             <button class="btn-primary" onclick="addAccount()">Add Account</button>
         </div>
         <div class="row" style="margin-top:10px;">
-            <input type="email" id="new-email" placeholder="Gmail (for YouTube Google login)" style="flex:1;min-width:200px;">
+            <input type="email" id="new-email" placeholder="Gmail (stored for reference only)" style="flex:1;min-width:200px;">
             <select id="new-login-method">
                 <option value="cookie">Login: Cookie session</option>
-                <option value="google">Login: Google (email)</option>
             </select>
         </div>
     </div>
@@ -185,21 +184,10 @@
                 id="session-input-{{ acc.username }}"
                 placeholder='[{"name":"sessionid","value":"...","domain":".{{ "youtube.com" if acc.platform == "YouTube" else "tiktok.com" }}"},...]'
             ></textarea>
-            <div class="hint">Export cookies from your browser (EditThisCookie / Cookie-Editor) and paste the JSON here. For YouTube you can instead use Google login below.</div>
+            <div class="hint">Export cookies from your browser (EditThisCookie / Cookie-Editor) and paste the JSON here.</div>
             <div class="btn-row">
                 <button class="btn-primary" onclick="saveSession('{{ acc.username }}')">Save Session</button>
             </div>
-
-            {% if acc.platform == 'YouTube' %}
-            <h4 style="margin-top:16px;">Google Login (YouTube)</h4>
-            <div class="row" style="flex-direction:column;align-items:stretch;gap:8px;">
-                <input type="email" id="gl-email-{{ acc.username }}" placeholder="Gmail" style="width:100%;">
-            </div>
-            <div class="btn-row">
-                <button class="btn-primary" onclick="googleLogin('{{ acc.username }}')">Google Login</button>
-            </div>
-            <div class="hint">Opens a browser on the Google sign-in page for you to log in MANUALLY (you type the Gmail + password + any code yourself). Once it returns to YouTube the session is saved and reused. <b>Needs a visible display</b> — on a headless container (Cosyra/xvfb) you cannot click it, so instead paste a real YouTube <b>cookie session</b> via "Save Session" above, which works without a window.</div>
-            {% endif %}
         </div>
         {% else %}
         <!-- Connected panel -->
@@ -318,22 +306,6 @@
         }
 
         // ==================== GOOGLE LOGIN (YouTube) ====================
-        function googleLogin(username) {
-            const email = document.getElementById('gl-email-' + username).value.trim();
-            if (!email) { showToast('Enter the Gmail address', 'error'); return; }
-            showToast('Starting Google login...', '');
-            fetch('/api/google_login/' + encodeURIComponent(username), {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({email})
-            })
-            .then(r => r.json())
-            .then(d => {
-                if (d.success) { showToast('Google login running — watch the live cam', 'success'); setTimeout(() => location.reload(), 1200); }
-                else { showToast(d.error || 'Failed to start Google login', 'error'); }
-            });
-        }
-
         function pollConnected(username, attempts) {
             if (attempts > 40) {
                 showToast('Verification timed out — check session', 'error');

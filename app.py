@@ -6,7 +6,6 @@ from database import init_db, get_all_accounts, get_account, update_account, add
 from bot import (
     connect_account, start_automation, stop_automation,
     delete_account_session, logout_account,
-    google_login_youtube,
     screenshots, browser_sessions, take_screenshot
 )
 
@@ -101,30 +100,6 @@ def save_session(username):
         
     except json.JSONDecodeError:
         return jsonify({"success": False, "error": "Invalid JSON format"})
-
-
-@app.route("/api/google_login/<path:username>", methods=["POST"])
-def google_login(username):
-    data = request.json or {}
-    email = (data.get("email") or "").strip()
-
-    account = get_account(username)
-    if not account:
-        return jsonify({"success": False, "error": "Account not found"})
-    if account.get("platform") != "YouTube":
-        return jsonify({"success": False, "error": "Google login is only for YouTube accounts"})
-
-    # Mark login method. Email is optional — the manual flow logs in for you in
-    # the visible browser; it is only stored for reference.
-    update_account(username, email=email, login_method="google",
-                   status="Google login", current_task="Opening browser for manual login...")
-    if not email:
-        print(f"[{username}] google login started (manual — no email needed)")
-
-    def login_thread():
-        google_login_youtube(username)
-    threading.Thread(target=login_thread, daemon=True).start()
-    return jsonify({"success": True, "message": "Browser opened — log in manually, session saves automatically"})
 
 
 @app.route("/api/start/<path:username>", methods=["POST"])

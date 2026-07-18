@@ -985,14 +985,9 @@ def connect_account(username):
         profile_name = ""
 
         if platform == "YouTube":
-            # Google-login method: drive the Google sign-in flow instead of
-            # relying on pasted cookies. Keep the browser open for the live cam.
-            if account.get("login_method") == "google":
-                google_login_youtube(username)
-                # google_login_youtube keeps the session alive for recovery;
-                # return here so we don't close the browser / mark expired.
-                return True
-
+            # YouTube is logged in purely from pasted session cookies — there is
+            # no manual Google sign-in step (that never worked headless). The
+            # cookies sidestep the "Next" sign-in form entirely.
             # Logged-in YouTube shows the avatar / "You" menu.
             try:
                 page.wait_for_selector(
@@ -1166,123 +1161,6 @@ def _is_logged_in_youtube(page):
     except Exception:
         pass
     return False
-
-
-def google_login_youtube(username):
-    """Log into YouTube using a PERSISTENT browser profile + MANUAL login.
-
-    We do NOT automate the Google sign-in (Google blocks headless/automated
-    logins with "This browser or app may not be secure"). Instead:
-
-      1) Launch a persistent Chromium profile (./playwright-profile/<user>).
-         Cookies + login survive between runs.
-      2) If the profile is ALREADY logged in, reuse it and save the session.
-      3) Otherwise navigate to the Google sign-in page for YouTube and WAIT
-         (indefinitely / up to a long cap) for YOU to log in manually in the
-         visible browser.
-      4) Once Google redirects back to YouTube (logged in), the authenticated
-         cookies are saved to the DB automatically for future reuse.
-
-    The browser is left open so the live cam reflects the real state.
-    """
-    account = get_account(username)
-    if not account:
-        print(f"[{username}] google_login_youtube: account not found")
-        return False
-
-    update_account(username, status="Google login", current_task="Opening persistent browser...")
-    print(f"[{username}] === MANUAL GOOGLE LOGIN (persistent profile) ===")
-    _log_event(username, "Google login: opening persistent profile")
-
-    session = None
-    try:
-        session = _start_browser_session(username, account)
-        page = session["page"]
-        context = session["context"]
-
-        # Give the profile a moment, then check if we're already authenticated.
-        time.sleep(2)
-        try:
-            page.goto("https://www.youtube.com", timeout=45000, wait_until="domcontentloaded")
-        except Exception as ge:
-            if ("TIMED_OUT" in str(ge) or "net::" in str(ge)) and _get_proxy(account):
-                try:
-                    context.close(); session["browser"].close(); session["pw"].stop()
-                except Exception:
-                    pass
-                browser_sessions.pop(username, None)
-                session = _start_browser_session(username, account, no_proxy=True)
-                page = session["page"]; context = session["context"]
-                page.goto("https://www.youtube.com", timeout=45000, wait_until="domcontentloaded")
-            else:
-                raise
-        try:
-            page.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:
-            pass
-        time.sleep(2)
-        take_screenshot(username)
-
-        if _is_logged_in_youtube(page):
-            print(f"[{username}] Google login: profile already authenticated")
-            _save_session_from_context(username, context)
-            update_account(username, status="Connected", current_task="Logged in (profile reused)")
-            _log_event(username, "Google login: reused existing profile")
-            return True
-
-        # Not logged in -> send the user to the Google sign-in page and wait for
-        # them to complete it manually in the visible (headed) browser.
-        signin_url = ("https://accounts.google.com/ServiceLogin"
-                      "?service=youtube&continue=https://www.youtube.com")
-        update_account(username, current_task="Log in manually in the browser (Google sign-in open)")
-        print(f"[{username}] Google login: opening sign-in page — WAITING for manual login")
-        _log_event(username, "Google login: awaiting MANUAL sign-in")
-        try:
-            page.goto(signin_url, timeout=45000, wait_until="domcontentloaded")
-        except Exception:
-            pass
-        take_screenshot(username)
-
-        # Poll until the user is logged in. Cap at ~1h so it can't truly hang
-        # forever, but effectively indefinite for a human to complete.
-        deadline = time.time() + 3600
-        while time.time() < deadline:
-            try:
-                if "youtube.com" in page.url and _is_logged_in_youtube(page):
-                    print(f"[{username}] Google login: manual login detected")
-                    _save_session_from_context(username, context)
-                    update_account(username, status="Connected",
-                                   current_task="Logged in — session saved")
-                    _log_event(username, "Google login: manual login complete, session saved")
-                    take_screenshot(username)
-                    return True
-            except Exception:
-                pass
-            time.sleep(3)
-
-        update_account(username, status="Google login timeout",
-                       current_task="Manual login not completed in time — retry")
-        _log_event(username, "Google login: timed out waiting for manual login")
-        return False
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        update_account(username, status="Google login error", current_task=f"Error: {str(e)[:60]}")
-        _log_event(username, f"Google login error: {e}")
-        return False
-    finally:
-        # Leave the browser open for the live cam / manual login. Only clean up
-        # if we never managed to start a session at all.
-        if session is None:
-            try:
-                if username in browser_sessions:
-                    browser_sessions[username]["context"].close()
-                    browser_sessions[username]["browser"].close()
-                    browser_sessions[username]["pw"].stop()
-            except Exception:
-                pass
-            browser_sessions.pop(username, None)
 
 # ---------------------------------------------------------------------------
 # Real automation helpers# ---------------------------------------------------------------------------
