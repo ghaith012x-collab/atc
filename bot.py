@@ -800,10 +800,24 @@ def _start_browser_session(username, account=None, no_proxy=False):
     pw = sync_playwright().start()
     channel = _chrome_channel_available()
     # launch_persistent_context keeps cookies/localStorage in `profile_dir`
-    # between runs, so a logged-in YouTube/Google session is reused. We run
-    # HEADED (headless=False) because you log in MANUALLY in the visible window
-    # (Google blocks headless automation logins). On a headless server this must
-    # run under a virtual display (xvfb-run) so a window can actually open.
+    # between runs, so a logged-in YouTube/Google session is reused.
+    #
+    # We normally run HEADED so the user can log in manually in the visible
+    # window (Google blocks headless automation logins). But on a headless
+    # server (Railway, containers) there is no X server / $DISPLAY, so a headed
+    # launch always fails and just wastes ~8s before falling back to headless.
+    # Detect that up front and go straight to headless — and prefer xvfb if it
+    # happens to be available so a window can still open.
+    import os as _os
+    import shutil as _shutil
+    _has_display = bool(_os.environ.get("DISPLAY")) or bool(_os.environ.get("WAYLAND_DISPLAY"))
+    _has_xvfb = _shutil.which("xvfb-run") is not None
+    if _has_xvfb and not _has_display:
+        # Re-exec the whole process under a virtual display so headed mode works.
+        if _os.environ.get("PLAYWRIGHT_UNDER_XVFB") != "1":
+            _os.environ["PLAYWRIGHT_UNDER_XVFB"] = "1"
+            _os.execvp("xvfb-run", ["xvfb-run", "-a", *_os.sys.argv])
+    _force_headless = (not _has_display) and (not _has_xvfb)
     #
     # IMPORTANT: a leftover SingletonLock from a crashed previous run makes
     # Chromium refuse to reuse the profile and immediately close the context
@@ -838,17 +852,20 @@ def _start_browser_session(username, account=None, no_proxy=False):
     else:
         print(f"[{username}] launching persistent browser (profile={profile_dir}) DIRECT")
 
-    # Try HEADED first (so you can log in manually). If that fails — e.g. no
-    # display available — fall back to headless so the app still runs; manual
-    # login then isn't possible, but cookie sessions still work.
+    # Try HEADED first (so you can log in manually) — UNLESS we already know
+    # there's no display and no xvfb, in which case headed is guaranteed to fail,
+    # so go straight to headless (cookie sessions still work; manual login needs
+    # a real display).
     context = None
     last_err = None
-    for attempt_headless in (False, True):
+    for attempt_headless in ((True,) if _force_headless else (False, True)):
         launch_kwargs = dict(base_kwargs, headless=attempt_headless)
         try:
             context = pw.chromium.launch_persistent_context(**launch_kwargs)
-            if attempt_headless:
+            if attempt_headless and not _force_headless:
                 print(f"[{username}] NOTE: headed launch failed (no display?); fell back to headless. Manual Google login needs a display (run under xvfb-run).")
+            elif _force_headless:
+                print(f"[{username}] launched headless (no display detected on this server). Manual login needs xvfb-run.")
             break
         except Exception as le:
             last_err = le
@@ -858,7 +875,7 @@ def _start_browser_session(username, account=None, no_proxy=False):
                 base_kwargs.pop("channel", None)
                 try:
                     context = pw.chromium.launch_persistent_context(**dict(base_kwargs, headless=attempt_headless))
-                    if attempt_headless:
+                    if attempt_headless and not _force_headless:
                         print(f"[{username}] NOTE: fell back to headless (no display). Manual login needs xvfb-run.")
                     break
                 except Exception as le2:
@@ -2994,7 +3011,7 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 time.sleep(3)
                 continue
 
-            print(f"[{username}] ✓ clicked Next (step {step+1})")
+            print(f"[{username}] → clicked Next (step {step+1}), waiting for form to advance...")
             time.sleep(random.uniform(2.0, 3.5))
             after = _page_signature()
             if after == before:
@@ -3004,7 +3021,17 @@ def upload_video_to_youtube(username, file_path, caption, title):
                 except Exception:
                     pass
                 time.sleep(2)
+                after = _page_signature()
+                if after == before:
+                    print(f"[{username}] ✗ Next STILL did not advance (step {step+1}). "
+                          f"The form is stuck — stopping the Next sequence to avoid a bad publish.")
+                    _save_debug_html(page, "YT_NEXT_STUCK", username)
+                    take_screenshot(username)
+                    break
+            else:
+                print(f"[{username}] ✓ form advanced after Next (step {step+1})")
             take_screenshot(username)
+        print(f"[{username}] ✓ ALL Next steps done — moving to visibility/Publish", flush=True)
 
         # Set visibility to Public
         _handle_youtube_auth_dialog(page, username)
