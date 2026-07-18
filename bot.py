@@ -550,6 +550,7 @@ def log(msg):
 workers = {}
 browser_sessions = {}
 screenshots = {}
+last_frame_ts = {}
 
 DOWNLOADS_DIR = "downloads"
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
@@ -684,6 +685,7 @@ def take_screenshot(username):
         screenshot_bytes = page.screenshot(type="png", timeout=15000)
         img = Image.open(io.BytesIO(screenshot_bytes)).convert("RGB")
         screenshots[username] = img
+        last_frame_ts[username] = time.time()
     except Exception as e:
         err = str(e).split("\n")[0][:60]
         # Keep the last good frame instead of replacing it with an error card.
