@@ -6,4 +6,5 @@ greenlet
 requests
 opencv-python-headless
 numpy
-psycopg2-binary
+# psycopg2-binary  # temporarily disabled — database swapped for in-memory store
+

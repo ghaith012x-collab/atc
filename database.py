@@ -1,118 +1,80 @@
 import os
-import psycopg2
-import psycopg2.extras
+import threading
 from datetime import datetime
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+# ---------------------------------------------------------------------------
+# TEMPORARY: in-memory store.
+# The Postgres backend was disabled so the app does NOT persist sessions across
+# restarts (no old sessions saved). All accounts/logs live only in this process
+# and are wiped on restart. To restore persistence, bring back the Postgres
+# implementation and set DATABASE_URL.
+# ---------------------------------------------------------------------------
 
-if not DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL environment variable is not set. "
-        "In Railway: open your service → Variables tab → add DATABASE_URL "
-        "or use 'Add Reference' to link your Postgres service."
-    )
+_lock = threading.Lock()
+_accounts = {}
+
+DEFAULT_FIELDS = {
+    "platform": "TikTok",
+    "category": "dance",
+    "session_data": None,
+    "connected": 0,
+    "enabled": 0,
+    "status": "Disconnected",
+    "current_task": "Idle",
+    "last_post": None,
+    "next_post": None,
+    "next_post_ts": None,
+    "logged_in_as": None,
+    "logs": "",
+    "verify_code": "",
+    "email": None,
+    "password": None,
+    "login_method": "cookie",
+    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+}
 
 
-def get_db():
-    conn = psycopg2.connect(DATABASE_URL)
-    return conn
+def _new_account(username, category, platform):
+    acc = dict(DEFAULT_FIELDS)
+    acc["username"] = username
+    acc["category"] = category
+    acc["platform"] = platform
+    return acc
 
 
 def init_db():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS accounts (
-            id SERIAL PRIMARY KEY,
-            username TEXT UNIQUE,
-            platform TEXT DEFAULT 'TikTok',
-            category TEXT DEFAULT 'dance',
-            session_data TEXT,
-            connected INTEGER DEFAULT 0,
-            enabled INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'Disconnected',
-            current_task TEXT DEFAULT 'Idle',
-            last_post TEXT,
-            next_post TEXT,
-            next_post_ts BIGINT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    # Idempotently add new columns for existing databases.
-    existing_cols_q = """
-        SELECT column_name FROM information_schema.columns
-        WHERE table_name = 'accounts'
-    """
-    cur.execute(existing_cols_q)
-    cols = [r[0] for r in cur.fetchall()]
-    for col, sql in [
-        ("next_post_ts",  "ALTER TABLE accounts ADD COLUMN next_post_ts BIGINT"),
-        ("platform",      "ALTER TABLE accounts ADD COLUMN platform TEXT DEFAULT 'TikTok'"),
-        ("logged_in_as",  "ALTER TABLE accounts ADD COLUMN logged_in_as TEXT"),
-        ("logs",          "ALTER TABLE accounts ADD COLUMN logs TEXT"),
-        ("verify_code",   "ALTER TABLE accounts ADD COLUMN verify_code TEXT"),
-        ("email",         "ALTER TABLE accounts ADD COLUMN email TEXT"),
-        ("password",      "ALTER TABLE accounts ADD COLUMN password TEXT"),
-        ("login_method",  "ALTER TABLE accounts ADD COLUMN login_method TEXT DEFAULT 'cookie'"),
-    ]:
-        if col not in cols:
-            cur.execute(sql)
-    conn.commit()
-    cur.close()
-    conn.close()
+    # No-op for the in-memory store.
+    return
 
 
 def get_all_accounts():
-    conn = get_db()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM accounts ORDER BY created_at DESC")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return [dict(row) for row in rows]
+    with _lock:
+        return [dict(a) for a in _accounts.values()]
 
 
 def get_account(username):
-    conn = get_db()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM accounts WHERE username = %s", (username,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return dict(row) if row else None
+    with _lock:
+        acc = _accounts.get(username)
+        return dict(acc) if acc else None
 
 
 def update_account(username, **kwargs):
     if not kwargs:
         return
-    conn = get_db()
-    cur = conn.cursor()
-    for key, value in kwargs.items():
-        cur.execute(
-            f"UPDATE accounts SET {key} = %s WHERE username = %s",
-            (value, username)
-        )
-    conn.commit()
-    cur.close()
-    conn.close()
+    with _lock:
+        acc = _accounts.get(username)
+        if not acc:
+            return
+        for key, value in kwargs.items():
+            acc[key] = value
 
 
 def add_account(username, category="dance", platform="TikTok"):
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "INSERT INTO accounts (username, platform, category) VALUES (%s, %s, %s)",
-            (username, platform, category)
-        )
-        conn.commit()
+    with _lock:
+        if username in _accounts:
+            return False
+        _accounts[username] = _new_account(username, category, platform)
         return True
-    except psycopg2.IntegrityError:
-        conn.rollback()
-        return False
-    finally:
-        cur.close()
-        conn.close()
 
 
 def append_log(username, message):
@@ -120,62 +82,39 @@ def append_log(username, message):
     try:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{ts}] {message}"
-        conn = get_db()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT logs FROM accounts WHERE username = %s", (username,))
-        row = cur.fetchone()
-        existing = (row["logs"] if row and row["logs"] else "")
-        lines = [l for l in existing.split("\n") if l.strip()]
-        lines.append(line)
-        if len(lines) > 500:
-            lines = lines[-500:]
-        cur.execute(
-            "UPDATE accounts SET logs = %s WHERE username = %s",
-            ("\n".join(lines), username)
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
+        with _lock:
+            acc = _accounts.get(username)
+            if not acc:
+                return
+            existing = acc.get("logs") or ""
+            lines = [l for l in existing.split("\n") if l.strip()]
+            lines.append(line)
+            if len(lines) > 500:
+                lines = lines[-500:]
+            acc["logs"] = "\n".join(lines)
     except Exception:
         pass
 
 
 def get_logs(username):
-    conn = get_db()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT logs FROM accounts WHERE username = %s", (username,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return row["logs"] if row and row["logs"] else ""
+    with _lock:
+        acc = _accounts.get(username)
+        return acc.get("logs") or "" if acc else ""
 
 
 def get_verify_code(username):
-    conn = get_db()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT verify_code FROM accounts WHERE username = %s", (username,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return (row["verify_code"] if row and row["verify_code"] else "").strip()
+    with _lock:
+        acc = _accounts.get(username)
+        return (acc.get("verify_code") or "").strip() if acc else ""
 
 
 def clear_verify_code(username):
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("UPDATE accounts SET verify_code = '' WHERE username = %s", (username,))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception:
-        pass
+    with _lock:
+        acc = _accounts.get(username)
+        if acc:
+            acc["verify_code"] = ""
 
 
 def delete_account(username):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM accounts WHERE username = %s", (username,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with _lock:
+        _accounts.pop(username, None)
