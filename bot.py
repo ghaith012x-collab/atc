@@ -2599,16 +2599,21 @@ def _handle_youtube_auth_dialog(page, username=""):
         deadline = time.time() + 300
         while time.time() < deadline:
             take_screenshot(username)
-            # Dialog dismissed? Its #confirm-button (text 'Next') is gone.
+            # The dialog may change its button from Next to Verify/Submit while
+            # waiting for the user's phone, passkey, or 6-digit code.  Looking only
+            # at the button label made the bot declare success too early and click
+            # the upload wizard behind the still-open overlay.
             still = page.evaluate("""() => {
-                const b = document.querySelector('ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
-                if (!b) return false;
-                const t = (b.textContent || '').trim().toLowerCase();
-                return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
+                const d = document.querySelector('ytcp-auth-confirmation-dialog');
+                if (!d) return false;
+                const r = d.getBoundingClientRect();
+                const cs = getComputedStyle(d);
+                return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
             }""")
             if not still:
                 print(f"[{username}] ✓ verify dialog dismissed")
                 _log_event(username, "Verify dialog: dismissed")
+                update_account(username, current_task="Verification complete — resuming upload")
                 return "advanced"
             code = get_verify_code(username)
             if code:
@@ -2663,11 +2668,10 @@ def _click_youtube_next(page):
     try:
         if page.evaluate("""() => {
             const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-            if (!dlg || dlg.offsetParent === null) return false;
-            const b = dlg.querySelector('#confirm-button');
-            if (!b) return false;
-            const t = (b.textContent || '').trim().toLowerCase();
-            return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
+            if (!dlg) return false;
+            const r = dlg.getBoundingClientRect();
+            const cs = getComputedStyle(dlg);
+            return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
         }"""):
             res = _handle_youtube_auth_dialog(page, "")
             # "advanced" => dialog gone, let the upload Next run on the next call.
@@ -2844,11 +2848,10 @@ def upload_video_to_youtube(username, file_path, caption, title):
             try:
                 still_verify = page.evaluate("""() => {
                     const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-                    if (!dlg || dlg.offsetParent === null) return false;
-                    const b = dlg.querySelector('#confirm-button');
-                    if (!b) return false;
-                    const t = (b.textContent || '').trim().toLowerCase();
-                    return t === 'next' || t === 'continue' || t.endsWith(' next') || t.startsWith('next ');
+                    if (!dlg) return false;
+                    const r = dlg.getBoundingClientRect();
+                    const cs = getComputedStyle(dlg);
+                    return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
                 }""")
                 if still_verify:
                     verify_blocked = True
