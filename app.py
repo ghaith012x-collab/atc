@@ -172,6 +172,12 @@ def api_verify_code(username):
     return jsonify({"success": True, "digits": digits})
 
 
+# Cache the last encoded JPEG per account so we only re-encode when the frame
+# actually changes. Re-encoding a 1280x720 JPEG on EVERY poll (multiple accounts
+# × ~1s) was the main source of dashboard lag.
+_live_cache = {}  # username -> (frame_ts, jpeg_bytes)
+
+
 @app.route("/live/<path:username>")
 def live(username):
     # NOTE: we NEVER call Playwright from this Flask thread — doing so triggers
@@ -194,11 +200,18 @@ def live(username):
             img = Image.new("RGB", (1280, 720), "#111111")
         screenshots[username] = img
 
-    buffer = BytesIO()
-    # High quality so the preview stays sharp.
-    img.save(buffer, "JPEG", quality=95)
-    buffer.seek(0)
-    resp = Response(buffer.getvalue(), mimetype="image/jpeg")
+    frame_ts = last_frame_ts.get(username)
+    cached = _live_cache.get(username)
+    if cached is not None and cached[0] == frame_ts and frame_ts is not None:
+        jpeg = cached[1]
+    else:
+        buffer = BytesIO()
+        # High quality so the preview stays sharp.
+        img.save(buffer, "JPEG", quality=95)
+        jpeg = buffer.getvalue()
+        _live_cache[username] = (frame_ts, jpeg)
+
+    resp = Response(jpeg, mimetype="image/jpeg")
     # Never let any proxy/browser cache the frame — otherwise the cam freezes.
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -217,4 +230,8 @@ def live_meta(username):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    # threaded=True: handle the dashboard's many concurrent pollers (/live,
+    # /api/live_meta, /api/accounts) in parallel instead of serializing them on a
+    # single worker — this was the main cause of the "site lag / not loading".
+    # use_reloader=False: avoid the dev-server watchdog double-init overhead.
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
