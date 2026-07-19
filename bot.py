@@ -1449,6 +1449,41 @@ def scrape_profile_videos(username, profile_link, exclude=None):
 
         take_screenshot(username)
         print(f"[{username}] PROFILE MODE: found {len(candidates)} unused videos on profile")
+
+        # Most reliable fallback: TikWM's user/posts API returns the profile's
+        # recent videos directly (no browser, no login wall). Use it whenever the
+        # browser scrape found too few clips.
+        if len(candidates) < 3:
+            try:
+                handle = re.search(r"tiktok\.com/@([^/?#]+)", profile_link)
+                handle = handle.group(1) if handle else None
+                if not handle and "/" in profile_link:
+                    handle = profile_link.rstrip("/").split("/")[-1].split("?")[0]
+                if handle:
+                    r = requests.get(
+                        "https://www.tikwm.com/api/user/posts",
+                        params={"unique_id": handle, "count": 30, "cursor": 0},
+                        timeout=25,
+                    )
+                    data = r.json()
+                    if data.get("code") == 0:
+                        for v in data.get("data", {}).get("videos", []) or []:
+                            vid = str(v.get("video_id") or "")
+                            if not vid or vid in seen or vid in exclude:
+                                continue
+                            seen.add(vid)
+                            candidates.append({
+                                "url": f"https://www.tiktok.com/@{handle}/video/{vid}",
+                                "video_id": vid,
+                                "title": v.get("title", "") or "",
+                                "play_count": v.get("play_count", 0) or 0,
+                                "digg_count": v.get("digg_count", 0) or 0,
+                                "play": v.get("hdplay") or v.get("play", "") or "",
+                                "from_profile": True,
+                            })
+                        print(f"[{username}] PROFILE MODE (tikwm) added {len(data.get('data', {}).get('videos', []) or [])} videos for @{handle}")
+            except Exception as e:
+                print(f"[{username}] PROFILE MODE tikwm fallback failed: {e}")
     except Exception as e:
         print(f"[{username}] PROFILE MODE scrape error: {e}")
     return candidates
@@ -1644,8 +1679,8 @@ def generate_caption(video_info, category, platform="TikTok"):
     topic_tags = ["#" + w for w in dict.fromkeys(words) if w not in STOP]
     topic_tags = topic_tags[:6]
 
-    cat = (category or "dance").lower()
-    pool = CATEGORY_HASHTAGS.get(cat, ["#fyp", "#viral", "#trending"])
+    cat = (category or "").lower()
+    pool = CATEGORY_HASHTAGS.get(cat, ["#fyp", "#viral", "#trending"]) if cat else ["#fyp", "#viral", "#trending"]
 
     # HOOK: based on the actual video title. If the source has no usable title,
     # fall back to a short, content-keyword hook instead of a category phrase.
@@ -1654,7 +1689,7 @@ def generate_caption(video_info, category, platform="TikTok"):
     elif topic_tags:
         base = f"Check out this {topic_tags[0][1:].replace('_', ' ')} clip 🔥"
     else:
-        base = f"Fresh {cat} content for you 👀"
+        base = "Fresh content for you 👀"
 
     # Keep it short and normal-sized: one line from the source clip plus a few
     # on-topic hashtags (its own tags first, then title keywords, then a couple
@@ -3080,7 +3115,9 @@ def automation_worker(username):
             # Take a screenshot to show we're alive
             take_screenshot(username)
 
-            category = account.get("category") or "dance"
+            # category may be None (accounts added via Profile URL). Keep it as-is
+            # so captions/generation don't fall back to a bogus "dance" category.
+            category = (account.get("category") or "") or None
             platform = account.get("platform") or "TikTok"
             profile_link = (account.get("profile_link") or "").strip()
             channel_link = (account.get("channel_link") or "").strip()
