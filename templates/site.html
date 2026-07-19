@@ -187,35 +187,39 @@
             </div>
         </div>
 
-        <!-- Session Panel (disconnected) -->
-        {% if not acc.connected %}
+        <!-- YouTube uses OAuth, never pasted cookie sessions. TikTok keeps its existing cookie flow. -->
+        {% if acc.platform != 'YouTube' and not acc.connected %}
         <div class="session-panel" id="session-panel-{{ acc.username }}">
-            <h4>Paste {{ 'YouTube' if acc.platform == 'YouTube' else 'TikTok' }} Session (optional)</h4>
-            <textarea
-                id="session-input-{{ acc.username }}"
-                placeholder='[{"name":"sessionid","value":"...","domain":".{{ "youtube.com" if acc.platform == "YouTube" else "tiktok.com" }}"},...]'
-            ></textarea>
-            <div class="hint">Export cookies from your browser (EditThisCookie / Cookie-Editor) and paste the JSON here.</div>
-            <div class="btn-row">
-                <button class="btn-primary" onclick="saveSession('{{ acc.username }}')">Save Session</button>
-            </div>
+            <h4>Paste TikTok Session</h4>
+            <textarea id="session-input-{{ acc.username }}" placeholder='[{"name":"sessionid","value":"...","domain":".tiktok.com"},...]'></textarea>
+            <div class="hint">Export TikTok cookies from your browser and paste the JSON here.</div>
+            <div class="btn-row"><button class="btn-primary" onclick="saveSession('{{ acc.username }}')">Save Session</button></div>
         </div>
-        {% else %}
-        <!-- Connected panel -->
-        <div class="session-verified">
-            Session verified &mdash; account is connected and ready.
+        {% elif acc.platform == 'YouTube' and not acc.oauth_connected %}
+        <div class="session-panel">
+            <h4>Google authorization required</h4>
+            <div class="hint">Connect Google / YouTube below. Cookie sessions are not used for YouTube.</div>
         </div>
+        {% elif acc.connected %}
+        <div class="session-verified">{{ 'Google authorization verified — ready to start.' if acc.platform == 'YouTube' else 'TikTok session verified — account is connected and ready.' }}</div>
         {% endif %}
 
         <!-- Controls -->
         <div class="controls">
             {% if acc.platform == 'YouTube' %}
                 <a class="btn-primary" style="display:inline-block;text-decoration:none;" href="/oauth2login?username={{ acc.username|urlencode }}">{% if acc.oauth_connected %}Reconnect Google{% else %}Connect Google / YouTube{% endif %}</a>
-            {% endif %}
-            {% if acc.connected %}
-                <button class="btn-start" onclick="startAutomation('{{ acc.username }}')">&#9654; Start Automation</button>
-                <button class="btn-stop" onclick="stopAutomation('{{ acc.username }}')">&#9632; Stop</button>
-                <button class="btn-delete-session" onclick="deleteSession('{{ acc.username }}')">Delete Session</button>
+                {% if acc.oauth_connected %}
+                    <button class="btn-start" onclick="startAutomation('{{ acc.username }}')">&#9654; Start</button>
+                    <button class="btn-stop" onclick="stopAutomation('{{ acc.username }}')">&#9632; Stop</button>
+                {% else %}
+                    <button class="btn-start" disabled title="Connect Google first" style="opacity:.45;cursor:not-allowed;">&#9654; Start (connect Google first)</button>
+                {% endif %}
+            {% else %}
+                {% if acc.connected %}
+                    <button class="btn-start" onclick="startAutomation('{{ acc.username }}')">&#9654; Start Automation</button>
+                    <button class="btn-stop" onclick="stopAutomation('{{ acc.username }}')">&#9632; Stop</button>
+                    <button class="btn-delete-session" onclick="deleteSession('{{ acc.username }}')">Delete Session</button>
+                {% endif %}
             {% endif %}
             <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
             <button class="btn-logs" onclick="openLogs('{{ acc.username }}')">&#128221; Logs</button>

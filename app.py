@@ -77,7 +77,7 @@ def oauth2callback():
             "redirect_uri":oauth_redirect_uri(),"grant_type":"authorization_code"}, timeout=20)
         r.raise_for_status(); token=r.json()
         save_oauth_token(username, token)
-        update_account(username, status="Google connected", current_task="Ready to connect")
+        update_account(username, connected=1, enabled=0, status="Google connected", current_task="Ready to start")
         return "<h2>Google connected successfully ✅</h2><p>You can return to the ATC dashboard. Your authorization is stored privately.</p><p><a href='/'>Back to dashboard</a></p>"
     except Exception as e:
         print(f"[oauth] token exchange failed: {e}", flush=True)
@@ -177,11 +177,16 @@ def save_session(username):
 @app.route("/api/start/<path:username>", methods=["POST"])
 def start(username):
     account = get_account(username)
-    if account and account["connected"]:
-        update_account(username, enabled=1, status="Running", current_task="Starting automation...")
-        start_automation(username)
-        return jsonify({"success": True})
-    return jsonify({"success": False, "error": "Account not connected"})
+    if not account:
+        return jsonify({"success": False, "error": "Account not found"}), 404
+    if account.get("platform") == "YouTube":
+        if not has_oauth_token(username):
+            return jsonify({"success": False, "error": "Connect Google / YouTube first"}), 403
+    elif not account.get("connected"):
+        return jsonify({"success": False, "error": "Account not connected"}), 403
+    update_account(username, enabled=1, connected=1, status="Running", current_task="Starting automation...")
+    start_automation(username)
+    return jsonify({"success": True})
 
 
 @app.route("/api/stop/<path:username>", methods=["POST"])

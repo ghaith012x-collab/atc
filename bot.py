@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright, TimeoutError
 from PIL import Image
 import io
 import math
-from database import get_account, update_account, append_log
+from database import get_account, update_account, append_log, get_oauth_token
 
 # === CAPTCHA SOLVER (isolated addition) ===
 try:
@@ -2844,427 +2844,56 @@ def _click_youtube_next(page):
 
 
 def upload_video_to_youtube(username, file_path, caption, title):
-    """Upload a prepared (1080x1920) Short to YouTube Studio with an accurate,
-    full caption. Selects 'No, it's not made for kids' + public visibility so it
-    publishes as a Short. Returns True on success.
+    """Upload a YouTube Short through the stored Google OAuth authorization.
+
+    YouTube accounts deliberately do not use pasted cookies. The Playwright
+    browser still starts for the automation/live view, while this upload uses
+    the official YouTube Data API with the token the owner approved.
     """
-    page = _get_page(username)
-    if page is None:
-        print(f"[{username}] No page available for YouTube upload")
+    token = get_oauth_token(username)
+    if not token:
+        print(f"[{username}] YouTube upload blocked: no Google OAuth token")
+        update_account(username, current_task="Connect Google before uploading")
         return False
-
-    SUCCESS = 'text=/uploaded|published|video is live|your video has been|processing|done/i'
-
     try:
-        _dismiss_youtube_popups(page, username)
-        print(f"[{username}] === YOUTUBE UPLOAD FLOW ===", flush=True)
-        _debug_dump_yt_buttons(page, username, "UPLOAD_START")
-        update_account(username, current_task="Opening YouTube Studio upload...")
-
-        upload_url_used = None
-        for u in ["https://studio.youtube.com/channel/upload",
-                  "https://studio.youtube.com",
-                  "https://www.youtube.com/upload"]:
-            try:
-                print(f"[{username}] Trying: {u}")
-                page.goto(u, timeout=45000, wait_until="domcontentloaded")
-                time.sleep(random.uniform(3.0, 5.5))
-                take_screenshot(username)
-                if _find_file_input(page) is not None:
-                    print(f"[{username}] ✓ file input found on {u}")
-                    upload_url_used = u
-                    break
-                # Studio dashboard may show the upload button instead
-                try:
-                    page.locator('ytcp-uploads-dialog, ytcp-button#upload-button, button:has-text("CREATE")').first.click(timeout=6000, force=True)
-                    time.sleep(3)
-                    if _find_file_input(page) is not None:
-                        upload_url_used = u
-                        break
-                except Exception:
-                    pass
-            except Exception as g:
-                print(f"[{username}] goto err: {str(g)[:60]}")
-
-        if not upload_url_used:
-            print(f"[{username}] ❌ No file input found on any YouTube upload URL")
-            _save_debug_html(page, "YT_NO_FILE_INPUT", username)
-            take_screenshot(username)
-            return False
-
-        print(f"[{username}] Using YouTube upload page: {upload_url_used}")
-        _dismiss_youtube_popups(page, username)
-        file_input = _find_file_input(page)
-        if file_input is None:
-            file_input = page.locator('input[type="file"]').first
-        try:
-            file_input.set_input_files(file_path, timeout=30000)
-            print(f"[{username}] ✓ set_input_files succeeded (YouTube)")
-        except Exception as se:
-            print(f"[{username}] YouTube set_input EXCEPTION: {se}")
-            _save_debug_html(page, "YT_SET_INPUT_FAIL", username)
-            return False
-
-        # Wait for processing + the details form to appear
-        print(f"[{username}] Waiting for YouTube processing + details form...")
-        details_ready = False
-        verify_blocked = False
-        for sec in range(240):  # up to 8 min
-            time.sleep(3)
-            # The "Verify that it's you" dialog can appear during processing and
-            # BLOCKS the details form from ever rendering. Surface it loudly
-            # instead of spinning silently for 8 minutes.
-            _handle_youtube_auth_dialog(page, username)
-            # Did the REAL verify dialog actually block us? Only match the
-            # dedicated ytcp-auth-confirmation-dialog container — a bare
-            # '#confirm-button' elsewhere on the page (e.g. the upload wizard)
-            # must NOT be treated as the auth dialog.
-            try:
-                still_verify = page.evaluate("""() => {
-                    const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-                    if (!dlg) return false;
-                    const r = dlg.getBoundingClientRect();
-                    const cs = getComputedStyle(dlg);
-                    return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
-                }""")
-                if still_verify:
-                    verify_blocked = True
-                    print(f"[{username}] ⚠ VERIFY DIALOG STILL BLOCKING — details form cannot appear. Resolve it in the live cam.")
-            except Exception:
-                pass
-            # Report upload progress so we know if the file is actually uploading.
-            pct = _read_upload_percent(page)
-            if pct is not None and sec % 5 == 0:
-                print(f"[{username}] YouTube upload progress: {pct}%")
-            # Title input indicates the details screen is ready. YouTube's Studio
-            # upload wizard uses several possible structures for the title field
-            # across redesigns, so check all of them + the upload dialog container
-            # (which only exists once the wizard actually opened).
-            title_loc = page.locator(
-                '#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], '
-                'input[placeholder*="Title"], tp-yt-paper-input[label*="Title"], '
-                'div#title-container textarea, #title-container input, '
-                'ytcp-upload-dialog #title, ytcp-video-metadata-editor'
-            ).first
-            if title_loc.count() > 0 and title_loc.is_visible():
-                details_ready = True
-                print(f"[{username}] ✓ YouTube details form detected (after ~{sec*3}s)")
-                break
-            if sec % 15 == 0:
-                take_screenshot(username)
-
-        if verify_blocked and not details_ready:
-            print(f"[{username}] ❌ YouTube upload blocked by 'Verify that it's you' dialog. "
-                  f"Manually complete verification in the live cam, then re-run. Skipping upload.")
-            _save_debug_html(page, "YT_VERIFY_BLOCKED", username)
-            take_screenshot(username)
-            return False
-
-        if not details_ready:
-            print(f"[{username}] ⚠ YouTube details form not detected, attempting anyway")
-
-        take_screenshot(username)
-
-        # Title — keep it short & accurate, with #Shorts for discovery.
-        try:
-            if title:
-                t = (title[:58] + " #Shorts") if len(title) <= 58 else (title[:58] + "…")
-            else:
-                t = "Daily Short #Shorts"
-            tl = page.locator('#title-textarea, #textbox[label*="Title"], ytcp-mention-textbox[label*="Title"], input[placeholder*="Title"], tp-yt-paper-input[label*="Title"], div#title-container textarea, #title-container input, ytcp-upload-dialog #title').first
-            if tl.count() > 0:
-                tl.click(timeout=4000, force=True)
-                time.sleep(0.3)
-                page.keyboard.press("Control+A")
-                page.keyboard.press("Delete")
-                tl.type(t, delay=25)
-                print(f"[{username}] ✓ YouTube title set: {t}")
-            else:
-                # JS fallback: set the title via Polymer/React value setter on the
-                # first visible text input/fields inside the upload editor.
-                set_ok = page.evaluate("""(val) => {
-                    const root = document.querySelector('ytcp-upload-dialog, ytcp-video-metadata-editor') || document;
-                    const inp = [...root.querySelectorAll('textarea, input[type="text"], [contenteditable]')]
-                        .find(e => (e.placeholder||'').toLowerCase().includes('title') || (e.getAttribute('label')||'').toLowerCase().includes('title') || (e.id||'').toLowerCase().includes('title'));
-                    if (!inp) return false;
-                    inp.focus();
-                    if (inp.tagName === 'TEXTAREA' || inp.tagName === 'INPUT') {
-                        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
-                                   || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                        if (setter) { setter.call(inp, val); inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                        else { inp.value = val; inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                    } else {
-                        inp.innerText = val; inp.dispatchEvent(new Event('input', {bubbles:true}));
-                    }
-                    return true;
-                }""", t)
-                print(f"[{username}] {'✓' if set_ok else '⚠'} YouTube title set via JS fallback: {t}") if set_ok else print(f"[{username}] YouTube title NOT found")
-        except Exception as ce:
-            print(f"[{username}] YouTube title EXCEPTION: {ce}")
-
-        # Description — paste the full accurate caption.
-        try:
-            dl = page.locator('#description-textarea, #textbox[label*="Description"], ytcp-mention-textbox[label*="Description"], textarea[placeholder*="Description"], div#description-container textarea, #description-container textarea').first
-            if dl.count() > 0:
-                dl.click(timeout=4000, force=True)
-                time.sleep(0.3)
-                page.keyboard.press("Control+A")
-                page.keyboard.press("Delete")
-                dl.type(caption, delay=12)
-                print(f"[{username}] ✓ YouTube description set")
-            else:
-                set_ok = page.evaluate("""(val) => {
-                    const root = document.querySelector('ytcp-upload-dialog, ytcp-video-metadata-editor') || document;
-                    const inp = [...root.querySelectorAll('textarea, input[type="text"]')]
-                        .find(e => (e.placeholder||'').toLowerCase().includes('description') || (e.getAttribute('label')||'').toLowerCase().includes('description') || (e.id||'').toLowerCase().includes('description'));
-                    if (!inp) return false;
-                    inp.focus();
-                    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
-                               || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                    if (setter) { setter.call(inp, val); inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                    else { inp.value = val; inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                    return true;
-                }""", caption)
-                print(f"[{username}] {'✓' if set_ok else '⚠'} YouTube description set via JS fallback") if set_ok else print(f"[{username}] YouTube description NOT found")
-        except Exception as ce:
-            print(f"[{username}] YouTube description EXCEPTION: {ce}")
-
-        # Resolve the "Verify that it's you" dialog if it appeared (it blocks clicks).
-        _handle_youtube_auth_dialog(page, username)
-        _dismiss_youtube_popups(page, username)
-        take_screenshot(username)
-
-        # Click "Show more" to reveal Made for kids, then set Not made for kids.
-        _handle_youtube_auth_dialog(page, username)
-        try:
-            more = page.locator('button:has-text("Show more")').first
-            if more.count() > 0 and more.is_visible():
-                more.click(timeout=4000)
-                time.sleep(1)
-        except Exception:
-            pass
-        try:
-            # "Made for kids" — YouTube's current Studio uses a
-            # ytkc-made-for-kids-select with tp-yt-paper-radio-button elements
-            # (name="NOT_MADE_FOR_KIDS" / "MADE_FOR_KIDS"). Click via JS so the
-            # shadow-DOM inner control actually fires (a Playwright click on the
-            # wrapper often misses). Match broadly on the "No" option.
-            page.evaluate("""() => {
-                const opts = [...document.querySelectorAll(
-                    'tp-yt-paper-radio-button, ytkc-made-for-kids-select tp-yt-paper-radio-button, [name="NOT_MADE_FOR_KIDS"]'
-                )];
-                const no = opts.find(el => {
-                    const t = (el.textContent||'').trim().toLowerCase();
-                    const name = (el.getAttribute('name')||'') ;
-                    return /no/.test(t) || name === 'NOT_MADE_FOR_KIDS';
-                });
-                if (no && !no.disabled) {
-                    const inner = no.shadowRoot && no.shadowRoot.querySelector('button, paper-button, [role="button"]');
-                    const target = inner || no;
-                    target.click();
-                }
-            }""")
-            time.sleep(0.6)
-        except Exception:
-            pass
-
-        # Next -> Next -> Next (Details -> Video elements -> Checks -> Public).
-        # We VERIFY each click actually advanced the form. Studio keeps every
-        # wizard step in the DOM at once (visibility-toggled) and the upload
-        # progress text changes constantly, so a raw text signature is useless.
-        # Instead we track the ACTIVE step: the visible title of the current
-        # step panel (ytcp-video-metadata-editor / ytcp-upload-renderer) plus
-        # whether the Publish button exists yet. That changes only when the
-        # wizard actually moves forward.
-        def _page_signature():
-            try:
-                return page.evaluate("""() => {
-                    const root = document.querySelector('ytcp-upload-dialog, ytcp-video-metadata-editor, ytcp-upload-renderer') || document;
-                    // The step indicator: which step chip is active (Details/Checks/Visibility).
-                    const steps = [...root.querySelectorAll('[class*="step"], [role="tab"], tp-yt-paper-tab, [class*="stepChip"]')]
-                        .map(e => (e.className||'') + ':' + (!!(e.offsetParent) && /active|selected/.test(e.className||''))).join('|');
-                    // Active panel heading text (the visible step's label).
-                    const panels = [...root.querySelectorAll('ytcp-video-metadata-editor, [class*="metadata"], [class*="upload"]')]
-                        .filter(e => e.offsetParent !== null)
-                        .map(e => (e.textContent||'').replace(/\\s+/g,' ').slice(0,40)).join('|');
-                    const hasPublish = !!document.querySelector('ytcp-button#publish-button, #publish-button, ytcp-button:has-text("Publish")');
-                    return steps + '###' + panels + '###PUB:' + hasPublish;
-                }""")
-            except Exception:
-                return str(time.time())
-
-        for step in range(6):
-            _handle_youtube_auth_dialog(page, username)
-
-            # Before each Next: reveal "Made for kids" and set "No" (required to proceed).
-            try:
-                more = page.locator('button:has-text("Show more")').first
-                if more.count() > 0 and more.is_visible():
-                    more.click(timeout=3000, force=True)
-                    time.sleep(0.8)
-            except Exception:
-                pass
-            try:
-                page.evaluate("""() => {
-                    const opts = [...document.querySelectorAll(
-                        'tp-yt-paper-radio-button, ytkc-made-for-kids-select tp-yt-paper-radio-button, [name="NOT_MADE_FOR_KIDS"]'
-                    )];
-                    const no = opts.find(el => {
-                        const t = (el.textContent||'').trim().toLowerCase();
-                        const name = (el.getAttribute('name')||'') ;
-                        return /no/.test(t) || name === 'NOT_MADE_FOR_KIDS';
-                    });
-                    if (no && !no.disabled) {
-                        const inner = no.shadowRoot && no.shadowRoot.querySelector('button, paper-button, [role="button"]');
-                        const target = inner || no;
-                        target.click();
-                    }
-                }""")
-                time.sleep(0.4)
-            except Exception:
-                pass
-
-            before = _page_signature()
-            _log_click_targets(page, username, f"NEXT_STEP_{step+1}")
-            _debug_dump_yt_buttons(page, username, f"NEXT_STEP_{step+1}_PRE")
-            clicked = _click_youtube_next(page)
-            if clicked == "verify_blocked":
-                print(f"[{username}] ⚠ VERIFY DIALOG STILL BLOCKING — cannot click wizard Next. "
-                      f"Stopping Next sequence; waiting for verification to clear.")
-                _save_debug_html(page, "YT_VERIFY_BLOCKED", username)
-                take_screenshot(username)
-                update_account(username, current_task="Verify that it's you — finish in live cam, then re-run")
-                return False
-            if not clicked:
-                # Try the dialog's confirm Next as a fallback.
-                try:
-                    if _click_dialog_button_js(page, 'ytcp-upload-renderer, ytcp-video-metadata-editor, [role="dialog"]', 'Next'):
-                        clicked = True
-                        print(f"[{username}] ✓ clicked dialog Next (fallback)")
-                except Exception:
-                    pass
-            if not clicked:
-                print(f"[{username}] ⚠ no Next button found at step {step+1}")
-                time.sleep(3)
-                continue
-
-            print(f"[{username}] → clicked Next (step {step+1}), waiting for form to advance...")
-            time.sleep(random.uniform(2.0, 3.5))
-            after = _page_signature()
-            if after == before:
-                print(f"[{username}] ⚠ Next did NOT advance the form (step {step+1}) — retrying with dialog Next")
-                try:
-                    _click_dialog_button_js(page, 'ytcp-upload-renderer, ytcp-video-metadata-editor, [role="dialog"]', 'Next')
-                except Exception:
-                    pass
-                time.sleep(2)
-                after = _page_signature()
-                if after == before:
-                    print(f"[{username}] ✗ Next STILL did not advance (step {step+1}). "
-                          f"The form is stuck — stopping the Next sequence to avoid a bad publish.")
-                    _save_debug_html(page, "YT_NEXT_STUCK", username)
-                    take_screenshot(username)
-                    break
-            else:
-                print(f"[{username}] ✓ form advanced after Next (step {step+1})")
-            take_screenshot(username)
-        print(f"[{username}] ✓ ALL Next steps done — moving to visibility/Publish", flush=True)
-
-        # Set visibility to Public
-        _handle_youtube_auth_dialog(page, username)
-        try:
-            public = page.locator('tp-yt-paper-radio-button:has-text("Public"), paper-radio-button:has-text("Public")').first
-            if public.count() > 0:
-                public.click(timeout=4000)
-                time.sleep(0.5)
-        except Exception:
-            pass
-
-        take_screenshot(username)
-        _save_debug_screenshot(page, "yt_pre_publish", username)
-        _save_debug_html(page, "YT_PRE_PUBLISH", username)
-
-        # Click Publish
-        published = False
-        for attempt in range(4):
-            _handle_youtube_auth_dialog(page, username)
-            _log_click_targets(page, username, f"PUBLISH_ATTEMPT_{attempt+1}")
-            try:
-                pb = page.locator('ytcp-button#publish-button, #publish-button, button:has-text("Publish"), ytcp-button:has-text("Publish")').first
-                if pb.count() == 0 or not pb.is_visible():
-                    # JS fallback for an icon-only Publish button — report coords.
-                    clicked = page.evaluate("""() => {
-                        const els = [...document.querySelectorAll('ytcp-button, tp-yt-paper-button, button')];
-                        const p = els.find(el => (el.textContent || '').trim().toLowerCase() === 'publish'
-                            && !el.disabled && el.offsetParent !== null);
-                        if (p) {
-                            const r = p.getBoundingClientRect();
-                            const cx = r.x + r.width/2, cy = r.y + r.height/2;
-                            p.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, isTrusted:true, detail:1}));
-                            try { p.click(); } catch(e){}
-                            return {ok:true, tag:p.tagName.toLowerCase(), id:p.id||'',
-                                    text:(p.textContent||'').trim().slice(0,40),
-                                    cx:Math.round(cx), cy:Math.round(cy)};
-                        }
-                        return {ok:false};
-                    }""")
-                    if not clicked or not clicked.get("ok"):
-                        print(f"[{username}] YouTube publish button not found (attempt {attempt+1})")
-                        time.sleep(4)
-                        continue
-                    print(f"[PUBLISH] ✓ clicked via JS <{clicked['tag']}#{clicked['id']}> text='{clicked['text']}' at ({clicked['cx']},{clicked['cy']})")
-                else:
-                    box = pb.bounding_box()
-                    cx = cy = None
-                    if box:
-                        cx = round(box["x"] + box["width"] / 2)
-                        cy = round(box["y"] + box["height"] / 2)
-                    print(f"[PUBLISH] clicking selector='ytcp-button#publish-button' box={box} center=({cx},{cy})")
-                    pb.click(timeout=6000, force=True)
-                    print(f"[PUBLISH] ✓ clicked via Playwright at ({cx},{cy})")
-                print(f"[{username}] YouTube publish clicked (attempt {attempt+1})")
-            except Exception as e:
-                print(f"[{username}] YouTube publish click err: {e}")
-
-            for _ in range(15):
-                time.sleep(3)
-                take_screenshot(username)
-                if page.locator(SUCCESS).count() > 0:
-                    published = True
-                    break
-                try:
-                    body = page.inner_text("body", timeout=2000) or ""
-                    if any(k in body.lower() for k in
-                           ["uploaded", "published", "video is live", "your video has been uploaded",
-                            "is being processed", "done"]):
-                        published = True
-                        break
-                except Exception:
-                    pass
-            if published:
-                break
-            time.sleep(3)
-
-        if published:
-            _save_debug_html(page, "YT_SUCCESS", username)
-            _log_event(username, "YouTube: video published")
-            try:
-                page.goto("https://studio.youtube.com", timeout=20000)
-            except Exception:
-                pass
-            return True
-        else:
-            _save_debug_html(page, "YT_FAIL", username)
-            _log_event(username, "YouTube: publish NOT confirmed")
-            take_screenshot(username)
-            return False
-
-    except Exception as fatal:
-        print(f"[{username}] FATAL YOUTUBE UPLOAD: {fatal}")
-        import traceback
-        traceback.print_exc()
-        _save_debug_html(page, "YT_FATAL", username)
-        take_screenshot(username)
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+        creds = Credentials(
+            token=token.get("access_token") or token.get("token"),
+            refresh_token=token.get("refresh_token"),
+            token_uri=token.get("token_uri", "https://oauth2.googleapis.com/token"),
+            client_id=token.get("client_id") or os.environ.get("CLIENT_ID"),
+            client_secret=token.get("client_secret") or os.environ.get("CLIENT_SECRET"),
+            scopes=["https://www.googleapis.com/auth/youtube.upload"],
+        )
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        if not creds.valid:
+            raise RuntimeError("Google OAuth token is invalid or expired; reconnect Google")
+        update_account(username, current_task="Uploading Short through YouTube API...")
+        youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
+        body = {
+            "snippet": {
+                "title": (title or "YouTube Short")[:100],
+                "description": (caption or "")[:5000],
+                "categoryId": "22",
+            },
+            "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
+        }
+        media = MediaFileUpload(file_path, mimetype="video/*", chunksize=8 * 1024 * 1024, resumable=True)
+        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+        response = None
+        while response is None:
+            _, response = request.next_chunk()
+        video_id = response.get("id") if isinstance(response, dict) else None
+        print(f"[{username}] ✓ YouTube API upload complete: {video_id or 'video'}", flush=True)
+        update_account(username, current_task="YouTube Short published")
+        return bool(video_id)
+    except Exception as e:
+        print(f"[{username}] YouTube API upload failed: {e}", flush=True)
+        update_account(username, current_task=f"YouTube upload failed: {str(e)[:80]}")
         return False
 
 
