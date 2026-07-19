@@ -109,8 +109,9 @@
     <div class="add-form">
         <h3>Add New Account</h3>
         <div class="row">
-            <input type="text" id="new-username" placeholder="@username" style="flex:1;min-width:160px;">
-            <select id="new-category">
+            <input type="text" id="new-profile-link" placeholder="Source profile link (TikTok or YouTube)" style="flex:2;min-width:280px;">
+            <input type="text" id="new-username" placeholder="Posting account @username" style="flex:1;min-width:180px;">
+            <select id="new-category" title="Used only when no source profile link is provided">
                 <option value="Dance">Dance</option>
                 <option value="Horror">Horror</option>
                 <option value="Viral Clips">Viral Clips</option>
@@ -131,9 +132,7 @@
             </select>
             <button class="btn-primary" onclick="addAccount()">Add Account</button>
         </div>
-        <div class="row" style="margin-top:10px;">
-            <input type="text" id="new-profile-link" placeholder="TikTok profile link (optional, TikTok only) — posts only this profile's videos" style="flex:1;min-width:240px;">
-        </div>
+
         <div class="row" style="margin-top:10px;">
             <select id="new-login-method">
                 <option value="cookie">Login: Cookie session</option>
@@ -287,7 +286,8 @@
             const platform = document.getElementById('new-platform').value;
             const login_method = document.getElementById('new-login-method').value;
             const profile_link = (document.getElementById('new-profile-link') || {}).value || '';
-            if (!username) { showToast('Enter a username', 'error'); return; }
+            if (!username) { showToast('Enter the posting account username', 'error'); return; }
+            if (!profile_link) { showToast('Enter a source profile link', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},

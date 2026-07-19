@@ -3093,9 +3093,9 @@ def automation_worker(username):
                 handle_content_check_dialog(page, username)
 
             if not goto_upload:
-                # --- TikTok PROFILE mode: only post videos from the given profile ---
-                if platform == "TikTok" and profile_link:
-                    log(f"[{username}] Step 1-2: PROFILE MODE — sourcing from {profile_link}")
+                # --- PROFILE mode: source videos only from the configured creator profile (TikTok or YouTube target) ---
+                if profile_link:
+                    log(f"[{username}] PROFILE MODE — sourcing from {profile_link}")
                     update_account(username, current_task="PROFILE MODE: picking a video from source profile...")
                     candidates = scrape_profile_videos(username, profile_link, exclude=posted_video_ids)
                     if not candidates:
