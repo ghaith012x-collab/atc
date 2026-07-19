@@ -3008,6 +3008,8 @@ def automation_worker(username):
             # --- FACELESS: generate the Short locally (ASMR bg + AI chat overlay)
             #     instead of searching TikTok. Works for BOTH YouTube and TikTok. ---
             if category.lower() == "faceless":
+                # Lazy import avoids a circular import (faceless imports from bot).
+                from faceless import generate_faceless_short
                 log(f"[{username}] Faceless mode: generating local chat Short...")
                 update_account(username, current_task="Faceless: generating chat Short...")
                 take_screenshot(username)
