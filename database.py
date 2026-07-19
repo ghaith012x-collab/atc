@@ -123,3 +123,56 @@ def get_posted_ids(username):
 def set_posted_ids(username, ids):
     try: update_account(username, posted_ids=json.dumps(sorted(ids)))
     except Exception: pass
+
+def append_log(username,message):
+    try:
+        line=f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+        a=get_account(username)
+        if not a:return
+        lines=[x for x in (a.get('logs') or '').split('\n') if x.strip()]+[line]
+        update_account(username,logs='\n'.join(lines[-500:]))
+    except Exception: pass
+
+def get_logs(username):
+    a=get_account(username); return (a or {}).get('logs') or ''
+def get_verify_code(username):
+    a=get_account(username); return (a or {}).get('verify_code') or ''
+def clear_verify_code(username): update_account(username,verify_code='')
+
+def save_oauth_token(username, token):
+    raw=json.dumps(token) if isinstance(token,dict) else str(token)
+    if not _pg_enabled():
+        with _lock:
+            if username in _accounts: _accounts[username]['oauth_token']=raw
+        return
+    conn=_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('''INSERT INTO oauth_tokens(username,token_json) VALUES(%s,%s)
+                           ON CONFLICT(username) DO UPDATE SET token_json=EXCLUDED.token_json,updated_at=NOW()''',(username,raw)); conn.commit()
+    finally:_pool.putconn(conn)
+
+def get_oauth_token(username):
+    """Return the stored OAuth token dict for an account, or None."""
+    if not _pg_enabled():
+        with _lock:
+            raw = (_accounts.get(username) or {}).get('oauth_token')
+    else:
+        conn=_pool.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute('SELECT token_json FROM oauth_tokens WHERE username=%s',(username,))
+                row=cur.fetchone(); raw=row[0] if row else None
+        finally:_pool.putconn(conn)
+    if not raw: return None
+    try: return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception: return None
+
+def has_oauth_token(username):
+    if not _pg_enabled():
+        with _lock:return bool((_accounts.get(username) or {}).get('oauth_token'))
+    conn=_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT 1 FROM oauth_tokens WHERE username=%s',(username,)); return cur.fetchone() is not None
+    finally:_pool.putconn(conn)
