@@ -1377,6 +1377,34 @@ def scrape_profile_videos(username, profile_link, exclude=None):
     if page is None:
         return []
     candidates = []
+
+    def _ingest(link):
+        if not link:
+            return
+        m = re.search(r"tiktok\.com/@([^/?#]+)/video/(\d+)", link)
+        if not m:
+            # also accept relative paths like /@user/video/123
+            m = re.search(r"/@([^/?#]+)/video/(\d+)", link)
+            if not m:
+                return
+            link = "https://www.tiktok.com" + link
+        vid = m.group(2)
+        if vid in seen:
+            return
+        seen.add(vid)
+        if vid in exclude:
+            return
+        candidates.append({
+            "url": link.split("?")[0],
+            "video_id": vid,
+            "title": "",
+            "play_count": 0,
+            "digg_count": 0,
+            "play": "",
+            "from_profile": True,
+        })
+
+    seen = set()
     try:
         url = profile_link
         if not url.startswith("http"):
@@ -1396,30 +1424,30 @@ def scrape_profile_videos(username, profile_link, exclude=None):
         take_screenshot(username)
 
         # Scroll down to lazy-load more videos.
-        for _ in range(5):
-            page.mouse.wheel(0, 1500)
+        for _ in range(8):
+            page.mouse.wheel(0, 2000)
             time.sleep(1.5)
-        take_screenshot(username)
 
-        links = page.eval_on_selector_all('a[href*="/video/"]', "els => els.map(e => e.href)")
-        seen = set()
-        for link in links:
-            m = re.search(r"tiktok\.com/@[^/]+/video/(\d+)", link)
-            if m and m.group(1) not in seen:
-                seen.add(m.group(1))
-                if m.group(1) in exclude:
-                    continue
-                candidates.append({
-                    "url": link.split("?")[0],
-                    "video_id": m.group(1),
-                    "title": "",
-                    "play_count": 0,
-                    "digg_count": 0,
-                    "play": "",
-                    "from_profile": True,
-                })
-            if len(candidates) >= 20:
-                break
+        # Primary: live DOM anchors (works once JS has hydrated the grid).
+        try:
+            links = page.eval_on_selector_all('a[href*="/video/"]', "els => els.map(e => e.href)")
+            for link in links:
+                _ingest(link)
+        except Exception as e:
+            print(f"[{username}] PROFILE MODE dom scrape failed: {e}")
+
+        # Robust fallback: TikTok embeds /video/ links in the initial HTML even
+        # before full hydration, so a regex over the page source catches clips
+        # the DOM scrape misses (e.g. when login/age walls interfere).
+        if len(candidates) < 3:
+            try:
+                html = page.content()
+                for link in re.findall(r'(?:https?://[^\s"\'<>]*?)?/@[^"\'\s?#]+/video/\d+', html):
+                    _ingest(link)
+            except Exception as e:
+                print(f"[{username}] PROFILE MODE html scrape failed: {e}")
+
+        take_screenshot(username)
         print(f"[{username}] PROFILE MODE: found {len(candidates)} unused videos on profile")
     except Exception as e:
         print(f"[{username}] PROFILE MODE scrape error: {e}")
