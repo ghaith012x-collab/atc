@@ -2745,23 +2745,22 @@ def _click_youtube_next(page):
     _handle_youtube_auth_dialog (which skips disabled buttons). Returns True if a
     real (enabled) Next was clicked.
     """
-    # 0) If the REAL verify dialog is up, let the dedicated handler deal with it.
-    #    IMPORTANT: only match the dedicated ytcp-auth-confirmation-dialog
-    #    container — NOT a bare '#confirm-button', because other dialogs on the
-    #    Studio page can also have a #confirm-button and we must not hijack the
-    #    upload wizard's own Next.
+    # 0) If the verify dialog is up (in ANY form — the dedicated
+    #    ytcp-auth-confirmation-dialog OR a tp-yt-paper-dialog overlay — both
+    #    appear in the wild), hand off to the dedicated handler and DO NOT click
+    #    the upload wizard's Next. The wizard Next sits BEHIND the overlay, so
+    #    clicking it just lands on the backdrop (no error, no advance) — the
+    #    classic "stuck on Next" infinite loop. Use the broad detector so the
+    #    tp-yt-paper-dialog overlay variant is caught too.
     try:
-        if page.evaluate("""() => {
-            const dlg = document.querySelector('ytcp-auth-confirmation-dialog');
-            if (!dlg) return false;
-            const r = dlg.getBoundingClientRect();
-            const cs = getComputedStyle(dlg);
-            return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
-        }"""):
+        _verify_info = page.evaluate(_verify_dialog_present_js())
+        if _verify_info and _verify_info.get("present"):
             res = _handle_youtube_auth_dialog(page, "")
             # "advanced" => dialog gone, let the upload Next run on the next call.
             # "needs_code"/False => dialog still up; do not click the upload Next.
-            return res == "advanced"
+            # Return "verify_blocked" so the caller stops looping instead of
+            # hammering the wizard's Next through the overlay.
+            return True if res == "advanced" else "verify_blocked"
     except Exception:
         pass
 
@@ -3139,6 +3138,13 @@ def upload_video_to_youtube(username, file_path, caption, title):
             _log_click_targets(page, username, f"NEXT_STEP_{step+1}")
             _debug_dump_yt_buttons(page, username, f"NEXT_STEP_{step+1}_PRE")
             clicked = _click_youtube_next(page)
+            if clicked == "verify_blocked":
+                print(f"[{username}] ⚠ VERIFY DIALOG STILL BLOCKING — cannot click wizard Next. "
+                      f"Stopping Next sequence; waiting for verification to clear.")
+                _save_debug_html(page, "YT_VERIFY_BLOCKED", username)
+                take_screenshot(username)
+                update_account(username, current_task="Verify that it's you — finish in live cam, then re-run")
+                return False
             if not clicked:
                 # Try the dialog's confirm Next as a fallback.
                 try:
