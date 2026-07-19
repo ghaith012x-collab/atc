@@ -139,6 +139,24 @@ def add_new_account():
     return jsonify({"success": False, "error": "Account already exists"})
 
 
+@app.route("/api/update/<path:username>", methods=["POST"])
+def update_existing_account(username):
+    data = request.json or {}
+    account = get_account(username)
+    if not account:
+        return jsonify({"success": False, "error": "Account not found"})
+    kwargs = {}
+    if "category" in data and data["category"]:
+        kwargs["category"] = data["category"]
+    if "profile_link" in data:
+        kwargs["profile_link"] = (data["profile_link"] or "").strip() or None
+    if "channel_link" in data:
+        kwargs["channel_link"] = (data["channel_link"] or "").strip() or None
+    if kwargs:
+        update_account(username, **kwargs)
+    return jsonify({"success": True})
+
+
 @app.route("/api/session/<path:username>", methods=["POST"])
 def save_session(username):
     account = get_account(username)
