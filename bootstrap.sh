@@ -28,5 +28,25 @@ done
 echo "[bootstrap] piper=$( [ -x /opt/piper/piper ] && echo present || echo MISSING )"
 echo "[bootstrap] voices: $(ls /opt/piper/voices 2>/dev/null | tr '\n' ' ')"
 
+# Start Tor so the bot has a free, rotating SOCKS5 proxy at 127.0.0.1:9050.
+# bot.py auto-detects and uses it as the default egress when no explicit
+# PROXY / account proxy is configured (or when those are unreachable).
+if command -v tor >/dev/null 2>&1; then
+  if ! pgrep -x tor >/dev/null 2>&1; then
+    echo "[bootstrap] starting Tor (SOCKS5 127.0.0.1:9050)..."
+    tor --SocksPort 9050 --RunAsDaemon 1 --DataDirectory /tmp/tor-data >/dev/null 2>&1 || true
+  fi
+  # Give Tor a moment to bootstrap; verify the port came up.
+  for i in $(seq 1 10); do
+    if timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/9050" 2>/dev/null; then
+      echo "[bootstrap] Tor SOCKS5 up on 127.0.0.1:9050"
+      break
+    fi
+    sleep 1
+  done
+else
+  echo "[bootstrap] tor not installed -> bot will connect DIRECT"
+fi
+
 # Hand off to the real server.
 exec xvfb-run -a --server-args="-screen 0 1280x720x24" gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --worker-class gthread --timeout 120 --keep-alive 5

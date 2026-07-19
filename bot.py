@@ -766,7 +766,7 @@ def _proxy_is_reachable(server, timeout=4):
     """Quick TCP liveness check for a proxy server URL. Returns True if the
     proxy host:port accepts a connection within `timeout` seconds. Lets us
     skip a dead proxy immediately instead of burning 30s on a navigation
-    timeout every single run."""
+    timeout every single run. Works for http/https/socks/socks5 server URLs."""
     try:
         from urllib.parse import urlparse
         p = urlparse(server if "://" in server else "http://" + server)
@@ -781,16 +781,28 @@ def _proxy_is_reachable(server, timeout=4):
         return False
 
 
+def _tor_proxy():
+    """Return a Playwright proxy dict for a local Tor SOCKS5 proxy
+    (127.0.0.1:9050) if Tor is running and reachable, else None.
+    Tor is the default free proxy so the bot always has *some* egress IP
+    instead of the server's bare datacenter address."""
+    tor = "socks5://127.0.0.1:9050"
+    if _proxy_is_reachable(tor, timeout=3):
+        return {"server": tor}
+    return None
+
+
 def _get_proxy(account=None):
     """Build a Playwright proxy dict from (in priority order):
        1) account['proxy']  (DB field, full URL e.g. http://1.2.3.4:8080)
        2) env PROXY          (full URL)
        3) env PROXY_IP + PROXY_PORT  (e.g. your home IP 84.215.85.106:PORT)
+       4) local Tor SOCKS5 proxy at 127.0.0.1:9050 (started in bootstrap.sh)
     Returns a dict like {"server": "http://ip:port"} or None.
-    Routing the browser through a residential IP (instead of the server's
+    Routing the browser through a proxy IP (instead of the server's
     datacenter IP) greatly reduces YouTube's 'Verify that it's you' prompts.
-    A configured proxy that is NOT reachable is skipped (None) so the bot
-    connects DIRECT instead of hanging on a dead proxy.
+    A configured proxy that is NOT reachable is skipped so the bot connects
+    DIRECT (or falls through to the next option) instead of hanging.
     """
     proxy = None
     if account and isinstance(account, dict):
@@ -802,11 +814,17 @@ def _get_proxy(account=None):
         port = os.environ.get("PROXY_PORT")
         if ip and port:
             proxy = f"http://{ip}:{port}"
-    if not proxy:
-        return None
-    if not _proxy_is_reachable(proxy):
-        print(f"[proxy] {proxy} not reachable -> skipping (connect DIRECT)")
-        return None
+    if proxy:
+        if _proxy_is_reachable(proxy):
+            return {"server": proxy}
+        print(f"[proxy] {proxy} not reachable -> trying next option")
+        proxy = None
+    # Fall back to local Tor if no usable explicit proxy is configured.
+    tor = _tor_proxy()
+    if tor:
+        print("[proxy] using local Tor SOCKS5 (127.0.0.1:9050)")
+        return tor
+    return None
     return {"server": proxy}
 
 
