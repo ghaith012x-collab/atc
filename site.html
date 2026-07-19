@@ -109,34 +109,21 @@
     <div class="add-form">
         <h3>Add New Account</h3>
         <div class="row">
-            <input type="text" id="new-profile-link" placeholder="Source profile link (TikTok or YouTube)" style="flex:2;min-width:280px;">
+            <select id="new-source-mode" onchange="toggleSourceMode()" style="flex:1;min-width:180px;">
+                <option value="category">Category</option>
+                <option value="profile">Profile link</option>
+            </select>
+            <input type="text" id="new-profile-link" placeholder="Creator profile link" style="display:none;flex:2;min-width:280px;">
+            <select id="new-category" style="flex:1;min-width:180px;">
+                <option value="Dance">Dance</option><option value="Horror">Horror</option><option value="Viral Clips">Viral Clips</option>
+                <option value="Funny Clips">Funny Clips</option><option value="Scary Story Animation">Scary Story Animation</option>
+                <option value="Fruit Story Animation">Fruit Story Animation</option><option value="Horror Animations">Horror Animations</option>
+                <option value="Edits">Edits</option><option value="Story Animation">Story Animation</option><option value="Faceless">Faceless</option>
+            </select>
             <input type="text" id="new-username" placeholder="Posting account @username" style="flex:1;min-width:180px;">
-            <select id="new-category" title="Used only when no source profile link is provided">
-                <option value="Dance">Dance</option>
-                <option value="Horror">Horror</option>
-                <option value="Viral Clips">Viral Clips</option>
-                <option value="Funny Clips">Funny Clips</option>
-                <option value="Scary Story Animation">Scary Story Animation</option>
-                <option value="Fruit Story Animation">Fruit Story Animation</option>
-                <option value="Horror Animations">Horror Animations</option>
-                <option value="Edits">Edits</option>
-                <option value="Story Animation">Story Animation</option>
-                <option value="Gin Stories">Gin Stories</option>
-                <option value="Scary facts">Scary facts</option>
-                <option value="Funny Videos">Funny Videos</option>
-                <option value="Predator Catches">Predator Catches</option>
-            </select>
-            <select id="new-platform" onchange="updateCategoryOptions()">
-                <option value="TikTok">TikTok</option>
-                <option value="YouTube">YouTube</option>
-            </select>
-            <button class="btn-primary" onclick="addAccount()">Add Account</button>
-        </div>
-
-        <div class="row" style="margin-top:10px;">
-            <select id="new-login-method">
-                <option value="cookie">Login: Cookie session</option>
-            </select>
+            <select id="new-platform" onchange="updateCategoryOptions()"><option value="TikTok">TikTok</option><option value="YouTube">YouTube</option></select>
+            <select id="new-login-method"><option value="cookie">Cookie / Session</option><option value="manual">Manual Login</option></select>
+            <button onclick="addAccount()">Add Account</button>
         </div>
     </div>
 
@@ -280,14 +267,21 @@
             sel.innerHTML = cats.map(c => `<option value="${c}">${c}</option>`).join('');
         }
 
+        function toggleSourceMode() {
+            const profile = document.getElementById('new-source-mode').value === 'profile';
+            document.getElementById('new-profile-link').style.display = profile ? 'block' : 'none';
+            document.getElementById('new-category').style.display = profile ? 'none' : 'block';
+        }
+
         function addAccount() {
             const username = document.getElementById('new-username').value.trim();
-            const category = document.getElementById('new-category').value;
+            const mode = document.getElementById('new-source-mode').value;
+            const category = mode === 'category' ? document.getElementById('new-category').value : '';
             const platform = document.getElementById('new-platform').value;
             const login_method = document.getElementById('new-login-method').value;
-            const profile_link = (document.getElementById('new-profile-link') || {}).value || '';
+            const profile_link = mode === 'profile' ? document.getElementById('new-profile-link').value.trim() : '';
             if (!username) { showToast('Enter the posting account username', 'error'); return; }
-            if (!profile_link) { showToast('Enter a source profile link', 'error'); return; }
+            if (mode === 'profile' && !profile_link) { showToast('Enter a creator profile link', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
