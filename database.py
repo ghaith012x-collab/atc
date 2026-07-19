@@ -34,10 +34,25 @@ def init_db():
                   session_data TEXT, connected INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 0,
                   status TEXT, current_task TEXT, last_post TEXT, next_post TEXT, next_post_ts DOUBLE PRECISION,
                   logged_in_as TEXT, logs TEXT, verify_code TEXT, email TEXT, password TEXT, login_method TEXT,
-                   profile_link TEXT, channel_link TEXT, posted_ids TEXT, created_at TEXT)''')
+                  profile_link TEXT, channel_link TEXT, posted_ids TEXT, created_at TEXT)''')
                 cur.execute('''CREATE TABLE IF NOT EXISTS oauth_tokens (
                   username TEXT PRIMARY KEY REFERENCES accounts(username) ON DELETE CASCADE,
                   token_json TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())''')
+                # --- Migration: add any columns missing from an OLD table so the
+                #     INSERTs below (channel_link, posted_ids, etc.) never fail. ---
+                cur.execute("SELECT column_name FROM information_schema.columns "
+                           "WHERE table_name='accounts'")
+                existing = {r[0] for r in cur.fetchall()}
+                for col, coltype in [
+                    ("channel_link", "TEXT"),
+                    ("posted_ids", "TEXT"),
+                    ("profile_link", "TEXT"),
+                    ("login_method", "TEXT"),
+                    ("next_post_ts", "DOUBLE PRECISION"),
+                    ("created_at", "TEXT"),
+                ]:
+                    if col not in existing:
+                        cur.execute(f'ALTER TABLE accounts ADD COLUMN "{col}" {coltype}')
             conn.commit()
         finally: _pool.putconn(conn)
         print('✓ PostgreSQL persistence enabled', flush=True)
