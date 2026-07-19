@@ -461,12 +461,12 @@ def _draw_chat_frame(path, messages, font, small, last_speaker, max_visible=5):
     pad_top = int(HEIGHT * 0.06)
     pad_bot = int(HEIGHT * 0.05)
     px0, py0, px1, py1 = pad_x, pad_top, WIDTH - pad_x, HEIGHT - pad_bot
-    d.rounded_rectangle([px0, py0, px1, py1], radius=40, fill=(12, 14, 20, 105))
+    d.rounded_rectangle([px0, py0, px1, py1], radius=40, fill=(12, 14, 20, 72))
 
     # Status bar (header)
     bar_h = 96
-    d.rounded_rectangle([px0, py0, px1, py0 + bar_h], radius=40, fill=(18, 20, 28, 225))
-    d.rectangle([px0, py0 + bar_h - 30, px1, py0 + bar_h], fill=(18, 20, 28, 225))
+    d.rounded_rectangle([px0, py0, px1, py0 + bar_h], radius=40, fill=(18, 20, 28, 205))
+    d.rectangle([px0, py0 + bar_h - 30, px1, py0 + bar_h], fill=(18, 20, 28, 205))
     ax, ay = px0 + 54, py0 + bar_h // 2
     d.ellipse([ax - 30, ay - 30, ax + 30, ay + 30], fill=(58, 110, 240, 255))
     d.text((ax - 12, ay - 16), "A", fill=(255, 255, 255, 255), font=small)
@@ -516,7 +516,7 @@ def _draw_chat_frame(path, messages, font, small, last_speaker, max_visible=5):
             cx = tx + 28 + dot * 26
             d.ellipse([cx, ty2 + 18, cx + 14, ty2 + 32], fill=(170, 172, 180, 255))
 
-    img.convert("RGB").save(path)
+    img.save(path)
 
 
 def _wrap(text, font, max_w, draw=None):
@@ -620,7 +620,7 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
     overlay_vid = os.path.join(tmp, "overlay.mp4")
     p2 = subprocess.run(
         ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", overlay_concat,
-         "-vf", f"scale={WIDTH}:{HEIGHT},format=rgba",
+         "-vf", f"scale={WIDTH}:{HEIGHT}:flags=lanczos,format=rgba",
          "-c:v", "libx264", "-pix_fmt", "yuv420p", "-t", str(TARGET_DURATION), overlay_vid],
         capture_output=True, cwd=tmp, timeout=60,
     )
@@ -633,7 +633,7 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
         final_audio = os.path.join(tmp, "final_audio.wav")
         cmd = ["ffmpeg", "-y", "-i", bg_tmp, "-i", overlay_vid, "-i", final_audio,
                "-filter_complex",
-               "[1:v]format=rgba,colorchannelmixer=aa=0.92[ov];[0:v][ov]overlay=0:0:format=auto[v]",
+               "[1:v]format=rgba,colorchannelmixer=aa=0.88[ov];[0:v][ov]overlay=0:0:format=auto[v]",
                "-map", "[v]", "-map", "2:a",
                "-c:v", "libx264", "-preset", "slow", "-crf", "16",
                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
@@ -642,7 +642,7 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
         # No TTS audio: keep the silent chat video (ASMR is muted anyway).
         cmd = ["ffmpeg", "-y", "-i", bg_tmp, "-i", overlay_vid,
                "-filter_complex",
-               "[1:v]format=rgba,colorchannelmixer=aa=0.92[ov];[0:v][ov]overlay=0:0:format=auto",
+               "[1:v]format=rgba,colorchannelmixer=aa=0.88[ov];[0:v][ov]overlay=0:0:format=auto",
                "-c:v", "libx264", "-preset", "slow", "-crf", "16",
                "-pix_fmt", "yuv420p",
                "-t", str(TARGET_DURATION), out_path]
