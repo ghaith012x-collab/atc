@@ -122,6 +122,7 @@ def add_new_account():
         username = "@" + username
 
     channel_link = (data.get("channel_link") or "").strip()
+    profile_link = (data.get("profile_link") or "").strip()
 
     if add_account(username, category, platform, profile_link=profile_link, channel_link=channel_link):
         kwargs = {}

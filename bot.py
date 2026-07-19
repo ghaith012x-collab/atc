@@ -3006,7 +3006,7 @@ def automation_worker(username):
             channel_link = (account.get("channel_link") or "").strip()
 
             # --- FACELESS: generate the Short locally (ASMR bg + AI chat overlay)
-            #     instead of searching TikTok. Only valid for YouTube Shorts. ---
+            #     instead of searching TikTok. Works for BOTH YouTube and TikTok. ---
             if category.lower() == "faceless":
                 log(f"[{username}] Faceless mode: generating local chat Short...")
                 update_account(username, current_task="Faceless: generating chat Short...")
@@ -3020,7 +3020,10 @@ def automation_worker(username):
                     update_account(username, current_task="Faceless gen failed, retry in 2 min")
                     time.sleep(120)
                     continue
-                prepared_file = gen_path  # already 1080x1920 with audio
+                # Set both so the YouTube (prepared_file) and TikTok (video_file)
+                # upload branches both receive the generated clip (1080x1920, audio).
+                video_file = gen_path
+                prepared_file = gen_path
                 caption = gen_caption
                 title = gen_title
                 video_info = {"video_id": "faceless_" + str(int(time.time())),
