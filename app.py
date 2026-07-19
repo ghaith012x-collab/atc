@@ -138,6 +138,9 @@ def add_new_account():
 
 @app.route("/api/session/<path:username>", methods=["POST"])
 def save_session(username):
+    account = get_account(username)
+    if account and account.get("platform") == "YouTube":
+        return jsonify({"success": False, "error": "YouTube uses Google OAuth; cookie sessions are disabled."}), 403
     data = request.json
     session_json = data.get("session", "").strip()
     
