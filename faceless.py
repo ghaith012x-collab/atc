@@ -38,7 +38,7 @@ from bot import (
 # ---------------------------------------------------------------------------
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
-PIPER_BIN = os.environ.get("PIPER_BIN", "piper")
+PIPER_BIN = os.environ.get("PIPER_BIN", "/opt/piper/piper")
 PIPER_VOICE_DIR = os.environ.get("PIPER_VOICE_DIR", "/opt/piper/voices")
 # Two distinct voices so the two chat people sound different.
 # Prefer the downloaded onnx voices under PIPER_VOICE_DIR if present.
@@ -51,6 +51,18 @@ PIPER_VOICE_B = os.environ.get("PIPER_VOICE_B", _default_voice("en_US-libritts_r
 WIDTH, HEIGHT = YOUTUBE_SHORTS_WIDTH, YOUTUBE_SHORTS_HEIGHT
 TARGET_DURATION = 45  # seconds of chat
 FONT_SIZE = 30
+
+
+def check_faceless_deps():
+    """Return a list of HARD-missing dependencies (ffmpeg/ffprobe are
+    required for rendering; Piper TTS is optional — without it we produce a
+    silent text-only chat video instead of failing)."""
+    missing = []
+    import shutil
+    for tool in ("ffmpeg", "ffprobe"):
+        if not shutil.which(tool):
+            missing.append(tool)
+    return missing
 
 
 # ---------------------------------------------------------------------------
@@ -403,12 +415,24 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
 # Public entry
 # ---------------------------------------------------------------------------
 def generate_faceless_short(username):
-    """Full pipeline. Returns (video_path, title, caption) or (None, None, None)."""
+    """Full pipeline. Returns (video_path, title, caption) or (None, None, None).
+    Logs a LOUD, specific reason on every failure mode so 'Faceless gen
+    failed' is never a mystery."""
+    missing = check_faceless_deps()
+    if missing:
+        msg = "Faceless deps MISSING: " + ", ".join(missing) + \
+              " - install ffmpeg/ffprobe/piper (Ollama optional)."
+        log(f"[{username}] {msg}")
+        try:
+            update_account(username, current_task=msg[:200])
+        except Exception:
+            pass
+        return None, None, None
     tmp = tempfile.mkdtemp(prefix=f"faceless_{re.sub(r'[^A-Za-z0-9]', '_', username)}_")
     try:
         bg, vid = _source_asmr_background(username)
         if not bg:
-            log(f"[{username}] Faceless: no ASMR background found")
+            log(f"[{username}] Faceless: no ASMR background downloaded (TikWM/network issue)")
             return None, None, None
 
         script = _generate_script_llm(username)
