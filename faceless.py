@@ -142,10 +142,12 @@ def _source_asmr_background(username):
 
 def _source_asmr_background_real(username):
     """Download a silent, text-free ASMR background clip. Returns (path, video_id)."""
-    # Prefer text-free, watermark-light loops (satisfying/relaxing tend to be
-    # cleaner than "asmr" which is full of TikTok UI/watermarks).
-    keywords = ["satisfying", "relaxing", "rain sounds", "fireplace",
-                "asmr", "ocean waves", "cloud", "night lights"]
+    # Prefer clean, text-free Minecraft obby/parkour gameplay first. These clips
+    # provide the high-motion visual bed used by the reference format; fallbacks
+    # remain available when the search service is unavailable.
+    keywords = ["minecraft obby parkour", "minecraft parkour gameplay",
+                "minecraft obstacle course", "minecraft gameplay no commentary",
+                "satisfying minecraft parkour", "obby gameplay"]
     for attempt in range(3):
         try:
             r = requests.post(
@@ -227,12 +229,12 @@ def _generate_script_llm(username):
     """Ask Ollama for a 45s chat script. Returns list of (speaker, text)."""
     theme_name, theme_desc = random.choice(THEMES)
     prompt = (
-        f"Write a realistic, casual phone chat between two friends, {theme_desc}. "
-        f"Output EXACTLY 7 to 9 short messages alternating between A and B. "
+        f"Write a realistic, casual short-form story told as a phone chat between two friends, {theme_desc}. "
+        f"Output EXACTLY 8 to 12 short messages alternating between A and B. Use different fictional first names each time, never Alex, and make the names/relationship clear in the first message. "
         f"Each message must be ONE line. End with a hook line like "
         f"'{random.choice(END_HOOKS)}'. "
         f"Format STRICTLY as:\nA: message\nB: message\nA: message\n..."
-        f"No extra text, no explanations."
+        f"No extra text, no explanations. Keep it punchy and suspenseful, with a strong reveal near the end."
     )
     try:
         r = requests.post(
@@ -445,7 +447,7 @@ def _draw_chat_frame(path, messages, font, small, last_speaker, max_visible=3):
     ax, ay = px0 + 54, py0 + bar_h // 2
     d.ellipse([ax - 30, ay - 30, ax + 30, ay + 30], fill=(58, 110, 240, 255))
     d.text((ax - 12, ay - 16), "A", fill=(255, 255, 255, 255), font=small)
-    d.text((ax + 48, py0 + 28), "Alex", fill=(240, 240, 240, 255), font=small)
+    d.text((ax + 48, py0 + 28), "Story chat", fill=(240, 240, 240, 255), font=small)
     d.text((ax + 48, py0 + 56), "online", fill=(130, 200, 130, 255), font=small)
 
     # Rolling window: only the most recent `max_visible` messages.
@@ -668,7 +670,7 @@ def generate_faceless_short(username):
             "POV: the texts got weird", "the last message broke me",
             "this convo is unforgettable", "wait till you see the end",
         ])
-        caption = f"{random.choice(END_HOOKS)} " + " ".join(["#shorts", "#asmr", "#chat", "#fyp", "#viral"])
+        caption = f"{random.choice(END_HOOKS)} " + " ".join(["#shorts", "#minecraft", "#obby", "#storytime", "#fyp", "#viral"])
         return final, title, caption
     except Exception as e:
         log(f"[{username}] Faceless generation error: {e}")
