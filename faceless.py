@@ -38,7 +38,21 @@ from bot import (
 # ---------------------------------------------------------------------------
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
-PIPER_BIN = os.environ.get("PIPER_BIN", "/opt/piper/piper")
+def _piper_bin():
+    """Locate the Piper executable (env override -> /opt/piper -> PATH)."""
+    env = os.environ.get("PIPER_BIN")
+    if env:
+        return env
+    cand = ["/opt/piper/piper", "/usr/local/bin/piper", "piper"]
+    for c in cand:
+        if c == "piper":
+            return "piper" if shutil.which("piper") else None
+        if os.path.exists(c):
+            return c
+    return None
+
+
+PIPER_BIN = _piper_bin()
 PIPER_VOICE_DIR = os.environ.get("PIPER_VOICE_DIR", "/opt/piper/voices")
 # Two distinct voices so the two chat people sound different.
 # Prefer the downloaded onnx voices under PIPER_VOICE_DIR if present.
@@ -70,7 +84,10 @@ def check_faceless_deps():
 # ---------------------------------------------------------------------------
 def _source_asmr_background(username):
     """Download a silent, text-free ASMR background clip. Returns (path, video_id)."""
-    keywords = ["asmr", "satisfying", "relaxing", "rain sounds", "fireplace"]
+    # Prefer text-free, watermark-light loops (satisfying/relaxing tend to be
+    # cleaner than "asmr" which is full of TikTok UI/watermarks).
+    keywords = ["satisfying", "relaxing", "rain sounds", "fireplace",
+                "asmr", "ocean waves", "cloud", "night lights"]
     for attempt in range(3):
         try:
             r = requests.post(
@@ -188,6 +205,8 @@ def _generate_script_llm(username):
 # ---------------------------------------------------------------------------
 def _synth_line(text, voice, out_wav):
     """Synthesize one line with Piper. Returns True on success."""
+    if not PIPER_BIN:
+        return False
     try:
         proc = subprocess.run(
             [PIPER_BIN, "--model", voice, "--output_file", out_wav],
@@ -227,6 +246,14 @@ def _build_audio(username, script, tmp):
     Returns (final_wav, segments) where segments is a list of
     (speaker, wav_path, dur_sec). If Piper is unavailable, returns (None, []).
     """
+    if not PIPER_BIN:
+        log(f"[{username}] Faceless: Piper TTS not installed -> silent video (voices skipped).")
+        return None, []
+    missing_voices = [v for v in (PIPER_VOICE_A, PIPER_VOICE_B) if not os.path.exists(v)]
+    if missing_voices:
+        log(f"[{username}] Faceless: Piper voice file(s) missing: {missing_voices} "
+            f"-> silent video. Place .onnx voices in PIPER_VOICE_DIR.")
+        return None, []
     segs = []
     ok = True
     for i, (speaker, text) in enumerate(script):
@@ -271,53 +298,72 @@ def _build_audio(username, script, tmp):
 # ---------------------------------------------------------------------------
 # 4. Chat overlay render (Pillow) + ffmpeg composite
 # ---------------------------------------------------------------------------
-def _seg_wav(segments, idx):
-    for s in segments:
-        if idx < len(segments) and segments[idx][1] == s[1]:
-            return s[1]
-    return ""
-
-
 def _draw_chat_frame(path, messages, font, small, last_speaker):
-    """Draw a phone chat screen with the given message history."""
+    """Draw a centered, phone-style chat (Snapchat/WhatsApp look).
+
+    A centered dark "phone" panel holds a status bar at top, the message
+    bubbles stacked from the top (A left / B right with small avatars),
+    and a typing indicator pinned near the bottom when the last speaker is
+    still "typing". No edge/corner bubbles.
+    """
     from PIL import Image, ImageDraw
 
-    img = Image.new("RGBA", (WIDTH, HEIGHT), (10, 12, 18, 255))
+    img = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    header_h = 90
-    d.rectangle([0, 0, WIDTH, header_h], fill=(18, 20, 28, 255))
-    d.text((40, 30), "Messages", fill=(235, 235, 235, 255), font=small)
-    d.line([(0, header_h), (WIDTH, header_h)], fill=(40, 42, 50, 255), width=2)
+    # Centered phone panel (slightly inset so ASMR edges/watermarks hide).
+    pad_x = int(WIDTH * 0.04)
+    pad_top = int(HEIGHT * 0.05)
+    pad_bot = int(HEIGHT * 0.06)
+    px0, py0, px1, py1 = pad_x, pad_top, WIDTH - pad_x, HEIGHT - pad_bot
+    d.rounded_rectangle([px0, py0, px1, py1], radius=40, fill=(18, 19, 26, 235))
 
-    y = header_h + 30
-    max_bubble_w = int(WIDTH * 0.72)
+    # Status bar
+    bar_h = 96
+    d.rounded_rectangle([px0, py0, px1, py0 + bar_h], radius=40, fill=(26, 27, 36, 255))
+    d.rectangle([px0, py0 + bar_h - 30, px1, py0 + bar_h], fill=(26, 27, 36, 255))
+    # avatar circle
+    ax, ay = px0 + 54, py0 + bar_h // 2
+    d.ellipse([ax - 30, ay - 30, ax + 30, ay + 30], fill=(58, 110, 240, 255))
+    d.text((ax - 12, ay - 16), "A", fill=(255, 255, 255, 255), font=small)
+    d.text((ax + 48, py0 + 28), "Alex", fill=(240, 240, 240, 255), font=small)
+    d.text((ax + 48, py0 + 56), "online", fill=(130, 200, 130, 255), font=small)
+
+    # Messages area
+    area_top = py0 + bar_h + 24
+    area_bot = py1 - 120  # leave room for typing indicator
+    max_bubble_w = int((px1 - px0) * 0.74)
+    y = area_top
     for (speaker, text) in messages:
-        is_me = (speaker == "B")  # B = "me" on the right
-        color = (40, 120, 255, 255) if is_me else (45, 47, 54, 255)
-        text_col = (255, 255, 255, 255)
-        lines = _wrap(text, font, max_bubble_w - 36)
-        bh = 24 + len(lines) * (FONT_SIZE + 6)
-        bw = min(max_bubble_w, max((d.textlength(l, font=font) for l in lines)) + 36)
-        bx = WIDTH - bw - 30 if is_me else 30
-        d.rounded_rectangle([bx, y, bx + bw, y + bh], radius=22, fill=color)
+        is_me = (speaker == "B")
+        bubble_col = (20, 122, 240, 255) if is_me else (46, 48, 56, 255)
+        lines = _wrap(text, font, max_bubble_w - 40)
+        lh = FONT_SIZE + 8
+        bh = 22 + len(lines) * lh
+        bw = min(max_bubble_w, max((d.textlength(l, font=font) for l in lines)) + 40)
+        if is_me:
+            bx = px1 - 26 - bw
+        else:
+            bx = px0 + 26
+        if y + bh > area_bot:
+            break
+        d.rounded_rectangle([bx, y, bx + bw, y + bh], radius=20, fill=bubble_col)
         ty = y + 14
         for l in lines:
-            d.text((bx + 18, ty), l, fill=text_col, font=font)
-            ty += FONT_SIZE + 6
-        y += bh + 18
-        if y > HEIGHT - 120:
-            break
+            d.text((bx + 20, ty), l, fill=(255, 255, 255, 255), font=font)
+            ty += lh
+        y += bh + 16
 
+    # Typing indicator near bottom
     if last_speaker:
-        ty2 = y + 6
-        tw = 90
-        tx = WIDTH - tw - 30 if last_speaker == "B" else 30
-        d.rounded_rectangle([tx, ty2, tx + tw, ty2 + 46], radius=22,
-                            fill=(45, 47, 54, 255))
+        is_me = (last_speaker == "B")
+        tw, th = 120, 52
+        tx = (px1 - 26 - tw) if is_me else (px0 + 26)
+        ty2 = py1 - 92
+        d.rounded_rectangle([tx, ty2, tx + tw, ty2 + th], radius=20, fill=(46, 48, 56, 255))
         for dot in range(3):
-            cx = tx + 26 + dot * 22
-            d.ellipse([cx, ty2 + 18, cx + 12, ty2 + 30], fill=(180, 180, 180, 255))
+            cx = tx + 28 + dot * 26
+            d.ellipse([cx, ty2 + 18, cx + 14, ty2 + 32], fill=(170, 172, 180, 255))
 
     img.convert("RGB").save(path)
 
@@ -342,14 +388,24 @@ def _wrap(text, font, max_w, draw=None):
 
 
 def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp):
-    """Draw the chat overlay frame-by-frame and mux with the TTS audio."""
+    """Render the chat overlay over a CLEAN, muted, watermark-hidden ASMR bg.
+
+    - Mute the ASMR audio (ASMR backgrounds must be silent).
+    - Fit to 9:16 WITHOUT cropping (pad), so nothing is butchered.
+    - Blur+darken the background edges so any TikTok @/watermark UI
+      that rides the clip borders is hidden under the phone panel.
+    - High quality (crf 18, medium preset).
+    """
     from PIL import Image, ImageDraw, ImageFont
 
-    bg_tmp = os.path.join(tmp, "bg_scaled.mp4")
+    # 1) Clean, muted, padded 9:16 background (no crop, no quality loss).
+    bg_tmp = os.path.join(tmp, "bg_clean.mp4")
     subprocess.run(
-        ["ffmpeg", "-y", "-i", bg_path,
-         "-vf", f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT}",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+        ["ffmpeg", "-y", "-i", bg_path, "-an",
+         "-vf", (f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
+                   f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
+                   f"gblur=28:30,eq=brightness=0.55,format=yuv420p"),
+         "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
          "-t", str(TARGET_DURATION), bg_tmp],
         capture_output=True, timeout=120,
     )
@@ -363,17 +419,16 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
         font = ImageFont.load_default()
         small = font
 
+    # 2) Build per-message frames; durations come straight from the
+    #    synthesized audio segments (index-aligned to script).
     frames = []
     t = 0.0
     for i, (speaker, text) in enumerate(script):
         png = os.path.join(tmp, f"frame_{i}.png")
         _draw_chat_frame(png, script[:i + 1], font, small, speaker)
-        dur = 2.0
-        if audio_segments:
-            for s in audio_segments:
-                if s[1] and i < len(audio_segments) and os.path.basename(s[1]) == os.path.basename(_seg_wav(audio_segments, i)):
-                    dur = s[3] or 2.0
-                    break
+        dur = 2.2
+        if i < len(audio_segments):
+            dur = audio_segments[i][3] or 2.2
         frames.append((round(t, 2), png, dur))
         t += dur
 
@@ -395,16 +450,17 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
         final_audio = os.path.join(tmp, "final_audio.wav")
         cmd = ["ffmpeg", "-y", "-i", bg_tmp, "-i", overlay_vid, "-i", final_audio,
                "-filter_complex",
-               "[1:v]format=rgba,colorchannelmixer=aa=0.92[ov];[0:v][ov]overlay=0:0:format=auto[v]",
+               "[1:v]format=rgba,colorchannelmixer=aa=0.95[ov];[0:v][ov]overlay=0:0:format=auto[v]",
                "-map", "[v]", "-map", "2:a",
-               "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+               "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
                "-t", str(TARGET_DURATION), "-shortest", out_path]
     else:
+        # No TTS audio: keep the silent chat video (ASMR is muted anyway).
         cmd = ["ffmpeg", "-y", "-i", bg_tmp, "-i", overlay_vid,
                "-filter_complex",
-               "[1:v]format=rgba,colorchannelmixer=aa=0.92[ov];[0:v][ov]overlay=0:0:format=auto",
-               "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+               "[1:v]format=rgba,colorchannelmixer=aa=0.95[ov];[0:v][ov]overlay=0:0:format=auto",
+               "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                "-pix_fmt", "yuv420p",
                "-t", str(TARGET_DURATION), out_path]
     subprocess.run(cmd, capture_output=True, timeout=180)

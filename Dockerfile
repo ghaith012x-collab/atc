@@ -33,9 +33,12 @@ RUN if [ "$BUILD_OLLAMA" = "1" ]; then \
     fi
 
 COPY . .
+COPY bootstrap.sh /opt/bootstrap.sh
+RUN chmod +x /opt/bootstrap.sh
 
 # Create sessions folder
 RUN mkdir -p sessions
 
-# Railway uses the Dockerfile CMD; keep Playwright headed under a virtual X server.
-CMD xvfb-run -a --server-args="-screen 0 1280x720x24" gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --worker-class gthread --timeout 120 --keep-alive 5
+# Railway entry: bootstrap ensures Faceless deps, then starts the server
+# under a virtual X server (needed for headed Playwright/Google flows).
+CMD ["/opt/bootstrap.sh"]
