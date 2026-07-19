@@ -83,7 +83,49 @@ def check_faceless_deps():
 # ---------------------------------------------------------------------------
 # 1. ASMR background
 # ---------------------------------------------------------------------------
+def _make_local_background(username):
+    """Fallback when TikWM/ASMR download is unreachable: generate a
+    clean, SILENT, text-free animated background entirely with ffmpeg
+    (smooth drifting gradient). Guarantees Faceless always has a valid
+    watermark-free, sound-free clip even with no network to TikTok."""
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", username)
+    path = os.path.join(DOWNLOADS_DIR, f"{safe}_localbg_{int(time.time())}.mp4")
+    # A looping, slowly drifting dark gradient (no audio, no text).
+    expr = (
+        "draw=format=yuv420p,"
+        "fps=30,"
+        f"size={WIDTH}x{HEIGHT},"
+        f"duration={TARGET_DURATION},"
+        "x=mod(t*8\\,WIDTH):WIDTH,"
+        "y=mod(t*5\\,HEIGHT):HEIGHT,"
+        "[::WIDTH-1][::-1]"
+    )
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", expr,
+             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+             "-pix_fmt", "yuv420p", "-an", "-t", str(TARGET_DURATION), path],
+            capture_output=True, timeout=120,
+        )
+    except Exception as e:
+        log(f"[{username}] local bg gen failed: {e}")
+        return None, None
+    if os.path.exists(path) and os.path.getsize(path) > 10 * 1024:
+        return path, "local_" + str(int(time.time()))
+    return None, None
+
+
 def _source_asmr_background(username):
+    """Download ASMR bg; fall back to a locally-generated silent clip
+    if the TikWM/TikTok network path is unreachable."""
+    bg, vid = _source_asmr_background_real(username)
+    if bg:
+        return bg, vid
+    log(f"[{username}] ASMR download failed; using local generated background")
+    return _make_local_background(username)
+
+
+def _source_asmr_background_real(username):
     """Download a silent, text-free ASMR background clip. Returns (path, video_id)."""
     # Prefer text-free, watermark-light loops (satisfying/relaxing tend to be
     # cleaner than "asmr" which is full of TikTok UI/watermarks).
