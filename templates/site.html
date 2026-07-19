@@ -474,8 +474,9 @@
                 const cdEl = document.getElementById('countdown-' + username);
                 if (!cdEl || !target) return;
 
-                const now = new Date();
-                let diff = Math.max(0, Math.floor((target - now) / 1000));
+                const targetMs = (target instanceof Date) ? target.getTime() : Number(target);
+                const nowMs = Date.now();
+                let diff = Math.max(0, Math.floor((targetMs - nowMs) / 1000));
 
                 if (diff <= 0) {
                     cdEl.textContent = 'posting soon';
@@ -501,12 +502,14 @@
                     const nextEl = document.getElementById('next-' + acc.username);
                     if (nextEl) nextEl.textContent = acc.next_post || '—';
 
-                    // Update live countdown target
-                    if (acc.next_post && acc.next_post !== '—') {
-                        const newTarget = parseNextPostTime(acc.next_post);
-                        if (newTarget) {
-                            countdownTargets[acc.username] = newTarget;
-                        }
+                    // Use the exact server-computed epoch (next_post_ts) for the
+                    // countdown — parsing the HH:MM string locally breaks across
+                    // midnight and drifted, showing nonsense like "1322m".
+                    if (acc.next_post_ts) {
+                        countdownTargets[acc.username] = acc.next_post_ts * 1000;
+                    } else if (acc.next_post && acc.next_post !== '—') {
+                        const parsed = parseNextPostTime(acc.next_post);
+                        if (parsed) countdownTargets[acc.username] = parsed.getTime();
                     }
 
                     // Auto-reload if needed
