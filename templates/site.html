@@ -93,6 +93,11 @@
         .field-label select, .field-label input { background: #222; border: 1px solid #444; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
         .field-label select:focus, .field-label input:focus { outline: none; border-color: #ff0050; }
         .btn-edit { background: #1a2740; color: #4fa3ff; border: 1px solid #4fa3ff; }
+        .btn-plus { background: #ff0050; color: #fff; width: 52px; height: 52px; border-radius: 50%; font-size: 28px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; }
+        .add-menu { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+        .add-menu-item { background: #222; color: #fff; border: 1px solid #444; border-radius: 8px; padding: 12px 18px; font-size: 14px; cursor: pointer; }
+        .add-menu-item:hover { border-color: #ff0050; }
+        .add-box { margin-top: 14px; display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
 
         .toast {
             position: fixed; bottom: 24px; right: 24px; background: #222; color: #fff;
@@ -111,12 +116,30 @@
         <div style="color:#888;">{{ accounts|length }} Account{{ 's' if accounts|length != 1 else '' }}</div>
     </div>
 
-    <!-- Add Account Form -->
+    <!-- Add Account (via + menu) -->
     <div class="add-form">
         <h3>Add New Account</h3>
-        <div class="row">
+        <button class="btn-plus" id="add-plus" onclick="openAddMenu()" title="Add account">+</button>
+        <div id="add-menu" class="add-menu" style="display:none;">
+            <button class="add-menu-item" onclick="chooseAdd('profile')">1. Profile URL</button>
+            <button class="add-menu-item" onclick="chooseAdd('category')">2. Category</button>
+        </div>
+
+        <!-- Profile URL path -->
+        <div id="add-profile-box" class="add-box" style="display:none;">
             <label class="field-label">Username
-                <input type="text" id="new-username" placeholder="@username" style="flex:1;min-width:160px;">
+                <input type="text" id="new-username-profile" placeholder="@username">
+            </label>
+            <label class="field-label">Profile URL (TikTok)
+                <input type="text" id="new-profile-link" placeholder="https://tiktok.com/@username">
+            </label>
+            <button class="btn-primary" onclick="addAccount('profile')">Add Account</button>
+        </div>
+
+        <!-- Category path -->
+        <div id="add-category-box" class="add-box" style="display:none;">
+            <label class="field-label">Username
+                <input type="text" id="new-username-category" placeholder="@username">
             </label>
             <label class="field-label">Category
                 <select id="new-category">
@@ -136,23 +159,7 @@
                     <option value="Faceless">Faceless</option>
                 </select>
             </label>
-            <label class="field-label">Platform
-                <select id="new-platform" onchange="updateCategoryOptions()">
-                    <option value="TikTok">TikTok</option>
-                    <option value="YouTube">YouTube</option>
-                </select>
-            </label>
-            <button class="btn-primary" style="align-self:flex-end;" onclick="addAccount()">Add Account</button>
-        </div>
-        <div class="row" style="margin-top:10px;">
-            <label class="field-label" style="flex:1;min-width:240px;">Profile URL (TikTok)
-                <input type="text" id="new-profile-link" placeholder="TikTok profile link (optional) — posts only this profile's videos" style="flex:1;min-width:240px;">
-            </label>
-        </div>
-        <div class="row" id="new-channel-row" style="margin-top:10px; display:none;">
-            <label class="field-label" style="flex:1;min-width:240px;">Channel URL (YouTube)
-                <input type="text" id="new-channel-link" placeholder="YouTube channel link (optional) — e.g. https://youtube.com/@yourchannel" style="flex:1;min-width:240px;">
-            </label>
+            <button class="btn-primary" onclick="addAccount('category')">Add Account</button>
         </div>
     </div>
 
@@ -312,41 +319,33 @@
         }
 
         // ==================== ADD ACCOUNT ====================
-        const PLATFORM_CATEGORIES = {
-            "TikTok": [
-                "Dance", "Horror", "Viral Clips", "Funny Clips",
-                "Scary Story Animation", "Fruit Story Animation",
-                "Horror Animations", "Edits", "Story Animation",
-                "Gin Stories", "Scary facts", "Funny Videos", "Predator Catches", "Faceless"
-            ],
-            "YouTube": [
-                "Viral Clips", "Funny Clips", "Scary Story Animation",
-                "Fruit Story Animation", "Horror Animations", "Edits", "Faceless"
-            ]
-        };
-
-        function updateCategoryOptions() {
-            const platform = document.getElementById('new-platform').value;
-            const sel = document.getElementById('new-category');
-            const cats = PLATFORM_CATEGORIES[platform] || PLATFORM_CATEGORIES["TikTok"];
-            sel.innerHTML = cats.map(c => `<option value="${c}">${c}</option>`).join('');
-            // Channel link only applies to YouTube.
-            const chRow = document.getElementById('new-channel-row');
-            if (chRow) chRow.style.display = (platform === "YouTube") ? "flex" : "none";
+        function openAddMenu() {
+            const m = document.getElementById('add-menu');
+            m.style.display = (m.style.display === 'none' || !m.style.display) ? 'block' : 'none';
         }
 
-        function addAccount() {
-            const username = document.getElementById('new-username').value.trim();
-            const category = document.getElementById('new-category').value;
-            const platform = document.getElementById('new-platform').value;
-            const login_method = document.getElementById('new-login-method').value;
-            const profile_link = (document.getElementById('new-profile-link') || {}).value || '';
-            const channel_link = (document.getElementById('new-channel-link') || {}).value || '';
-            if (!username) { showToast('Enter a username', 'error'); return; }
+        function chooseAdd(kind) {
+            document.getElementById('add-menu').style.display = 'none';
+            document.getElementById('add-profile-box').style.display = (kind === 'profile') ? 'block' : 'none';
+            document.getElementById('add-category-box').style.display = (kind === 'category') ? 'block' : 'none';
+        }
+
+        function addAccount(mode) {
+            const unameId = (mode === 'category') ? 'new-username-category' : 'new-username-profile';
+            const username = (document.getElementById(unameId) || {}).value;
+            if (!username || !username.trim()) { showToast('Enter a username', 'error'); return; }
+            const u = username.trim();
+            let category = 'dance';
+            let profile_link = '';
+            if (mode === 'category') {
+                category = (document.getElementById('new-category') || {}).value || 'dance';
+            } else if (mode === 'profile') {
+                profile_link = ((document.getElementById('new-profile-link') || {}).value || '').trim();
+            }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, category, platform, login_method, profile_link, channel_link})
+                body: JSON.stringify({username: u, category, platform: 'TikTok', profile_link})
             })
             .then(r => r.json())
             .then(d => {
@@ -608,7 +607,6 @@
         setInterval(refreshCams, 1000);
         setInterval(updateInfo, 4000);
         setInterval(updateCountdowns, 1000);  // live every second
-        updateCategoryOptions();  // populate categories for the default platform
     </script>
 </body>
 </html>
