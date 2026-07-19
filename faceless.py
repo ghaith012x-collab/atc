@@ -508,6 +508,23 @@ def _wrap(text, font, max_w, draw=None):
     return lines or [text]
 
 
+def _ffmpeg_ok(proc, what, username):
+    """Return True if the ffmpeg run succeeded, else log why."""
+    if proc.returncode == 0 and (proc.stdout or proc.stderr or True):
+        return True
+    err = (proc.stderr or proc.stdout or b"").decode("utf-8", "ignore")[-600:]
+    log(f"[{username}] Faceless ffmpeg FAILED ({what}): {err}")
+    return False
+
+
+def _has_filter(filter_name):
+    try:
+        out = subprocess.run(["ffmpeg", "-filters"], capture_output=True, timeout=20)
+        return filter_name in out.stdout.decode("utf-8", "ignore")
+    except Exception:
+        return True  # assume present if we can't check
+
+
 def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp):
     """Render the chat overlay over a CLEAN, muted, watermark-hidden ASMR bg.
 
@@ -516,21 +533,27 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
     - Blur+darken the background edges so any TikTok @/watermark UI
       that rides the clip borders is hidden under the phone panel.
     - High quality (crf 18, medium preset).
+
+    Every ffmpeg step is return-code checked and logs its stderr on failure
+    so a broken filter/build can never silently produce "no file".
     """
     from PIL import Image, ImageDraw, ImageFont
 
     # 1) Clean, muted, padded 9:16 background (no crop, no quality loss).
+    #    Only apply gblur if the filter actually exists in this ffmpeg build;
+    #    otherwise just darken (a missing filter would abort the whole step).
+    blur = "gblur=28:30," if _has_filter("gblur") else ""
     bg_tmp = os.path.join(tmp, "bg_clean.mp4")
-    subprocess.run(
+    p1 = subprocess.run(
         ["ffmpeg", "-y", "-i", bg_path, "-an",
          "-vf", (f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
                    f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
-                   f"gblur=28:30,eq=brightness=0.55,format=yuv420p"),
+                   f"{blur}eq=brightness=0.55,format=yuv420p"),
          "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
          "-t", str(TARGET_DURATION), bg_tmp],
         capture_output=True, timeout=120,
     )
-    if not os.path.exists(bg_tmp):
+    if not _ffmpeg_ok(p1, "background clean", username) or not os.path.exists(bg_tmp):
         return None
 
     try:
@@ -558,12 +581,14 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
         for start, png, dur in frames:
             f.write(f"file '{os.path.basename(png)}'\nduration {dur:.2f}\n")
     overlay_vid = os.path.join(tmp, "overlay.mp4")
-    subprocess.run(
+    p2 = subprocess.run(
         ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", overlay_concat,
          "-vf", f"scale={WIDTH}:{HEIGHT},format=rgba",
-         "-c:v", "png", "-pix_fmt", "rgba", "-t", str(TARGET_DURATION), overlay_vid],
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-t", str(TARGET_DURATION), overlay_vid],
         capture_output=True, cwd=tmp, timeout=60,
     )
+    if not _ffmpeg_ok(p2, "overlay build", username) or not os.path.exists(overlay_vid):
+        return None
 
     have_audio = bool(audio_segments) and any(
         os.path.exists(s[1]) for s in audio_segments)
@@ -584,7 +609,9 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                "-pix_fmt", "yuv420p",
                "-t", str(TARGET_DURATION), out_path]
-    subprocess.run(cmd, capture_output=True, timeout=180)
+    p3 = subprocess.run(cmd, capture_output=True, timeout=180)
+    if not _ffmpeg_ok(p3, "final composite", username):
+        return None
     return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 10 * 1024 else None
 
 
