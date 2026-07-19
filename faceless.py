@@ -542,7 +542,7 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
     # 1) Clean, muted, padded 9:16 background (no crop, no quality loss).
     #    Only apply gblur if the filter actually exists in this ffmpeg build;
     #    otherwise just darken (a missing filter would abort the whole step).
-    blur = "gblur=28:30," if _has_filter("gblur") else ""
+    blur = "gblur=sigma=20:steps=4," if _has_filter("gblur") else ""
     bg_tmp = os.path.join(tmp, "bg_clean.mp4")
     p1 = subprocess.run(
         ["ffmpeg", "-y", "-i", bg_path, "-an",
