@@ -1528,6 +1528,21 @@ def generate_caption(video_info, category, platform="TikTok"):
     if len(plain) > 90:
         plain = plain[:90].rsplit(" ", 1)[0]
 
+    # Pull any hashtags the ORIGINAL video already used, so our repost stays
+    # on-topic with the source clip (e.g. #scary #ghost). Keep them lowercase
+    # and de-duplicated; cap to avoid a wall of tags.
+    src_tags = re.findall(r"#(\w+)", original)
+    src_tags = ["#" + t.lower() for t in dict.fromkeys(src_tags)]
+
+    # Derive content keywords straight from the video title so hashtags reflect
+    # the ACTUAL clip, not just the broad category. Skip generic stopwords.
+    STOP = {"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is",
+            "this", "that", "with", "you", "your", "my", "me", "i", "it", "at",
+            "be", "are", "was", "video", "watch", "like", "when", "how", "what"}
+    words = [w for w in re.findall(r"[A-Za-z']+", plain.lower()) if len(w) > 2 and w not in STOP]
+    topic_tags = ["#" + w for w in dict.fromkeys(words) if w not in STOP]
+    topic_tags = topic_tags[:6]
+
     cat = (category or "dance").lower()
 
     # Category-specific caption templates (makes it feel real). Keys are LOWERCASE.
@@ -1619,13 +1634,14 @@ def generate_caption(video_info, category, platform="TikTok"):
 
     base = random.choice(templates.get(cat, templates["dance"]))
 
-    # Add relevant hashtags
+    # Build a hashtag set that mirrors the ACTUAL video: the source clip's own
+    # tags + keywords pulled from its title + the category's standard tags.
     pool = CATEGORY_HASHTAGS.get(cat, ["#fyp", "#viral", "#trending"])
 
     if platform == "YouTube":
         # YouTube Shorts: longer, accurate, searchable caption + #Shorts.
         extra = ["#Shorts", "#YouTubeShorts", "#viralshorts"]
-        all_tags = list(set(pool + extra))[:8]
+        all_tags = list(dict.fromkeys(src_tags + topic_tags + pool + extra))[:10]
         # Use the real video topic when available; otherwise a generic hook.
         # NOTE: never repeat `base` (it's already the hook line above).
         topic = plain or "Watch till the end!"
@@ -1638,7 +1654,7 @@ def generate_caption(video_info, category, platform="TikTok"):
         return caption.strip()[:300]
 
     extra = ["#fyp", "#foryou", "#viral"]
-    all_tags = list(set(pool + extra))[:6]
+    all_tags = list(dict.fromkeys(src_tags + topic_tags + pool + extra))[:8]
 
     caption = f"{base} {' '.join(all_tags)}"
     return caption.strip()[:150]
@@ -3073,6 +3089,7 @@ def automation_worker(username):
                 # the clips — both platforms reuse the TikTok search.
                 log(f"[{username}] Step 1: Searching TikTok '{category}' (platform={platform})")
                 update_account(username, current_task=f"Step 1: Searching '{category}'...")
+                take_screenshot(username)
 
                 search_ok = search_on_tiktok(username, category)
                 if not search_ok:
@@ -3081,6 +3098,7 @@ def automation_worker(username):
                 # --- Step 2: find a viral video in the results ---
                 log(f"[{username}] Step 2: Finding viral video...")
                 update_account(username, current_task="Step 2: Finding viral video...")
+                take_screenshot(username)
                 video_info = find_viral_video(username, category, exclude=posted_video_ids)
                 if not video_info:
                     update_account(username, current_task="No viral video found, retrying in 2 min")
@@ -3095,6 +3113,7 @@ def automation_worker(username):
             # --- Step 3: download without watermark ---
             log(f"[{username}] Step 3: Downloading video (no watermark)...")
             update_account(username, current_task="Step 3: Downloading video (no watermark)...")
+            take_screenshot(username)
             video_file = download_video_no_watermark(username, video_info)
             if not video_file:
                 update_account(username, current_task="Download failed, retrying in 2 min")
@@ -3115,6 +3134,7 @@ def automation_worker(username):
             if platform == "YouTube":
                 log(f"[{username}] Step 5: Uploading to YouTube Shorts...")
                 update_account(username, current_task="Step 5: Uploading to YouTube Shorts...")
+                take_screenshot(username)
                 page = _get_page(username)
                 if page:
                     _dismiss_youtube_popups(page, username)
