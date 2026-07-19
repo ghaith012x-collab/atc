@@ -3,8 +3,8 @@ import sys
 import json
 import traceback
 import threading
-from flask import Flask, render_template, jsonify, request, Response
-from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account, get_logs
+from flask import Flask, render_template, jsonify, request, Response, redirect, session, url_for
+from database import init_db, get_all_accounts, get_account, update_account, add_account, delete_account, get_logs, save_oauth_token, has_oauth_token
 from bot import (
     connect_account, start_automation, stop_automation,
     delete_account_session, logout_account,
@@ -12,6 +12,15 @@ from bot import (
 )
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.environ.get("SECRET_KEY") or os.urandom(32)
+OAUTH_SCOPES = "https://www.googleapis.com/auth/youtube.upload"
+DEFAULT_OAUTH_REDIRECT = "https://web-production-d8fdaf.up.railway.app/oauth2callback"
+
+def oauth_redirect_uri():
+    return os.environ.get("OAUTH_REDIRECT_URI") or DEFAULT_OAUTH_REDIRECT
+
+def oauth_ready():
+    return bool(os.environ.get("CLIENT_ID") and os.environ.get("CLIENT_SECRET"))
 
 # Auto install Chromium on Railway (non-fatal — never block startup).
 def install_browser():
@@ -33,6 +42,47 @@ except Exception as e:
     traceback.print_exc()
 
 
+@app.route("/oauth2login")
+def oauth2login():
+    """Start phone-friendly Google OAuth. No password or verification code is handled by this app."""
+    username = (request.args.get("username") or "").strip()
+    account = get_account(username)
+    if not account or account.get("platform") != "YouTube":
+        return "Choose an existing YouTube account first.", 400
+    if not oauth_ready():
+        return "OAuth is not configured yet. Add CLIENT_ID and CLIENT_SECRET in Railway Variables.", 503
+    import secrets, urllib.parse
+    state = secrets.token_urlsafe(32)
+    session["oauth_state"] = state
+    session["oauth_username"] = username
+    params = {"client_id": os.environ["CLIENT_ID"], "redirect_uri": oauth_redirect_uri(),
+              "response_type":"code", "scope":OAUTH_SCOPES, "access_type":"offline",
+              "prompt":"consent", "state":state}
+    return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params))
+
+@app.route("/oauth2callback")
+def oauth2callback():
+    if request.args.get("error"):
+        return f"Google authorization was not completed: {request.args.get('error')}", 400
+    state=request.args.get("state")
+    if not state or state != session.pop("oauth_state", None):
+        return "Authorization expired or invalid. Start again from the dashboard.", 400
+    username=session.pop("oauth_username", None)
+    code=request.args.get("code")
+    if not username or not code: return "Missing authorization details.", 400
+    import requests as _requests
+    try:
+        r=_requests.post("https://oauth2.googleapis.com/token", data={
+            "code":code,"client_id":os.environ["CLIENT_ID"],"client_secret":os.environ["CLIENT_SECRET"],
+            "redirect_uri":oauth_redirect_uri(),"grant_type":"authorization_code"}, timeout=20)
+        r.raise_for_status(); token=r.json()
+        save_oauth_token(username, token)
+        update_account(username, status="Google connected", current_task="Ready to connect")
+        return "<h2>Google connected successfully ✅</h2><p>You can return to the ATC dashboard. Your authorization is stored privately.</p><p><a href='/'>Back to dashboard</a></p>"
+    except Exception as e:
+        print(f"[oauth] token exchange failed: {e}", flush=True)
+        return "Google authorization could not be completed. Check the Railway logs and OAuth redirect URI.", 502
+
 @app.route("/healthz")
 def healthz():
     return jsonify({"status": "ok"})
@@ -41,6 +91,9 @@ def healthz():
 @app.route("/")
 def dashboard():
     accounts = get_all_accounts()
+    for acc in accounts:
+        if acc.get("platform") == "YouTube":
+            acc["oauth_connected"] = has_oauth_token(acc.get("username"))
     return render_template("site.html", accounts=accounts)
 
 
@@ -49,6 +102,8 @@ def api_accounts():
     # Never send session_data to frontend
     accounts = get_all_accounts()
     for acc in accounts:
+        if acc.get("platform") == "YouTube":
+            acc["oauth_connected"] = has_oauth_token(acc.get("username"))
         if "session_data" in acc:
             del acc["session_data"]
     return jsonify(accounts)
@@ -159,17 +214,6 @@ def api_logout(username):
 def api_logs(username):
     logs = get_logs(username)
     return jsonify({"success": True, "username": username, "logs": logs or ""})
-
-
-@app.route("/api/verify_code/<path:username>", methods=["POST"])
-def api_verify_code(username):
-    import re as _re
-    data = request.json or {}
-    digits = _re.sub(r"\D", "", (data.get("code") or "").strip())
-    if not digits:
-        return jsonify({"success": False, "error": "Enter the code digits"})
-    update_account(username, verify_code=digits)
-    return jsonify({"success": True, "digits": digits})
 
 
 # Cache the last encoded JPEG per account so we only re-encode when the frame

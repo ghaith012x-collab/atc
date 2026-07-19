@@ -209,6 +209,9 @@
 
         <!-- Controls -->
         <div class="controls">
+            {% if acc.platform == 'YouTube' %}
+                <a class="btn-primary" style="display:inline-block;text-decoration:none;" href="/oauth2login?username={{ acc.username|urlencode }}">{% if acc.oauth_connected %}Reconnect Google{% else %}Connect Google / YouTube{% endif %}</a>
+            {% endif %}
             {% if acc.connected %}
                 <button class="btn-start" onclick="startAutomation('{{ acc.username }}')">&#9654; Start Automation</button>
                 <button class="btn-stop" onclick="stopAutomation('{{ acc.username }}')">&#9632; Stop</button>
@@ -216,11 +219,6 @@
             {% endif %}
             <button class="btn-delete" onclick="deleteAccount('{{ acc.username }}')">Delete Account</button>
             <button class="btn-logs" onclick="openLogs('{{ acc.username }}')">&#128221; Logs</button>
-            <div class="verify-row">
-                <input type="text" inputmode="numeric" maxlength="8" id="verify-code-{{ acc.username }}"
-                       placeholder="6-digit code" class="verify-input" oninput="this.value=this.value.replace(/\D/g,'')">
-                <button class="btn-verify" onclick="submitVerifyCode('{{ acc.username }}')">Submit Code</button>
-            </div>
         </div>
     </div>
     {% endfor %}
@@ -357,23 +355,6 @@
                     }
                 });
             }, 1500);
-        }
-
-        // ==================== VERIFY CODE ====================
-        function submitVerifyCode(username) {
-            const inp = document.getElementById('verify-code-' + username);
-            const code = inp ? inp.value.trim() : '';
-            if (!code) { showToast('Enter the code first', 'error'); return; }
-            fetch('/api/verify_code/' + encodeURIComponent(username), {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({code: code})
-            })
-            .then(r => r.json())
-            .then(d => {
-                if (d.success) { showToast('Code sent to bot (' + d.digits + ')', 'success'); if (inp) inp.value = ''; }
-                else { showToast(d.error || 'Failed to send code', 'error'); }
-            })
-            .catch(() => showToast('Network error', 'error'));
         }
 
         // ==================== LOGS MODAL ====================
