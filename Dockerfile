@@ -10,17 +10,30 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN apt-get update && apt-get install -y --no-install-recommends xvfb ffmpeg espeak-ng tor && rm -rf /var/lib/apt/lists/*
 
 # ---- Faceless deps (NON-FATAL: build succeeds even if a download fails) ----
-# Piper TTS static binary + two distinct English voices so the two chat
-# speakers sound different. Installed by DEFAULT so Faceless produces
-# voiced Shorts out of the box; the generator falls back to a silent
-# text-only video if Piper is somehow absent at runtime.
+# Piper TTS static binary + two DISTINCT, natural-sounding English voices
+# (a male + a female) so the two chat speakers sound human and different.
+# Installed by DEFAULT so Faceless produces voiced Shorts out of the box;
+# the generator falls back to espeak-ng / gTTS if Piper is somehow absent.
 RUN set -x; \
-    apt-get update && apt-get install -y --no-install-recommends wget unzip >/dev/null 2>&1 || true; \
+    apt-get update && apt-get install -y --no-install-recommends wget curl unzip >/dev/null 2>&1 || true; \
     mkdir -p /opt/piper /opt/piper/voices && cd /opt/piper; \
-    wget -q https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz -O piper.tar.gz 2>/dev/null || true; \
-    tar -xzf piper.tar.gz 2>/dev/null || true; \
-    (cd voices && wget -q https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx -O en_US-ryan-high.onnx 2>/dev/null || true); \
-    (cd voices && wget -q https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx -O en_US-libritts_r-medium.onnx 2>/dev/null || true); \
+    for url in \
+      https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz \
+      https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz ; do \
+        wget -q "$url" -O piper.tar.gz && tar -xzf piper.tar.gz && [ -x /opt/piper/piper ] && break; \
+    done; \
+    chmod +x /opt/piper/piper 2>/dev/null || true; \
+    echo "[docker] piper binary: $( [ -x /opt/piper/piper ] && /opt/piper/piper --help >/dev/null 2>&1 && echo OK || echo MISSING )"; \
+    cd /opt/piper/voices; \
+    for v in en_US-lessac-medium en_US-ryan-medium; do \
+      for base in \
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium" \
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium" ; do \
+        wget -q "$base/$v.onnx" -O "$v.onnx" 2>/dev/null && [ -s "$v.onnx" ] && break; \
+      done; \
+      wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/${v#en_US-}/medium/${v}.onnx.json" -O "$v.onnx.json" 2>/dev/null || true; \
+    done; \
+    echo "[docker] voices: $(ls /opt/piper/voices 2>/dev/null | tr '\n' ' ')"; \
     true
 
 # Ollama (local LLM for the chat script) — optional, large download.
