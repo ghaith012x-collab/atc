@@ -564,6 +564,12 @@ TIKWM_SEARCH_API = "https://www.tikwm.com/api/feed/search"
 # always ~5 minutes.
 POST_INTERVAL_SECONDS = 300  # 5 minutes
 
+# Engagement floor for non-viral sourcing: anything with >= MIN_LIKES likes
+# OR >= MIN_VIEWS views is eligible to post (so we don't run dry hunting for
+# only "viral" clips). Lowered from the old 5000-view hard gate.
+MIN_LIKES = 450
+MIN_VIEWS = 5000
+
 # How many of the top-ranked candidates to randomly choose between, so we never
 # keep picking the exact same viral video every cycle.
 VIDEO_CHOICE_POOL = 6
@@ -596,7 +602,10 @@ CATEGORY_SEARCH = {
     "Gin Stories": "Jinn stories Islam",
     "Scary facts": "Scary Facts",
     "Funny Videos": "Funny Videos",
-    "Predator Catches": "Pred catches",
+    "Predator Catches": "Predator catches",
+    # Faceless: generated locally (ASMR bg + AI chat overlay). Search term is
+    # only used for sourcing the ASMR background clip.
+    "Faceless": "asmr",
 }
 
 # Categories offered when adding a YouTube account.
@@ -629,6 +638,8 @@ CATEGORY_HASHTAGS = {
     "fruit story animation": ["#fruit", "#animation", "#kids", "#story", "#shorts", "#cute"],
     "horror animations": ["#horror", "#animation", "#scary", "#horrorstory", "#shorts", "#creepy"],
     "edits": ["#edits", "#edit", "#aesthetic", "#trending", "#shorts", "#fyp"],
+    # Faceless: generated ASMR chat-reaction Shorts. Kept generic + broad.
+    "faceless": ["#shorts", "#asmr", "#satisfying", "#relax", "#fyp", "#viral", "#chat"],
 }
 
 
@@ -1206,7 +1217,12 @@ def find_viral_video(username, category, exclude=None):
             return
         if info["video_id"] in exclude:   # never repost the same clip
             return
-        if info.get("play_count", 0) < 5000:
+        # Accept anything with decent engagement, not only "viral". A clip with
+        # >=450 likes (digg_count) or >= a few thousand views is fair game, so we
+        # stop running dry with "No viral video found".
+        likes = info.get("digg_count", 0) or 0
+        views = info.get("play_count", 0) or 0
+        if likes < MIN_LIKES and views < MIN_VIEWS:
             return
         candidates.append(info)
 
@@ -2923,15 +2939,29 @@ def _posted_ids_path(username):
 
 
 def load_posted_ids(username):
-    """Load the set of already-posted video ids (so we never repeat a clip)."""
+    """Load the set of already-posted video ids (so we never repeat a clip).
+
+    Reads from the DB first (survives worker restarts); falls back to the local
+    JSON file if the DB has nothing yet.
+    """
+    try:
+        db_ids = get_posted_ids(username)
+        if db_ids:
+            return set(db_ids)
+    except Exception:
+        pass
     try:
         with open(_posted_ids_path(username), "r") as f:
             return set(json.load(f))
     except Exception:
         return set()
 
-
 def save_posted_ids(username, ids):
+    # Persist to DB (primary) and also to the local file as a backup.
+    try:
+        set_posted_ids(username, ids)
+    except Exception:
+        pass
     try:
         with open(_posted_ids_path(username), "w") as f:
             json.dump(sorted(ids), f)
@@ -2973,71 +3003,98 @@ def automation_worker(username):
             category = account.get("category") or "dance"
             platform = account.get("platform") or "TikTok"
             profile_link = (account.get("profile_link") or "").strip()
+            channel_link = (account.get("channel_link") or "").strip()
+
+            # --- FACELESS: generate the Short locally (ASMR bg + AI chat overlay)
+            #     instead of searching TikTok. Only valid for YouTube Shorts. ---
+            if category.lower() == "faceless":
+                log(f"[{username}] Faceless mode: generating local chat Short...")
+                update_account(username, current_task="Faceless: generating chat Short...")
+                take_screenshot(username)
+                try:
+                    gen_path, gen_title, gen_caption = generate_faceless_short(username)
+                except Exception as _ge:
+                    log(f"[{username}] Faceless generation crashed: {_ge}")
+                    gen_path = None
+                if not gen_path:
+                    update_account(username, current_task="Faceless gen failed, retry in 2 min")
+                    time.sleep(120)
+                    continue
+                prepared_file = gen_path  # already 1080x1920 with audio
+                caption = gen_caption
+                title = gen_title
+                video_info = {"video_id": "faceless_" + str(int(time.time())),
+                              "title": gen_title, "url": ""}
+                # skip the search/download steps below
+                goto_upload = True
+            else:
+                goto_upload = False
 
             page = _get_page(username)
             if page:
                 handle_captcha_if_present(page, username)
                 handle_content_check_dialog(page, username)
 
-            # --- TikTok PROFILE mode: only post videos from the given profile ---
-            if platform == "TikTok" and profile_link:
-                log(f"[{username}] Step 1-2: PROFILE MODE — sourcing from {profile_link}")
-                update_account(username, current_task="PROFILE MODE: picking a video from source profile...")
-                candidates = scrape_profile_videos(username, profile_link, exclude=posted_video_ids)
-                if not candidates:
-                    update_account(username, current_task="No unused profile videos found, retrying in 2 min")
+            if not goto_upload:
+                # --- TikTok PROFILE mode: only post videos from the given profile ---
+                if platform == "TikTok" and profile_link:
+                    log(f"[{username}] Step 1-2: PROFILE MODE — sourcing from {profile_link}")
+                    update_account(username, current_task="PROFILE MODE: picking a video from source profile...")
+                    candidates = scrape_profile_videos(username, profile_link, exclude=posted_video_ids)
+                    if not candidates:
+                        update_account(username, current_task="No unused profile videos found, retrying in 2 min")
+                        time.sleep(120)
+                        continue
+                    # Most-recent first; pick randomly within the first few to vary captions.
+                    pool = candidates[:6]
+                    video_info = random.choice(pool)
+                    print(f"[{username}] PROFILE MODE selected {video_info['url']}")
+                else:
+                    # --- Step1: search TikTok in the browser ---
+                    # NOTE: searches ALWAYS happen on TikTok (never YouTube) to source
+                    # the clips — both platforms reuse the TikTok search.
+                    log(f"[{username}] Step 1: Searching TikTok '{category}' (platform={platform})")
+                    update_account(username, current_task=f"Step 1: Searching '{category}'...")
+                    take_screenshot(username)
+
+                    search_ok = search_on_tiktok(username, category)
+                    if not search_ok:
+                        log(f"[{username}] search step failed, using API fallback")
+
+                    # --- Step2: find a video in the results (>= MIN_LIKES/ VIEWS) ---
+                    log(f"[{username}] Step 2: Finding a good video...")
+                    update_account(username, current_task="Step 2: Finding a good video...")
+                    take_screenshot(username)
+                    video_info = find_viral_video(username, category, exclude=posted_video_ids)
+                    if not video_info:
+                        update_account(username, current_task="No good video found, retrying in 2 min")
+                        time.sleep(120)
+                        continue
+
+                if video_info.get("video_id") in posted_video_ids:
+                    update_account(username, current_task="Already posted that one, searching again...")
+                    time.sleep(30)
+                    continue
+
+                # --- Step3: download without watermark ---
+                log(f"[{username}] Step 3: Downloading video (no watermark)...")
+                update_account(username, current_task="Step 3: Downloading video (no watermark)...")
+                take_screenshot(username)
+                video_file = download_video_no_watermark(username, video_info)
+                if not video_file:
+                    update_account(username, current_task="Download failed, retrying in 2 min")
                     time.sleep(120)
                     continue
-                # Most-recent first; pick randomly within the first few to vary captions.
-                pool = candidates[:6]
-                video_info = random.choice(pool)
-                print(f"[{username}] PROFILE MODE selected {video_info['url']}")
-            else:
-                # --- Step 1: search TikTok in the browser ---
-                # NOTE: searches ALWAYS happen on TikTok (never YouTube) to source
-                # the clips — both platforms reuse the TikTok search.
-                log(f"[{username}] Step 1: Searching TikTok '{category}' (platform={platform})")
-                update_account(username, current_task=f"Step 1: Searching '{category}'...")
-                take_screenshot(username)
 
-                search_ok = search_on_tiktok(username, category)
-                if not search_ok:
-                    log(f"[{username}] search step failed, using API fallback")
+                # --- Prepare video for the target platform (YouTube gets exact
+                #     1080x1920 + good duration; TikTok keeps the original clip) ---
+                prepared_file = prepare_video_for_platform(username, video_file, platform)
 
-                # --- Step 2: find a viral video in the results ---
-                log(f"[{username}] Step 2: Finding viral video...")
-                update_account(username, current_task="Step 2: Finding viral video...")
-                take_screenshot(username)
-                video_info = find_viral_video(username, category, exclude=posted_video_ids)
-                if not video_info:
-                    update_account(username, current_task="No viral video found, retrying in 2 min")
-                    time.sleep(120)
-                    continue
-
-            if video_info.get("video_id") in posted_video_ids:
-                update_account(username, current_task="Already posted that one, searching again...")
-                time.sleep(30)
-                continue
-
-            # --- Step 3: download without watermark ---
-            log(f"[{username}] Step 3: Downloading video (no watermark)...")
-            update_account(username, current_task="Step 3: Downloading video (no watermark)...")
-            take_screenshot(username)
-            video_file = download_video_no_watermark(username, video_info)
-            if not video_file:
-                update_account(username, current_task="Download failed, retrying in 2 min")
-                time.sleep(120)
-                continue
-
-            # --- Prepare video for the target platform (YouTube gets exact
-            #     1080x1920 + good duration; TikTok keeps the original clip) ---
-            prepared_file = prepare_video_for_platform(username, video_file, platform)
-
-            # --- Step 4: generate category-matched, platform-aware caption ---
-            update_account(username, current_task="Step 4: Generating caption...")
-            caption = generate_caption(video_info, category, platform)
-            title = (video_info.get("title") or category or "YouTube Short").strip()[:100]
-            print(f"[{username}] caption: {caption}")
+                # --- Step4: generate category-matched, platform-aware caption ---
+                update_account(username, current_task="Step 4: Generating caption...")
+                caption = generate_caption(video_info, category, platform)
+                title = (video_info.get("title") or category or "Shorts").strip()[:100]
+                print(f"[{username}] caption: {caption}")
 
             # --- Steps 5-6: upload & post ---
             if platform == "YouTube":

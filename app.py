@@ -121,15 +121,17 @@ def add_new_account():
     if not username.startswith("@"):
         username = "@" + username
 
-    if add_account(username, category, platform):
-        # Store optional settings if provided.
+    channel_link = (data.get("channel_link") or "").strip()
+
+    if add_account(username, category, platform, profile_link=profile_link, channel_link=channel_link):
         kwargs = {}
         login_method = (data.get("login_method") or "cookie").strip()
         if login_method:
             kwargs["login_method"] = login_method
-        profile_link = (data.get("profile_link") or "").strip()
         if profile_link:
             kwargs["profile_link"] = profile_link
+        if channel_link:
+            kwargs["channel_link"] = channel_link
         if kwargs:
             update_account(username, **kwargs)
         return jsonify({"success": True})
