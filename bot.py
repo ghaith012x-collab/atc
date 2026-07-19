@@ -1520,146 +1520,51 @@ def prepare_video_for_platform(username, file_path, platform):
 
 
 def generate_caption(video_info, category, platform="TikTok"):
-    """Generate category-aware captions that actually match the content.
+    """Generate captions that mirror the SOURCE video, not just the category.
 
-    For YouTube we add #Shorts and write a longer, accurate caption that
-    describes the clip (good for retention + search). For TikTok we keep the
-    shorter, hashtag-forward style.
+    The hook line is derived from the original clip's real title (cleaned up),
+    so a horror clip reads like a horror clip and a dance clip like a dance —
+    instead of blindly pasting a generic category phrase. Hashtags come from the
+    video's own tags + keywords pulled from its title + a few category staples.
     """
     original = (video_info.get("title") or "").strip()
-    plain = re.sub(r"#\w+", "", original).strip()
-    plain = re.sub(r"\s{2,}", " ", plain)
-    if len(plain) > 90:
-        plain = plain[:90].rsplit(" ", 1)[0]
-
-    # Pull any hashtags the ORIGINAL video already used, so our repost stays
-    # on-topic with the source clip (e.g. #scary #ghost). Keep them lowercase
-    # and de-duplicated; cap to avoid a wall of tags.
+    # Collect the source's own hashtags first (keeps us on the real topic).
     src_tags = re.findall(r"#(\w+)", original)
     src_tags = ["#" + t.lower() for t in dict.fromkeys(src_tags)]
+
+    # Clean the title down to a readable hook (drop the tags, collapse spaces).
+    plain = re.sub(r"#\w+", "", original).strip()
+    plain = re.sub(r"\s{2,}", " ", plain).strip(" -|•·")
+    if len(plain) > 100:
+        plain = plain[:100].rsplit(" ", 1)[0]
 
     # Derive content keywords straight from the video title so hashtags reflect
     # the ACTUAL clip, not just the broad category. Skip generic stopwords.
     STOP = {"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is",
             "this", "that", "with", "you", "your", "my", "me", "i", "it", "at",
-            "be", "are", "was", "video", "watch", "like", "when", "how", "what"}
+            "be", "are", "was", "video", "watch", "like", "when", "how", "what",
+            "the", "best", "part", "tiktok", "fyp", "viral", "trending"}
     words = [w for w in re.findall(r"[A-Za-z']+", plain.lower()) if len(w) > 2 and w not in STOP]
     topic_tags = ["#" + w for w in dict.fromkeys(words) if w not in STOP]
     topic_tags = topic_tags[:6]
 
     cat = (category or "dance").lower()
-
-    # Category-specific caption templates (makes it feel real). Keys are LOWERCASE.
-    templates = {
-        "horror": [
-            "This actually gave me chills 😱",
-            "Would you survive this? 😭",
-            "Nightmare fuel fr",
-            "I can't unsee this...",
-            "This is actually terrifying",
-            "POV: you shouldn't have watched this at night",
-            plain or "This horror hit different",
-        ],
-        "dance": [
-            "The moves 🔥",
-            "This choreography is insane",
-            "Trying this rn",
-            "Dance of the day",
-            "The energy is unmatched",
-            plain or "This dance is too good",
-        ],
-        "story animation": [
-            "This horror story animation gave me chills 😱",
-            "POV: the story takes a dark turn...",
-            "Animation horror hits different",
-            plain or "This story animation is wild",
-        ],
-        "gin stories": [
-            "This jinn story is terrifying 😨",
-            "Islam teaches us about the unseen 👀",
-            "You won't believe this jinn story",
-            plain or "Jinn stories always hit different",
-        ],
-        "scary facts": [
-            "This fact gave me chills 🥶",
-            "Did you know this? 👀",
-            "Scary fact you weren't ready for",
-            plain or "This fact is unforgettable",
-        ],
-        "funny videos": [
-            "I can't stop laughing 😂",
-            "This is too real",
-            "The accuracy 💀",
-            plain or "This had me dying",
-        ],
-        "predator catches": [
-            "When the predator strikes 🐊",
-            "Nature is brutal 🔥",
-            "Caught in the act 📸",
-            plain or "This catch was insane",
-        ],
-        "viral clips": [
-            "This clip is blowing up everywhere 🔥",
-            "No way this went viral like that",
-            "POV: you find the best clip on the internet",
-            plain or "This viral clip is insane",
-        ],
-        "funny clips": [
-            "I can't stop laughing 😂",
-            "This is too real",
-            "The accuracy 💀",
-            plain or "This had me dying",
-        ],
-        "scary story animation": [
-            "This scary story animation gave me chills 😱",
-            "POV: the story takes a dark turn...",
-            "Animation horror hits different",
-            plain or "This story animation is wild",
-        ],
-        "fruit story animation": [
-            "This fruit story animation is so wholesome 🍓",
-            "POV: the cutest fruit story ever",
-            "Animation stories always hit different",
-            plain or "This fruit story is adorable",
-        ],
-        "horror animations": [
-            "This horror animation gave me chills 😱",
-            "POV: the demon appears...",
-            "Horror animation hits different",
-            plain or "This horror animation is wild",
-        ],
-        "edits": [
-            "This edit is fire 🔥",
-            "The transition tho…",
-            "Best edit I've seen all day",
-            plain or "This edit goes hard",
-        ],
-    }
-
-    base = random.choice(templates.get(cat, templates["dance"]))
-
-    # Build a hashtag set that mirrors the ACTUAL video: the source clip's own
-    # tags + keywords pulled from its title + the category's standard tags.
     pool = CATEGORY_HASHTAGS.get(cat, ["#fyp", "#viral", "#trending"])
 
-    if platform == "YouTube":
-        # YouTube Shorts: longer, accurate, searchable caption + #Shorts.
-        extra = ["#Shorts", "#YouTubeShorts", "#viralshorts"]
-        all_tags = list(dict.fromkeys(src_tags + topic_tags + pool + extra))[:10]
-        # Use the real video topic when available; otherwise a generic hook.
-        # NOTE: never repeat `base` (it's already the hook line above).
-        topic = plain or "Watch till the end!"
-        caption = (
-            f"{base}\n\n{topic}\n\n"
-            f"Drop a like and subscribe for more {cat} "
-            f"shorts every day! 🔔\n\n"
-            f"{' '.join(all_tags)}"
-        )
-        return caption.strip()[:300]
+    # HOOK: based on the actual video title. If the source has no usable title,
+    # fall back to a short, content-keyword hook instead of a category phrase.
+    if plain:
+        base = plain
+    elif topic_tags:
+        base = f"Check out this {topic_tags[0][1:].replace('_', ' ')} clip 🔥"
+    else:
+        base = f"Fresh {cat} content for you 👀"
 
-    extra = ["#fyp", "#foryou", "#viral"]
-    all_tags = list(dict.fromkeys(src_tags + topic_tags + pool + extra))[:8]
-
+    # Keep it short and normal-sized: one line from the source clip plus a few
+    # on-topic hashtags (its own tags first, then title keywords, then a couple
+    # of category staples). No big multi-line block.
+    extra = ["#Shorts", "#fyp", "#foryou", "#viral"] if platform == "YouTube" else ["#fyp", "#foryou", "#viral"]
+    all_tags = list(dict.fromkeys(src_tags + topic_tags + pool + extra))[:6]
     caption = f"{base} {' '.join(all_tags)}"
     return caption.strip()[:150]
 
@@ -3131,7 +3036,7 @@ def automation_worker(username):
             # --- Step 4: generate category-matched, platform-aware caption ---
             update_account(username, current_task="Step 4: Generating caption...")
             caption = generate_caption(video_info, category, platform)
-            title = category
+            title = (video_info.get("title") or category or "YouTube Short").strip()[:100]
             print(f"[{username}] caption: {caption}")
 
             # --- Steps 5-6: upload & post ---
