@@ -22,6 +22,7 @@ import re
 import json
 import time
 import random
+import shutil
 import subprocess
 import tempfile
 
