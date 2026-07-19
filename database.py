@@ -6,7 +6,7 @@ _pool = None
 _accounts = {}
 
 DEFAULT_FIELDS = {
-    'platform':'TikTok','category':'dance','session_data':None,'connected':0,'enabled':0,
+    'platform':'TikTok','category':None,'session_data':None,'connected':0,'enabled':0,
     'status':'Disconnected','current_task':'Idle','last_post':None,'next_post':None,
     'next_post_ts':None,'logged_in_as':None,'logs':'','verify_code':'','email':None,
     'password':None,'login_method':'cookie','profile_link':None,'channel_link':None,'posted_ids':None,
@@ -53,6 +53,11 @@ def init_db():
                 ]:
                     if col not in existing:
                         cur.execute(f'ALTER TABLE accounts ADD COLUMN "{col}" {coltype}')
+                # Allow a NULL category (accounts added via Profile URL have none).
+                try:
+                    cur.execute('ALTER TABLE accounts ALTER COLUMN category DROP NOT NULL')
+                except Exception:
+                    pass
             conn.commit()
         finally: _pool.putconn(conn)
         print('✓ PostgreSQL persistence enabled', flush=True)
