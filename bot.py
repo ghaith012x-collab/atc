@@ -14,6 +14,7 @@ from playwright.sync_api import sync_playwright, TimeoutError
 from PIL import Image
 import io
 import math
+import subprocess
 from database import get_account, update_account, append_log, get_oauth_token
 
 # === CAPTCHA SOLVER (isolated addition) ===
@@ -1423,6 +1424,12 @@ def _get_video_duration_seconds(path):
     return 0.0
 
 
+def _ffmpeg_path():
+    """Return the ffmpeg executable path, or None if not available."""
+    import shutil
+    return shutil.which("ffmpeg")
+
+
 def prepare_video_for_platform(username, file_path, platform):
     """Return a processed video path sized/trimmed for the target platform.
 
@@ -1430,20 +1437,25 @@ def prepare_video_for_platform(username, file_path, platform):
     full HD portrait) and an exact, good duration (YOUTUBE_MIN_SEC..MAX_SEC s):
       - too short  -> loop the clip until it reaches the minimum length
       - too long   -> trim to the maximum length at a clean cut
-    For TikTok we keep the original (already a vertical short clip).
-    Skips re-encoding if the file already meets the constraints.
+    The original audio (sound) is preserved via ffmpeg — OpenCV's VideoWriter
+    silently drops the audio track, which is why uploads came out muted.
+
+    For TikTok we keep the original (already a vertical short clip with sound).
     """
     if platform != "YouTube":
         return file_path
 
-    try:
-        import cv2
-    except Exception as e:
-        print(f"[{username}] cv2 unavailable, uploading original: {e}")
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        # No ffmpeg: keep the ORIGINAL clip (which has its audio) instead of
+        # re-encoding with OpenCV and losing all sound. Most tikwm clips are
+        # already vertical/near-1080x1920, so this is a safe fallback.
+        print(f"[{username}] ffmpeg not found — uploading original (keeps audio)")
         return file_path
 
     update_account(username, current_task="Resizing to exact 1080x1920 Shorts...")
 
+    W, H = YOUTUBE_SHORTS_WIDTH, YOUTUBE_SHORTS_HEIGHT
     dur = _get_video_duration_seconds(file_path)
     target_dur = None
     if dur > 0:
@@ -1455,63 +1467,55 @@ def prepare_video_for_platform(username, file_path, platform):
     safe_user = re.sub(r"[^A-Za-z0-9_-]", "_", username)
     out_path = os.path.join(DOWNLOADS_DIR, f"{safe_user}_yt_{int(time.time())}.mp4")
 
-    cap = cv2.VideoCapture(file_path)
-    if not cap.isOpened():
-        print(f"[{username}] could not open video for processing")
+    # Scale preserving aspect ratio, center with black bars (pad), and keep the
+    # audio track (the -c:a copy / -map 0:a below). stream_loop loops short
+    # clips; -t trims long ones. -shortest ends when video finishes.
+    vf = (
+        f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+        f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
+        f"setsar=1,fps=30"
+    )
+    cmd = [
+        ffmpeg, "-y", "-i", file_path,
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-map", "0:v:0", "-map", "0:a:0?",
+    ]
+    if target_dur and dur and dur < YOUTUBE_MIN_SEC:
+        # loop the short clip up to the target duration
+        loops = int(YOUTUBE_MIN_SEC // dur) + 2
+        cmd = [
+            ffmpeg, "-y", "-stream_loop", str(loops), "-i", file_path,
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k",
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-t", str(target_dur), "-shortest",
+        ]
+    elif target_dur:
+        # trim a too-long clip
+        cmd += ["-t", str(target_dur)]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+    except Exception as e:
+        print(f"[{username}] ffmpeg processing failed ({e}); uploading original (keeps audio): {file_path}")
+        if os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
         return file_path
-
-    src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    if src_fps <= 0:
-        src_fps = 30.0
-
-    W, H = YOUTUBE_SHORTS_WIDTH, YOUTUBE_SHORTS_HEIGHT
-
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(out_path, fourcc, src_fps, (W, H))
-
-    # Letterbox/pillarbox preserving aspect ratio, centered, black bars.
-    scale = min(W / src_w, H / src_h)
-    new_w = int(round(src_w * scale))
-    new_h = int(round(src_h * scale))
-    pad_x = (W - new_w) // 2
-    pad_y = (H - new_h) // 2
-
-    max_frames = int(target_dur * src_fps) if target_dur else 0
-    written = 0
-    loop_count = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            # Loop short clips up to the target duration.
-            if target_dur and written < max_frames and loop_count < 50:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                loop_count += 1
-                continue
-            break
-        if target_dur and written >= max_frames:
-            break
-        resized = cv2.resize(frame, (new_w, new_h))
-        canvas = cv2.copyMakeBorder(
-            resized, pad_y, H - new_h - pad_y, pad_x, W - new_w - pad_x,
-            cv2.BORDER_CONSTANT, value=(0, 0, 0),
-        ) if (pad_x or pad_y) else resized
-        # Ensure exact output dimensions (handles odd rounding).
-        if canvas.shape[1] != W or canvas.shape[0] != H:
-            canvas = cv2.resize(canvas, (W, H))
-        writer.write(canvas)
-        written += 1
-
-    cap.release()
-    writer.release()
 
     if os.path.exists(out_path) and os.path.getsize(out_path) > 10 * 1024:
         final_dur = _get_video_duration_seconds(out_path)
-        update_account(username, current_task=f"Shorts ready: {W}x{H}, {final_dur:.0f}s")
-        print(f"[{username}] prepared YouTube Short: {out_path} ({W}x{H}, {final_dur:.1f}s)")
+        update_account(username, current_task=f"Shorts ready: {W}x{H}, {final_dur:.0f}s (with audio)")
+        print(f"[{username}] prepared YouTube Short: {out_path} ({W}x{H}, {final_dur:.1f}s, audio preserved)")
         return out_path
-    print(f"[{username}] video processing failed, uploading original")
+    print(f"[{username}] video processing failed, uploading original (keeps audio)")
     return file_path
 
 
