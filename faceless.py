@@ -67,7 +67,7 @@ PIPER_VOICE_B = os.environ.get("PIPER_VOICE_B", _default_voice("en_US-lessac-med
 
 WIDTH, HEIGHT = YOUTUBE_SHORTS_WIDTH, YOUTUBE_SHORTS_HEIGHT
 TARGET_DURATION = 45  # seconds of chat
-FONT_SIZE = 30
+FONT_SIZE = 42
 
 
 def check_faceless_deps():
@@ -277,7 +277,7 @@ def _synth_line_piper(text, voice, out_wav):
         return False
 
 
-def _synth_line_espeak(text, out_wav, variant="en-us"):
+def _synth_line_espeak(text, out_wav, variant="en-us+f3"):
     """Synthesize one line with espeak-ng (free, offline). Returns True on success.
 
     espeak-ng writes raw or wav output; we ask for wav and resample to 24k mono
@@ -324,14 +324,14 @@ def _synth_line_gtts(text, out_wav, lang="en"):
         return False
 
 
-def _synth_line(text, voice, out_wav):
+def _synth_line(text, voice, out_wav, variant="en-us+f3"):
     """Synthesize one line. Tries Piper, then espeak-ng, then gTTS.
 
     `voice` is only used by Piper. Returns (True, backend) on success or
     (False, None) on failure."""
     if _synth_line_piper(text, voice, out_wav):
         return True, "piper"
-    if _synth_line_espeak(text, out_wav):
+    if _synth_line_espeak(text, out_wav, variant=variant):
         return True, "espeak"
     if _synth_line_gtts(text, out_wav):
         return True, "gtts"
@@ -375,7 +375,8 @@ def _build_audio(username, script, tmp):
     for i, (speaker, text) in enumerate(script):
         voice = PIPER_VOICE_A if speaker == "A" else PIPER_VOICE_B
         wav = os.path.join(tmp, f"line_{i}.wav")
-        success, backend = _synth_line(text, voice, wav)
+        variant = "en-us+f3" if speaker == "A" else "en-us+m3"
+        success, backend = _synth_line(text, voice, wav, variant=variant)
         if success:
             backend_used = backend_used or backend
         if not success:
@@ -419,7 +420,7 @@ def _build_audio(username, script, tmp):
 # ---------------------------------------------------------------------------
 # 4. Chat overlay render (Pillow) + ffmpeg composite
 # ---------------------------------------------------------------------------
-def _draw_chat_frame(path, messages, font, small, last_speaker, max_visible=3):
+def _draw_chat_frame(path, messages, font, small, last_speaker, max_visible=5):
     """Draw a phone-style chat overlay (Snapchat/WhatsApp look).
 
     - A translucent "glass" phone panel so the ASMR background stays visible.
@@ -553,9 +554,9 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
     bg_tmp = os.path.join(tmp, "bg_clean.mp4")
     p1 = subprocess.run(
         ["ffmpeg", "-y", "-i", bg_path, "-an",
-         "-vf", (f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
-                   f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
-                   f"{blur}eq=brightness=0.85:saturation=1.05,format=yuv420p"),
+         "-vf", (f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
+                   f"crop={WIDTH}:{HEIGHT},"
+                   f"{blur}eq=brightness=0.92:saturation=1.10,format=yuv420p"),
          "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
          "-t", str(TARGET_DURATION), bg_tmp],
         capture_output=True, timeout=120,
@@ -579,11 +580,11 @@ def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp)
         prev = script[:i]
         # typing indicator frame
         typing_png = os.path.join(tmp, f"frame_{i}_typing.png")
-        _draw_chat_frame(typing_png, prev, font, small, speaker, max_visible=3)
+        _draw_chat_frame(typing_png, prev, font, small, speaker, max_visible=5)
         frames.append((typing_png, 0.9))
         # revealed message frame
         shown_png = os.path.join(tmp, f"frame_{i}.png")
-        _draw_chat_frame(shown_png, script[:i + 1], font, small, None, max_visible=3)
+        _draw_chat_frame(shown_png, script[:i + 1], font, small, None, max_visible=5)
         spoken = 2.2
         if i < len(audio_segments):
             spoken = audio_segments[i][3] or 2.2
