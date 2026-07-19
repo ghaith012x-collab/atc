@@ -762,6 +762,25 @@ def _cookie_domain_for(c, platform):
     return c.get("domain", ".tiktok.com")
 
 
+def _proxy_is_reachable(server, timeout=4):
+    """Quick TCP liveness check for a proxy server URL. Returns True if the
+    proxy host:port accepts a connection within `timeout` seconds. Lets us
+    skip a dead proxy immediately instead of burning 30s on a navigation
+    timeout every single run."""
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(server if "://" in server else "http://" + server)
+        host = p.hostname
+        port = p.port or (443 if p.scheme == "https" else 80)
+        if not host:
+            return False
+        import socket
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 def _get_proxy(account=None):
     """Build a Playwright proxy dict from (in priority order):
        1) account['proxy']  (DB field, full URL e.g. http://1.2.3.4:8080)
@@ -770,6 +789,8 @@ def _get_proxy(account=None):
     Returns a dict like {"server": "http://ip:port"} or None.
     Routing the browser through a residential IP (instead of the server's
     datacenter IP) greatly reduces YouTube's 'Verify that it's you' prompts.
+    A configured proxy that is NOT reachable is skipped (None) so the bot
+    connects DIRECT instead of hanging on a dead proxy.
     """
     proxy = None
     if account and isinstance(account, dict):
@@ -782,6 +803,9 @@ def _get_proxy(account=None):
         if ip and port:
             proxy = f"http://{ip}:{port}"
     if not proxy:
+        return None
+    if not _proxy_is_reachable(proxy):
+        print(f"[proxy] {proxy} not reachable -> skipping (connect DIRECT)")
         return None
     return {"server": proxy}
 
@@ -852,17 +876,27 @@ def _start_browser_session(username, account=None, no_proxy=False):
     else:
         print(f"[{username}] launching persistent browser (profile={profile_dir}) DIRECT")
 
-    # Try HEADED first (so you can log in manually). If that fails — e.g. no
-    # display available — fall back to headless so the app still runs; manual
-    # login then isn't possible, but cookie sessions still work.
+    # Prefer HEADLESS. Manual Google sign-in never worked reliably in automation
+    # (Google blocks headless login, and headed mode requires a working X display
+    # that is frequently absent on servers — causing the whole launch to fail).
+    # Only attempt HEADED first if a real $DISPLAY is actually present; otherwise
+    # go straight to headless so we never waste time on a doomed headed launch.
+    _has_display = bool(os.environ.get("DISPLAY"))
+    if _has_display:
+        headless_order = (False, True)
+    else:
+        headless_order = (True,)
+
     context = None
     last_err = None
-    for attempt_headless in (False, True):
+    for attempt_headless in headless_order:
         launch_kwargs = dict(base_kwargs, headless=attempt_headless)
         try:
             context = pw.chromium.launch_persistent_context(**launch_kwargs)
             if attempt_headless:
-                print(f"[{username}] NOTE: headed launch failed (no display?); fell back to headless. Manual Google login needs a display (run under xvfb-run).")
+                print(f"[{username}] NOTE: running headless (no usable display / manual login not supported).")
+            else:
+                print(f"[{username}] NOTE: running headed under display {os.environ.get('DISPLAY')}.")
             break
         except Exception as le:
             last_err = le
@@ -873,7 +907,7 @@ def _start_browser_session(username, account=None, no_proxy=False):
                 try:
                     context = pw.chromium.launch_persistent_context(**dict(base_kwargs, headless=attempt_headless))
                     if attempt_headless:
-                        print(f"[{username}] NOTE: fell back to headless (no display). Manual login needs xvfb-run.")
+                        print(f"[{username}] NOTE: running headless (fell back after dropping chrome channel).")
                     break
                 except Exception as le2:
                     last_err = le2
