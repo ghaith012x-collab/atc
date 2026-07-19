@@ -90,26 +90,39 @@ def _make_local_background(username):
     watermark-free, sound-free clip even with no network to TikTok."""
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", username)
     path = os.path.join(DOWNLOADS_DIR, f"{safe}_localbg_{int(time.time())}.mp4")
-    # A looping, slowly drifting dark gradient (no audio, no text).
-    expr = (
-        "draw=format=yuv420p,"
-        "fps=30,"
-        f"size={WIDTH}x{HEIGHT},"
-        f"duration={TARGET_DURATION},"
-        "x=mod(t*8\\,WIDTH):WIDTH,"
-        "y=mod(t*5\\,HEIGHT):HEIGHT,"
-        "[::WIDTH-1][::-1]"
+    # A slowly drifting dark gradient (no audio, no text). Built from a proper
+    # lavfi source (`gradients`) so it works without any external clip.
+    src = (
+        f"gradients=s={WIDTH}x{HEIGHT}:c0=0x12141c:c1=0x2a2f45:"
+        f"c2=0x101218:c3=0x1c2333:x0=0:y0=0:"
+        f"x1={WIDTH}:y1={HEIGHT}:nb_colors=4:speed=0.01:type=linear,"
+        f"format=yuv420p,fps=30,loop=loop=-1:size=1"
     )
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-f", "lavfi", "-i", expr,
-             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", src,
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
              "-pix_fmt", "yuv420p", "-an", "-t", str(TARGET_DURATION), path],
             capture_output=True, timeout=120,
         )
+        if proc.returncode != 0:
+            log(f"[{username}] local bg gen failed: {proc.stderr.decode('utf-8', 'ignore')[-500:]}")
     except Exception as e:
         log(f"[{username}] local bg gen failed: {e}")
         return None, None
+    if os.path.exists(path) and os.path.getsize(path) > 10 * 1024:
+        return path, "local_" + str(int(time.time()))
+    # Last-resort: a static solid-color clip so generation never dies on bg.
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i",
+             f"color=c=0x1a1d27:s={WIDTH}x{HEIGHT}:d={TARGET_DURATION},format=yuv420p",
+             "-c:v", "libx264", "-t", str(TARGET_DURATION), "-pix_fmt", "yuv420p",
+             "-an", path],
+            capture_output=True, timeout=120,
+        )
+    except Exception:
+        pass
     if os.path.exists(path) and os.path.getsize(path) > 10 * 1024:
         return path, "local_" + str(int(time.time()))
     return None, None
@@ -596,16 +609,21 @@ def generate_faceless_short(username):
     try:
         bg, vid = _source_asmr_background(username)
         if not bg:
-            log(f"[{username}] Faceless: no ASMR background downloaded (TikWM/network issue)")
+            log(f"[{username}] Faceless: NO background available (TikWM + local gen both failed) -> cannot render")
             return None, None, None
+        log(f"[{username}] Faceless: background ready ({vid})")
 
         script = _generate_script_llm(username)
+        log(f"[{username}] Faceless: script = {script}")
         audio_final, segments = _build_audio(username, script, tmp)
+        log(f"[{username}] Faceless: audio segments = {len(segments)} (None => silent)")
 
         out = os.path.join(DOWNLOADS_DIR, f"{re.sub(r'[^A-Za-z0-9_-]', '_', username)}_faceless_{int(time.time())}.mp4")
         final = _render_chat_video(username, bg, script, segments, out, tmp)
         if not final:
+            log(f"[{username}] Faceless: render produced no file -> gen failed")
             return None, None, None
+        log(f"[{username}] Faceless: generated {final} ({os.path.getsize(final)} bytes)")
 
         title = random.choice([
             "POV: the texts got weird", "the last message broke me",
