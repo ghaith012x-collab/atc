@@ -134,6 +134,9 @@
         <div class="row" style="margin-top:10px;">
             <input type="text" id="new-profile-link" placeholder="TikTok profile link (optional, TikTok only) — posts only this profile's videos" style="flex:1;min-width:240px;">
         </div>
+        <div class="row" id="new-channel-row" style="margin-top:10px; display:none;">
+            <input type="text" id="new-channel-link" placeholder="YouTube custom channel link (optional) — e.g. https://youtube.com/@yourchannel" style="flex:1;min-width:240px;">
+        </div>
         <div class="row" style="margin-top:10px;">
             <select id="new-login-method">
                 <option value="cookie">Login: Cookie session</option>
@@ -185,6 +188,12 @@
                 <div class="info-value" id="next-{{ acc.username }}">{{ acc.next_post or '—' }}</div>
                 <div style="font-size:11px;color:#888;margin-top:1px;" id="countdown-{{ acc.username }}">—</div>
             </div>
+            {% if acc.platform == 'YouTube' and acc.channel_link %}
+            <div class="info-item">
+                <div class="info-label">CHANNEL</div>
+                <div class="info-value" style="font-size:12px;word-break:break-all;"><a href="{{ acc.channel_link }}" target="_blank" style="color:#4fa3ff;text-decoration:none;">{{ acc.channel_link }}</a></div>
+            </div>
+            {% endif %}
         </div>
 
         <!-- YouTube uses OAuth, never pasted cookie sessions. TikTok keeps its existing cookie flow. -->
@@ -272,7 +281,7 @@
             ],
             "YouTube": [
                 "Viral Clips", "Funny Clips", "Scary Story Animation",
-                "Fruit Story Animation", "Horror Animations", "Edits"
+                "Fruit Story Animation", "Horror Animations", "Edits", "Faceless"
             ]
         };
 
@@ -281,6 +290,9 @@
             const sel = document.getElementById('new-category');
             const cats = PLATFORM_CATEGORIES[platform] || PLATFORM_CATEGORIES["TikTok"];
             sel.innerHTML = cats.map(c => `<option value="${c}">${c}</option>`).join('');
+            // Channel link only applies to YouTube.
+            const chRow = document.getElementById('new-channel-row');
+            if (chRow) chRow.style.display = (platform === "YouTube") ? "flex" : "none";
         }
 
         function addAccount() {
@@ -289,11 +301,12 @@
             const platform = document.getElementById('new-platform').value;
             const login_method = document.getElementById('new-login-method').value;
             const profile_link = (document.getElementById('new-profile-link') || {}).value || '';
+            const channel_link = (document.getElementById('new-channel-link') || {}).value || '';
             if (!username) { showToast('Enter a username', 'error'); return; }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, category, platform, login_method, profile_link})
+                body: JSON.stringify({username, category, platform, login_method, profile_link, channel_link})
             })
             .then(r => r.json())
             .then(d => {
