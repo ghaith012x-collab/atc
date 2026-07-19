@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright, TimeoutError
 from PIL import Image
 import io
 import math
-from database import get_account, update_account, append_log, get_verify_code, clear_verify_code
+from database import get_account, update_account, append_log
 
 # === CAPTCHA SOLVER (isolated addition) ===
 try:
@@ -2717,36 +2717,9 @@ def _handle_youtube_auth_dialog(page, username=""):
                 update_account(username, current_task="Verification complete — resuming upload")
                 return "advanced"
             absent_checks = 0
-            code = get_verify_code(username)
-            if code:
-                try:
-                    filled = page.evaluate("""(c) => {
-                        const d = document.querySelector('ytcp-auth-confirmation-dialog') || document;
-                        const inp = d.querySelector('input[type="text"], input[type="tel"], input[type="number"], input:not([type]), textarea');
-                        if (!inp) return false;
-                        const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                        if (set) { set.call(inp, c); inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                        else { inp.value = c; inp.dispatchEvent(new Event('input', {bubbles:true})); }
-                        return true;
-                    }""", code)
-                    if filled:
-                        _log_event(username, f"Verify dialog: typed code {code}")
-                        clear_verify_code(username)
-                        try:
-                            page.evaluate("""() => {
-                                const b = document.querySelector('ytcp-auth-confirmation-dialog #next-button, #next-button, ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
-                                if (!b || b.disabled) return;
-                                const inner = b.shadowRoot && b.shadowRoot.querySelector('button, tp-yt-paper-button, [role="button"]');
-                                const target = inner || b;
-                                const r = target.getBoundingClientRect();
-                                const cx = r.x + r.width/2, cy = r.y + r.height/2;
-                                target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, isTrusted:true}));
-                                try { target.click(); } catch(e){}
-                            }""")
-                        except Exception:
-                            pass
-                except Exception as ce:
-                    _log_event(username, f"Verify code entry err: {ce}")
+            # Do not read, request, or submit verification codes. Google/YouTube
+            # security challenges require the account owner to complete them in
+            # the live browser; we only observe whether the dialog changes.
             update_account(username, current_task="Verify that it's you — waiting for your code/method in live cam")
             time.sleep(5)
         _log_event(username, "Verify dialog: timed out waiting for code — still blocked")
