@@ -2552,12 +2552,16 @@ def _handle_youtube_auth_dialog(page, username=""):
                     for (const el of root.querySelectorAll('*')) {
                         const text = (el.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
                         if ((text === 'next' || text === 'continue') && visible(el)) {
-                            const inner = el.shadowRoot && [...el.shadowRoot.querySelectorAll('button,[role="button"],tp-yt-paper-button')]
+                            const inner = el.shadowRoot && [...el.shadowRoot.querySelectorAll('button,[role="button"],tp-yt-paper-button,[role="button"]')]
                                 .find(x => visible(x));
-                            const target = inner || el;
-                            if (!disabled(target) && !disabled(el)) {
+                            // Never click a custom-element wrapper merely because
+                            // its text says Next. Only click a real inner control,
+                            // or an actual native/button-like element.
+                            const isNative = /^(BUTTON|A|TP-YT-PAPER-BUTTON)$/.test(el.tagName) || el.getAttribute('role') === 'button';
+                            const target = inner || (isNative ? el : null);
+                            if (target && !disabled(target) && !disabled(el)) {
                                 target.click();
-                                return {clicked:true, text};
+                                return {clicked:true, text, tag:target.tagName};
                             }
                             // This element may only be a disabled-looking wrapper;
                             // keep walking its descendants/shadow root for the real
@@ -2591,10 +2595,16 @@ def _handle_youtube_auth_dialog(page, username=""):
         # clicking the wrapper (or page.mouse at its center) misses the inner
         # control and lands on the backdrop, which drags a text selection across
         # the whole page instead of advancing.
+        # Scope this locator strictly to the auth dialog. A global
+        # '#next-button' can resolve to the upload wizard behind the overlay.
         inner_btn = page.locator(
             'ytcp-auth-confirmation-dialog #next-button button, '
-            '#next-button button, ytcp-auth-confirmation-dialog #confirm-button button'
-        ).first
+            'ytcp-auth-confirmation-dialog #next-button tp-yt-paper-button, '
+            'ytcp-auth-confirmation-dialog #next-button [role="button"], '
+            'ytcp-auth-confirmation-dialog #confirm-button button, '
+            'ytcp-auth-confirmation-dialog #confirm-button tp-yt-paper-button, '
+            'ytcp-auth-confirmation-dialog #confirm-button [role="button"]'
+        ).filter(has_text=re.compile(r'^(Next|Continue)$', re.I)).first
         if not clicked and inner_btn.count() > 0:
             if inner_btn.is_disabled():
                 disabled = True
@@ -2608,15 +2618,16 @@ def _handle_youtube_auth_dialog(page, username=""):
             # Fallback: trusted JS click on #next-button's inner <button>.
             try:
                 res = page.evaluate("""() => {
-                    const b = document.querySelector('ytcp-auth-confirmation-dialog #next-button, #next-button, ytcp-auth-confirmation-dialog #confirm-button, #confirm-button');
-                    if (!b) return {ok:false, reason:'no-confirm'};
+                    // Never fall back to the upload wizard's global #next-button.
+                    const host = document.querySelector('ytcp-auth-confirmation-dialog');
+                    if (!host) return {ok:false, reason:'no-auth-dialog'};
                     const roots = [];
                     const collect = root => {
                         if (!root || roots.includes(root)) return;
                         roots.push(root);
                         for (const el of root.querySelectorAll('*')) if (el.shadowRoot) collect(el.shadowRoot);
                     };
-                    collect(b);
+                    collect(host);
                     let target = null;
                     const visible = el => { const r=el.getBoundingClientRect(), c=getComputedStyle(el); return r.width>0 && r.height>0 && c.display!=='none' && c.visibility!=='hidden'; };
                     for (const root of roots) {
@@ -2625,13 +2636,13 @@ def _handle_youtube_auth_dialog(page, username=""):
                               || candidates.find(x => visible(x) && !x.disabled && String(x.getAttribute('aria-disabled')||'').toLowerCase()!=='true');
                         if (target) break;
                     }
-                    target = target || b;
+                    if (!target) return {ok:false, reason:'no-enabled-auth-control'};
                     if (target.disabled || String(target.getAttribute && target.getAttribute('aria-disabled')||'').toLowerCase()==='true') return {ok:false, disabled:true};
                     const r = target.getBoundingClientRect();
                     const cx = r.x + r.width/2, cy = r.y + r.height/2;
                     target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy, screenX:cx, screenY:cy, detail:1}));
                     try { target.click(); } catch(e){}
-                    return {ok:true, tag:target.tagName, id:b.id||'', cx:Math.round(cx), cy:Math.round(cy)};
+                    return {ok:true, tag:target.tagName, id:target.id||'', cx:Math.round(cx), cy:Math.round(cy)};
                 }""")
                 if res and res.get("disabled"):
                     disabled = True
@@ -2653,11 +2664,17 @@ def _handle_youtube_auth_dialog(page, username=""):
             update_account(username, current_task="Verify that it's you — click Next in live cam")
             return "needs_code"
 
-        print(f"[{username}] ✓ clicked verify-dialog Next")
-        _log_event(username, "Verify dialog: clicked Next")
-        update_account(username, current_task="Verify that it's you — clicked Next, waiting...")
+        print(f"[{username}] ✓ dispatched click to verification-dialog Next")
+        _log_event(username, "Verify dialog: click dispatched to scoped auth control")
+        update_account(username, current_task="Verify that it's you — confirming click...")
         time.sleep(3)
         take_screenshot(username)
+        # A dispatched DOM click is not proof that YouTube accepted the action.
+        # Require the auth dialog to change or disappear before treating this as
+        # progress; otherwise keep the account blocked for human completion.
+        after_click = page.evaluate(_verify_dialog_present_js())
+        if after_click and after_click.get("present"):
+            _log_event(username, "Verify dialog: click dispatched but dialog remains open")
 
         # Do not treat a transient overlay repaint as success. YouTube can briefly
         # hide the custom element while rebuilding the same verification dialog.
