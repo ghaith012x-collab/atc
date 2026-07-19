@@ -88,6 +88,21 @@ def add_account(username, category='dance', platform='TikTok', profile_link=None
             ok=cur.rowcount==1; conn.commit(); return ok
     finally:_pool.putconn(conn)
 
+def update_account(username, **kwargs):
+    if not kwargs: return
+    allowed=set(DEFAULT_FIELDS)-{'username','created_at'}
+    kwargs={k:v for k,v in kwargs.items() if k in allowed}
+    if not kwargs: return
+    if not _pg_enabled():
+        with _lock:
+            if username in _accounts: _accounts[username].update(kwargs)
+        return
+    conn=_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            keys=list(kwargs); cur.execute('UPDATE accounts SET '+','.join(f'"{k}"=%s' for k in keys)+' WHERE username=%s',[kwargs[k] for k in keys]+[username]); conn.commit()
+    finally:_pool.putconn(conn)
+
 def delete_account(username):
     if not _pg_enabled():
         with _lock:_accounts.pop(username,None)
