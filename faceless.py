@@ -3,7 +3,7 @@
 For accounts whose category is "Faceless" we DO NOT source a finished clip.
 Instead we build a "chat reaction" Short locally:
 
-  1. Download an ASMR background clip (no text, no sound) from TikTok/stock.
+  1. Download an Minecraft parkour background clip (no text, no sound) from TikTok/stock.
   2. Ask a local, free LLM (Ollama) for a ~45s WhatsApp/Snap-style chat
      conversation (random theme, hook at the end like "The end is crazy").
   3. Render a phone-style chat overlay (bubbles, avatars, typing) over the
@@ -83,7 +83,7 @@ def check_faceless_deps():
 
 
 # ---------------------------------------------------------------------------
-# 1. ASMR background
+# 1. Minecraft parkour background
 # ---------------------------------------------------------------------------
 def _make_local_background(username):
     """Fallback when TikWM/ASMR download is unreachable: generate a
@@ -136,12 +136,12 @@ def _source_asmr_background(username):
     bg, vid = _source_asmr_background_real(username)
     if bg:
         return bg, vid
-    log(f"[{username}] ASMR download failed; using local generated background")
+    log(f"[{username}] Minecraft parkour download failed; using local fallback background")
     return _make_local_background(username)
 
 
 def _source_asmr_background_real(username):
-    """Download a silent, text-free ASMR background clip. Returns (path, video_id)."""
+    """Download a silent, text-free Minecraft parkour background clip. Returns (path, video_id)."""
     # Prefer clean, text-free Minecraft obby/parkour gameplay first. These clips
     # provide the high-motion visual bed used by the reference format; fallbacks
     # remain available when the search service is unavailable.
@@ -304,6 +304,24 @@ def _synth_line_espeak(text, out_wav, variant="en-us+f3"):
         return False
 
 
+def _synth_line_edge(text, out_wav, voice="en-US-JennyNeural"):
+    """Natural free Microsoft Edge neural TTS endpoint via edge-tts."""
+    if not shutil.which("edge-tts"):
+        return False
+    try:
+        mp3 = os.path.join(os.path.dirname(out_wav), "_edge_" + os.path.basename(out_wav) + ".mp3")
+        proc = subprocess.run(["edge-tts", "--voice", voice, "--text", text, "--write-media", mp3],
+                              capture_output=True, timeout=60)
+        if proc.returncode != 0 or not os.path.exists(mp3) or os.path.getsize(mp3) <= 100:
+            return False
+        rc = subprocess.run(["ffmpeg", "-y", "-i", mp3, "-ar", "24000", "-ac", "1", out_wav],
+                            capture_output=True, timeout=30)
+        return rc.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 100
+    except Exception as e:
+        log(f"edge-tts failed: {e}")
+        return False
+
+
 def _synth_line_gtts(text, out_wav, lang="en"):
     """Synthesize one line with gTTS (free, online, needs network)."""
     try:
@@ -331,10 +349,14 @@ def _synth_line(text, voice, out_wav, variant="en-us+f3"):
     (False, None) on failure."""
     if _synth_line_piper(text, voice, out_wav):
         return True, "piper"
-    if _synth_line_espeak(text, out_wav, variant=variant):
-        return True, "espeak"
+    # Edge neural voices are natural and free; use them before robotic local espeak.
+    edge_voice = "en-US-GuyNeural" if variant.endswith("f3") else "en-US-JennyNeural"
+    if _synth_line_edge(text, out_wav, voice=edge_voice):
+        return True, "edge-tts"
     if _synth_line_gtts(text, out_wav):
         return True, "gtts"
+    if _synth_line_espeak(text, out_wav, variant=variant):
+        return True, "espeak"
     return False, None
 
 
@@ -423,7 +445,7 @@ def _build_audio(username, script, tmp):
 def _draw_chat_frame(path, messages, font, small, last_speaker, max_visible=5):
     """Draw a phone-style chat overlay (Snapchat/WhatsApp look).
 
-    - A translucent "glass" phone panel so the ASMR background stays visible.
+    - A translucent "glass" phone panel so the Minecraft parkour background stays visible.
     - Only the last `max_visible` messages are shown; as new ones arrive the
       oldest scrolls off the top (rolling window), instead of dumping every
       message at once.
@@ -439,12 +461,12 @@ def _draw_chat_frame(path, messages, font, small, last_speaker, max_visible=5):
     pad_top = int(HEIGHT * 0.06)
     pad_bot = int(HEIGHT * 0.05)
     px0, py0, px1, py1 = pad_x, pad_top, WIDTH - pad_x, HEIGHT - pad_bot
-    d.rounded_rectangle([px0, py0, px1, py1], radius=40, fill=(18, 19, 26, 150))
+    d.rounded_rectangle([px0, py0, px1, py1], radius=40, fill=(12, 14, 20, 105))
 
     # Status bar (header)
     bar_h = 96
-    d.rounded_rectangle([px0, py0, px1, py0 + bar_h], radius=40, fill=(26, 27, 36, 200))
-    d.rectangle([px0, py0 + bar_h - 30, px1, py0 + bar_h], fill=(26, 27, 36, 200))
+    d.rounded_rectangle([px0, py0, px1, py0 + bar_h], radius=40, fill=(18, 20, 28, 225))
+    d.rectangle([px0, py0 + bar_h - 30, px1, py0 + bar_h], fill=(18, 20, 28, 225))
     ax, ay = px0 + 54, py0 + bar_h // 2
     d.ellipse([ax - 30, ay - 30, ax + 30, ay + 30], fill=(58, 110, 240, 255))
     d.text((ax - 12, ay - 16), "A", fill=(255, 255, 255, 255), font=small)
@@ -536,7 +558,7 @@ def _has_filter(filter_name):
 def _render_chat_video(username, bg_path, script, audio_segments, out_path, tmp):
     """Render the chat overlay over a CLEAN, muted, watermark-hidden ASMR bg.
 
-    - Mute the ASMR audio (ASMR backgrounds must be silent).
+    - Mute the ASMR audio (Minecraft parkour backgrounds must be silent).
     - Fit to 9:16 WITHOUT cropping (pad), so nothing is butchered.
     - Blur+darken the background edges so any TikTok @/watermark UI
       that rides the clip borders is hidden under the phone panel.
