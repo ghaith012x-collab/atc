@@ -335,17 +335,18 @@
             const username = (document.getElementById(unameId) || {}).value;
             if (!username || !username.trim()) { showToast('Enter a username', 'error'); return; }
             const u = username.trim();
-            let category = 'dance';
-            let profile_link = '';
+            const body = {username: u, platform: 'TikTok'};
             if (mode === 'category') {
-                category = (document.getElementById('new-category') || {}).value || 'dance';
+                // Category path: only category matters, no profile link.
+                body.category = (document.getElementById('new-category') || {}).value || 'dance';
             } else if (mode === 'profile') {
-                profile_link = ((document.getElementById('new-profile-link') || {}).value || '').trim();
+                // Profile URL path: use the profile link, leave category unset.
+                body.profile_link = ((document.getElementById('new-profile-link') || {}).value || '').trim();
             }
             fetch('/api/add', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username: u, category, platform: 'TikTok', profile_link})
+                body: JSON.stringify(body)
             })
             .then(r => r.json())
             .then(d => {

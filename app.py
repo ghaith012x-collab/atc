@@ -113,7 +113,7 @@ def api_accounts():
 def add_new_account():
     data = request.json
     username = data.get("username", "").strip()
-    category = data.get("category", "dance")
+    category = data.get("category") or None  # only default if the client sent nothing
     platform = data.get("platform", "TikTok")
     if platform not in ("TikTok", "YouTube"):
         platform = "TikTok"

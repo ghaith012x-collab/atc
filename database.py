@@ -86,7 +86,9 @@ def get_account(username):
             cur.execute('SELECT * FROM accounts WHERE username=%s',(username,)); return _row(cur,cur.fetchone())
     finally: _pool.putconn(conn)
 
-def add_account(username, category='dance', platform='TikTok', profile_link=None, channel_link=None):
+def add_account(username, category=None, platform='TikTok', profile_link=None, channel_link=None):
+    # category is optional: when None it is stored as NULL (no forced default),
+    # so accounts added via Profile URL keep no category until the user sets one.
     if not _pg_enabled():
         with _lock:
             if username in _accounts: return False
