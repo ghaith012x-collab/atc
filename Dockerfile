@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Provide a virtual display for headed Playwright/Google verification flows,
 # plus ffmpeg (video/audio processing for the Faceless generator).
-RUN apt-get update && apt-get install -y --no-install-recommends xvfb ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb ffmpeg espeak-ng && rm -rf /var/lib/apt/lists/*
 
 # ---- Faceless deps (NON-FATAL: build succeeds even if a download fails) ----
 # Piper TTS static binary + two distinct English voices so the two chat

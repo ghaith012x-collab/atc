@@ -246,7 +246,7 @@ def _generate_script_llm(username):
 # ---------------------------------------------------------------------------
 # 3. TTS (Piper) — one voice per speaker
 # ---------------------------------------------------------------------------
-def _synth_line(text, voice, out_wav):
+def _synth_line_piper(text, voice, out_wav):
     """Synthesize one line with Piper. Returns True on success."""
     if not PIPER_BIN:
         return False
@@ -258,6 +258,67 @@ def _synth_line(text, voice, out_wav):
         return proc.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 100
     except Exception:
         return False
+
+
+def _synth_line_espeak(text, out_wav, variant="en-us"):
+    """Synthesize one line with espeak-ng (free, offline). Returns True on success.
+
+    espeak-ng writes raw or wav output; we ask for wav and resample to 24k mono
+    so it matches the rest of the pipeline."""
+    bin_cands = ["espeak-ng", "espeak"]
+    bin_name = next((b for b in bin_cands if shutil.which(b)), None)
+    if not bin_name:
+        return False
+    try:
+        raw = os.path.join(os.path.dirname(out_wav), "_espeak_raw.wav")
+        proc = subprocess.run(
+            [bin_name, "-v", variant, "-s", "155", "-w", raw, text],
+            capture_output=True, timeout=60,
+        )
+        if proc.returncode != 0 or not os.path.exists(raw) or os.path.getsize(raw) <= 100:
+            return False
+        # Normalize to 24k mono wav for consistent downstream handling.
+        rc = subprocess.run(
+            ["ffmpeg", "-y", "-i", raw, "-ar", "24000", "-ac", "1", out_wav],
+            capture_output=True, timeout=30,
+        )
+        return rc.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 100
+    except Exception:
+        return False
+
+
+def _synth_line_gtts(text, out_wav, lang="en"):
+    """Synthesize one line with gTTS (free, online, needs network)."""
+    try:
+        from gtts import gTTS
+    except Exception:
+        return False
+    try:
+        mp3 = os.path.join(os.path.dirname(out_wav), "_gtts.mp3")
+        gTTS(text=text, lang=lang, slow=False).save(mp3)
+        if not os.path.exists(mp3) or os.path.getsize(mp3) <= 100:
+            return False
+        rc = subprocess.run(
+            ["ffmpeg", "-y", "-i", mp3, "-ar", "24000", "-ac", "1", out_wav],
+            capture_output=True, timeout=30,
+        )
+        return rc.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 100
+    except Exception:
+        return False
+
+
+def _synth_line(text, voice, out_wav):
+    """Synthesize one line. Tries Piper, then espeak-ng, then gTTS.
+
+    `voice` is only used by Piper. Returns (True, backend) on success or
+    (False, None) on failure."""
+    if _synth_line_piper(text, voice, out_wav):
+        return True, "piper"
+    if _synth_line_espeak(text, out_wav):
+        return True, "espeak"
+    if _synth_line_gtts(text, out_wav):
+        return True, "gtts"
+    return False, None
 
 
 def _wav_duration(wav):
@@ -290,24 +351,28 @@ def _build_audio(username, script, tmp):
     (speaker, wav_path, dur_sec). If Piper is unavailable, returns (None, []).
     """
     if not PIPER_BIN:
-        log(f"[{username}] Faceless: Piper TTS not installed -> silent video (voices skipped).")
-        return None, []
+        log(f"[{username}] Faceless: Piper TTS not installed -> trying free fallback TTS (espeak-ng / gTTS).")
     missing_voices = [v for v in (PIPER_VOICE_A, PIPER_VOICE_B) if not os.path.exists(v)]
     if missing_voices:
         log(f"[{username}] Faceless: Piper voice file(s) missing: {missing_voices} "
-            f"-> silent video. Place .onnx voices in PIPER_VOICE_DIR.")
-        return None, []
+            f"-> trying free fallback TTS (espeak-ng / gTTS).")
     segs = []
     ok = True
+    backend_used = None
     for i, (speaker, text) in enumerate(script):
         voice = PIPER_VOICE_A if speaker == "A" else PIPER_VOICE_B
         wav = os.path.join(tmp, f"line_{i}.wav")
-        if not _synth_line(text, voice, wav):
+        success, backend = _synth_line(text, voice, wav)
+        if success:
+            backend_used = backend_used or backend
+        if not success:
             ok = False
             break
         dur = _wav_duration(wav)
         segs.append((speaker, wav, dur))
     if not ok or not segs:
+        log(f"[{username}] Faceless: no TTS backend available (piper/espeak/gTTS) "
+            f"-> silent video (voices skipped).")
         return None, []
 
     gap = 0.4
@@ -520,7 +585,7 @@ def generate_faceless_short(username):
     missing = check_faceless_deps()
     if missing:
         msg = "Faceless deps MISSING: " + ", ".join(missing) + \
-              " - install ffmpeg/ffprobe/piper (Ollama optional)."
+              " - install ffmpeg/ffprobe (piper/espeak/gTTS optional, Ollama optional)."
         log(f"[{username}] {msg}")
         try:
             update_account(username, current_task=msg[:200])

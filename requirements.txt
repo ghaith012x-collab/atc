@@ -4,6 +4,7 @@ playwright
 pillow
 greenlet
 requests
+gTTS
 opencv-python-headless
 numpy
 psycopg2-binary
