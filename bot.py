@@ -1973,6 +1973,21 @@ def upload_video_to_tiktok(username, file_path, caption):
         print(f"[{username}] No page available")
         return False
 
+    # Step 0: sanity-check that we look LOGGED IN before touching the upload
+    # form. The session cookie must be valid; if TikTok bounces us to /login the
+    # post would otherwise silently fail. We only WARN here (don't hard-fail) so
+    # a benign /login href on a logged-in page can't block a good session — the
+    # upload loop's own /login redirect detection is the real logout guard.
+    try:
+        page.goto("https://www.tiktok.com", timeout=30000, wait_until="domcontentloaded")
+        time.sleep(2)
+        login_btn = page.locator('[data-e2e="top-login-button"]').count()
+        profile_icon = page.locator('[data-e2e="profile-icon"], [data-e2e="top-nav-profile"], a[href*="/@"]').count()
+        if login_btn > 0 and profile_icon == 0:
+            print(f"[{username}] ⚠ Looks logged OUT — the TikTok session cookie may be invalid/expired")
+            update_account(username, current_task="Session may be invalid — attempting upload anyway")
+    except Exception as le:
+        print(f"[{username}] login pre-check warning: {le}")
     # Selectors still used as fallbacks (primary lookups are iframe-aware helpers)
     FILE = 'input[type="file"]'
     CAP = '//div[@contenteditable="true"]'
@@ -2194,33 +2209,26 @@ def upload_video_to_tiktok(username, file_path, caption):
             print(f"[{username}] ❌ post button NOT FOUND in DOM")
             _save_debug_html(page, "NO_POST_BUTTON", username)
 
-        print(f"[{username}] === CLICKING POST (real DOM click, overlay-proof) ===")
-        posted = False
-        for attempt in range(4):
-            post_loc = _find_post_button(page)
-            if post_loc is None:
-                print(f"[{username}] ❌ no Post button (attempt {attempt+1})")
-                time.sleep(3)
-                continue
-
-            if not _button_can_post(post_loc):
-                print(f"[{username}] Post button still disabled (attempt {attempt+1}) — waiting")
-                time.sleep(4)
-                continue
-
+        print(f"[{username}] === CLICKING POST ONCE (single upload — never twice) ===")
+        post_loc = _find_post_button(page)
+        if post_loc is None or not _button_can_post(post_loc):
+            print(f"[{username}] ❌ Post button not enabled — cannot publish")
+            _save_debug_html(page, "POST_NOT_ENABLED", username)
+            _save_debug_screenshot(page, "post_not_enabled", username)
+            posted = False
+        else:
             clicked, method = _click_post_robust(page, post_loc, username)
-            print(f"[{username}] click attempt {attempt+1}: clicked={clicked} method={method}")
-
-            # Newer TikTok shows a 'Continue to post?' confirmation after the click
+            print(f"[{username}] post click: clicked={clicked} method={method}")
+            # Newer TikTok shows a 'Continue to post?' confirmation after the click.
             _handle_continue_to_post(page, username)
-
-            _save_debug_screenshot(page, f"post_attempt_{attempt+1}", username)
+            _save_debug_screenshot(page, "post_clicked", username)
             take_screenshot(username)
-            _save_debug_html(page, f"POST_ATTEMPT_{attempt+1}", username)
+            _save_debug_html(page, "POST_CLICKED", username)
 
-            # === VERIFY THE POST ACTUALLY REGISTERED ===
-            print(f"[{username}] verifying post (attempt {attempt+1})...")
-            for _ in range(15):  # up to ~45s
+            # === VERIFY THE POST REGISTERED (poll ONLY — we never click again) ===
+            print(f"[{username}] verifying post (single attempt)...")
+            posted = False
+            for _ in range(20):  # up to ~60s
                 time.sleep(3)
                 _handle_continue_to_post(page, username)
                 url = page.url.lower()
@@ -2246,16 +2254,6 @@ def upload_video_to_tiktok(username, file_path, caption):
                         break
                 except Exception:
                     pass
-                # 'Something went wrong' -> retry the whole click
-                try:
-                    if "something went wrong" in (page.inner_text("body", timeout=1500) or "").lower():
-                        print(f"[{username}] ⚠ 'Something went wrong' — will retry click")
-                        break
-                except Exception:
-                    pass
-            if posted:
-                break
-            print(f"[{username}] attempt {attempt+1} did not confirm a post — retrying")
 
         try:
             page.remove_listener("request", nr)
