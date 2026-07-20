@@ -121,7 +121,11 @@
         <div class="logs-header" style="padding:0 0 15px;"><div class="logs-title">Post a video</div><button class="logs-close" onclick="closePostBox()">×</button></div>
         <p style="color:#aaa;font-size:13px;">Paste an Instagram, YouTube, or TikTok video link. ATC will download the best available quality.</p>
         <label class="field-label">Post to
-          <select id="post-account">{% for acc in accounts %}<option value="{{ acc.username }}">{{ acc.username }} — {{ acc.platform }}</option>{% endfor %}</select>
+          <select id="post-account">
+            {% for acc in accounts %}<option value="{{ acc.username }}">{{ acc.platform }} — {{ acc.username }}</option>{% endfor %}
+            {% if not accounts %}<option value="" disabled selected>YouTube — connect an account below</option><option value="" disabled>TikTok — connect an account below</option>{% endif %}
+          </select>
+          {% if not accounts %}<div class="hint" style="margin-top:6px;">No destination accounts are connected yet. Add a YouTube or TikTok account below, then reopen this window.</div>{% endif %}
         </label>
         <label class="field-label">Video link
           <input id="post-source" type="url" placeholder="https://youtube.com/watch?v=… or Instagram/TikTok link">
