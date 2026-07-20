@@ -1970,6 +1970,17 @@ def upload_video_to_tiktok(username, file_path, caption):
     """
     page = _get_page(username)
     if page is None:
+        # No live browser for this account (e.g. a one-off "Post a video" where
+        # nothing pre-opened one). Open a worker browser from the stored session
+        # so the upload always has a page — never bail with "No page available".
+        account = get_account(username)
+        if account and account.get("session_data"):
+            try:
+                if _init_worker_browser(username, account):
+                    page = _get_page(username)
+            except Exception as be:
+                print(f"[{username}] worker browser start failed: {be}")
+    if page is None:
         print(f"[{username}] No page available")
         return False
 
