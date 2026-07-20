@@ -1,7 +1,7 @@
 """One-off source-link posting flow; isolated from the existing scheduler."""
 import os, re, subprocess, tempfile, threading
-from database import get_account, update_account
-from bot import upload_video_to_tiktok, upload_video_to_youtube
+from database import get_account, update_account, delete_account
+from bot import upload_video_to_tiktok, upload_video_to_youtube, browser_sessions
 
 
 def _safe_title(url):
@@ -12,12 +12,11 @@ def post_from_link(username, source_url, captions):
     account = get_account(username)
     if not account:
         raise ValueError("Account not found")
-    if account.get("platform") == "YouTube":
+    platform = account.get("platform") or "TikTok"
+    if platform == "YouTube":
         from app import has_oauth_token
         if not has_oauth_token(username):
             raise ValueError("Connect Google / YouTube first")
-    elif not account.get("connected"):
-        raise ValueError("Connect the TikTok session first")
     if not re.match(r"^https?://", source_url, re.I):
         raise ValueError("Enter a complete video URL")
     update_account(username, status="Posting", current_task="Downloading source video in best quality...")
@@ -33,10 +32,21 @@ def post_from_link(username, source_url, captions):
         video = files[0]
         update_account(username, current_task="Uploading video...")
         caption = captions.strip()
-        if account.get("platform") == "YouTube":
+
+        if platform == "YouTube":
             ok = upload_video_to_youtube(username, video, caption, _safe_title(source_url))
         else:
+            # TikTok: open our OWN worker browser from the stored cookie so the
+            # upload has a live page. (connect_account verifies then CLOSES the
+            # browser, so we must not reuse it.) Fail early if there is no cookie.
+            if not account.get("session_data"):
+                raise ValueError("Connect the TikTok session first")
+            if username not in browser_sessions:
+                from bot import _init_worker_browser
+                if not _init_worker_browser(username, account):
+                    raise RuntimeError("Could not start a TikTok browser session from the provided cookie")
             ok = upload_video_to_tiktok(username, video, caption)
+
         if not ok:
             raise RuntimeError("The platform upload did not complete")
         update_account(username, status="Connected", current_task="Ready", last_post="Just now")
@@ -46,6 +56,27 @@ def post_from_link(username, source_url, captions):
     finally:
         import shutil
         shutil.rmtree(work, ignore_errors=True)
+        # Tear down the throwaway browser used for this one-off post.
+        if username in browser_sessions:
+            try:
+                s = browser_sessions.pop(username)
+                for closer in ("context", "browser"):
+                    try:
+                        getattr(s.get(closer), "close")()
+                    except Exception:
+                        pass
+                try:
+                    s.get("pw").stop()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        # Remove the temporary TikTok destination so it doesn't pile up.
+        if username.startswith("__post_tiktok_"):
+            try:
+                delete_account(username)
+            except Exception:
+                pass
 
 
 def start_post(username, source_url, captions):
