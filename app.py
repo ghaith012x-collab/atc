@@ -218,12 +218,13 @@ def start(username):
 def post_video():
     data = request.json or {}
     username = (data.get("username") or "").strip()
+    platform = (data.get("platform") or "TikTok").strip()
     source_url = (data.get("source_url") or "").strip()
     captions = data.get("captions") or ""
     if not source_url:
         return jsonify({"success": False, "error": "Enter a video link"}), 400
     if not username:
-        return jsonify({"success": False, "error": "Choose TikTok or YouTube above. The link is valid, but a destination login is still required to publish it."}), 400
+        return jsonify({"success": False, "error": f"{platform} is selected. Enter the {platform} session/login details above, then tap Start."}), 400
     try:
         start_post(username, source_url, captions)
         return jsonify({"success": True, "message": "Download and posting started"})
