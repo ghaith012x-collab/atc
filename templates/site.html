@@ -358,7 +358,7 @@
             if (match) document.getElementById('post-account').value = match.value;
         }
         function submitPostVideo() {
-            const username = document.getElementById('post-account').value;
+            const username = (document.getElementById('post-account') || {}).value || '';
             const source_url = document.getElementById('post-source').value.trim();
             const captions = document.getElementById('post-captions').value;
             if (!source_url) { showToast('Enter a video link first', 'error'); return; }

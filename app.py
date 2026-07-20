@@ -224,6 +224,15 @@ def post_video():
     session_cookie = (data.get("session_cookie") or "").strip()
     if not source_url:
         return jsonify({"success": False, "error": "Enter a video link"}), 400
+    # A one-off TikTok post may use the cookies pasted in this dialog; no
+    # saved username/account is required.
+    if not username and platform == "TikTok" and session_cookie:
+        import time
+        username = "__post_tiktok_" + str(int(time.time()))
+        if not add_account(username, platform="TikTok"):
+            return jsonify({"success": False, "error": "Could not create temporary TikTok destination"}), 500
+        update_account(username, session_data=session_cookie, connected=1, status="Connected")
+        connect_account(username)
     if not username:
         return jsonify({"success": False, "error": f"{platform} is selected. Enter the {platform} session/login details above, then tap Start."}), 400
     try:
