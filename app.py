@@ -221,6 +221,7 @@ def post_video():
     platform = (data.get("platform") or "TikTok").strip()
     source_url = (data.get("source_url") or "").strip()
     captions = data.get("captions") or ""
+    session_cookie = (data.get("session_cookie") or "").strip()
     if not source_url:
         return jsonify({"success": False, "error": "Enter a video link"}), 400
     if not username:

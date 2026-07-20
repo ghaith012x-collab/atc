@@ -364,7 +364,7 @@
             if (!source_url) { showToast('Enter a video link first', 'error'); return; }
             showToast('Downloading and posting in the background…', '');
             fetch('/api/post', { method:'POST', headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({username, platform: document.getElementById('post-platform').value, session_cookie: (document.getElementById('post-cookie') || {}).value || '', source_url, captions}) })
+                body: JSON.stringify({username, platform: document.getElementById('post-platform').value, session_cookie: (document.getElementById('post-tiktok-cookie') || {}).value || '', source_url, captions}) })
               .then(r => r.json()).then(d => {
                 if (d.success) { closePostBox(); showToast('Post started — watch the account status', 'success'); }
                 else showToast(d.error || 'Could not start post', 'error');
