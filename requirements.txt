@@ -13,3 +13,4 @@ google-auth
 google-auth-httplib2
 
 edge-tts>=7.0.0
+yt-dlp>=2025.1.15

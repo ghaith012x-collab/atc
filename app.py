@@ -10,6 +10,7 @@ from bot import (
     delete_account_session, logout_account,
     screenshots, last_frame_ts, browser_sessions, take_screenshot
 )
+from post_job import start_post
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.environ.get("SECRET_KEY") or os.urandom(32)
@@ -211,6 +212,21 @@ def start(username):
     update_account(username, enabled=1, connected=1, status="Running", current_task="Starting automation...")
     start_automation(username)
     return jsonify({"success": True})
+
+
+@app.route("/api/post", methods=["POST"])
+def post_video():
+    data = request.json or {}
+    username = (data.get("username") or "").strip()
+    source_url = (data.get("source_url") or "").strip()
+    captions = data.get("captions") or ""
+    if not username or not source_url:
+        return jsonify({"success": False, "error": "Choose an account and enter a video link"}), 400
+    try:
+        start_post(username, source_url, captions)
+        return jsonify({"success": True, "message": "Download and posting started"})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
 
 @app.route("/api/stop/<path:username>", methods=["POST"])

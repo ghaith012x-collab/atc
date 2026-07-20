@@ -113,7 +113,24 @@
 <body>
     <div class="header">
         <h1>TikTok Auto Poster</h1>
-        <div style="color:#888;">{{ accounts|length }} Account{{ 's' if accounts|length != 1 else '' }}</div>
+        <div style="display:flex;align-items:center;gap:12px;"><button class="btn-primary" onclick="openPostBox()">＋ Post a video</button><span style="color:#888;">{{ accounts|length }} Account{{ 's' if accounts|length != 1 else '' }}</span></div>
+    </div>
+
+    <div id="post-box" class="logs-overlay" style="display:none;">
+      <div class="logs-modal" style="max-width:560px;padding:22px;">
+        <div class="logs-header" style="padding:0 0 15px;"><div class="logs-title">Post a video</div><button class="logs-close" onclick="closePostBox()">×</button></div>
+        <p style="color:#aaa;font-size:13px;">Paste an Instagram, YouTube, or TikTok video link. ATC will download the best available quality.</p>
+        <label class="field-label">Post to
+          <select id="post-account">{% for acc in accounts %}<option value="{{ acc.username }}">{{ acc.username }} — {{ acc.platform }}</option>{% endfor %}</select>
+        </label>
+        <label class="field-label">Video link
+          <input id="post-source" type="url" placeholder="https://youtube.com/watch?v=… or Instagram/TikTok link">
+        </label>
+        <label class="field-label">Captions
+          <textarea id="post-captions" rows="4" placeholder="The exact caption to use for this video"></textarea>
+        </label>
+        <button class="btn-primary" onclick="submitPostVideo()">Post</button>
+      </div>
     </div>
 
     <!-- Add Account (via + menu) -->
@@ -316,6 +333,22 @@
             t.textContent = msg;
             t.className = 'toast show ' + (type || '');
             setTimeout(() => { t.className = 'toast'; }, 3000);
+        }
+
+        function openPostBox() { document.getElementById('post-box').style.display = 'flex'; }
+        function closePostBox() { document.getElementById('post-box').style.display = 'none'; }
+        function submitPostVideo() {
+            const username = document.getElementById('post-account').value;
+            const source_url = document.getElementById('post-source').value.trim();
+            const captions = document.getElementById('post-captions').value;
+            if (!source_url) { showToast('Enter a video link first', 'error'); return; }
+            showToast('Downloading and posting in the background…', '');
+            fetch('/api/post', { method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({username, source_url, captions}) })
+              .then(r => r.json()).then(d => {
+                if (d.success) { closePostBox(); showToast('Post started — watch the account status', 'success'); }
+                else showToast(d.error || 'Could not start post', 'error');
+              }).catch(() => showToast('Could not start post', 'error'));
         }
 
         // ==================== ADD ACCOUNT ====================
