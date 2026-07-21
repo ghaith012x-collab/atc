@@ -1,7 +1,7 @@
 """One-off source-link posting flow; isolated from the existing scheduler."""
 import os, re, subprocess, tempfile, threading
 from database import get_account, update_account
-from bot import upload_video_to_tiktok, upload_video_to_youtube, browser_sessions
+from bot import upload_video_to_tiktok, upload_video_to_youtube, browser_sessions, _init_worker_browser
 
 
 def _safe_title(url):
@@ -32,15 +32,23 @@ def post_from_link(username, source_url, captions):
             raise RuntimeError("The source did not provide a downloadable video")
         video = files[0]
         update_account(username, current_task="Uploading video...")
-        # connect_account() starts in the request thread while this job runs in
-        # the background; wait for its Playwright page instead of racing it.
+        # Use the same browser/session initialization as the category uploader.
+        # The one-off flow may have no request-thread page to reuse, so create
+        # the worker browser here instead of waiting forever on an empty session.
         import time
-        deadline = time.time() + 90
+        session = browser_sessions.get(username)
+        if not session or not session.get("page") or session["page"].is_closed():
+            update_account(username, current_task="Starting TikTok upload browser...")
+            if not _init_worker_browser(username, account):
+                raise RuntimeError("Could not start the upload browser")
+        deadline = time.time() + 30
         while time.time() < deadline:
             session = browser_sessions.get(username)
             if session and session.get("page") and not session["page"].is_closed():
                 break
             time.sleep(1)
+        else:
+            raise RuntimeError("Upload browser did not become ready")
         caption = captions.strip()
         if account.get("platform") == "YouTube":
             ok = upload_video_to_youtube(username, video, caption, _safe_title(source_url))
