@@ -1,7 +1,7 @@
 """One-off source-link posting flow; isolated from the existing scheduler."""
 import os, re, subprocess, tempfile, threading
 from database import get_account, update_account
-from bot import upload_video_to_tiktok, upload_video_to_youtube
+from bot import upload_video_to_tiktok, upload_video_to_youtube, browser_sessions
 
 
 def _safe_title(url):
@@ -32,13 +32,22 @@ def post_from_link(username, source_url, captions):
             raise RuntimeError("The source did not provide a downloadable video")
         video = files[0]
         update_account(username, current_task="Uploading video...")
+        # connect_account() starts in the request thread while this job runs in
+        # the background; wait for its Playwright page instead of racing it.
+        import time
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            session = browser_sessions.get(username)
+            if session and session.get("page") and not session["page"].is_closed():
+                break
+            time.sleep(1)
         caption = captions.strip()
         if account.get("platform") == "YouTube":
             ok = upload_video_to_youtube(username, video, caption, _safe_title(source_url))
         else:
             ok = upload_video_to_tiktok(username, video, caption)
         if not ok:
-            raise RuntimeError("The platform upload did not complete")
+            raise RuntimeError("The platform upload did not complete: TikTok did not confirm the upload. Check that the session is valid and the account is still logged in.")
         update_account(username, status="Connected", current_task="Ready", last_post="Just now")
     except Exception as exc:
         update_account(username, status="Error", current_task=str(exc)[:180])
