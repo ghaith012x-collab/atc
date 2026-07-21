@@ -14,7 +14,6 @@ from playwright.sync_api import sync_playwright, TimeoutError
 from PIL import Image
 import io
 import math
-import subprocess
 from database import get_account, update_account, append_log, get_oauth_token
 
 # === CAPTCHA SOLVER (isolated addition) ===
@@ -564,12 +563,6 @@ TIKWM_SEARCH_API = "https://www.tikwm.com/api/feed/search"
 # always ~5 minutes.
 POST_INTERVAL_SECONDS = 300  # 5 minutes
 
-# Engagement floor for non-viral sourcing: anything with >= MIN_LIKES likes
-# OR >= MIN_VIEWS views is eligible to post (so we don't run dry hunting for
-# only "viral" clips). Lowered from the old 5000-view hard gate.
-MIN_LIKES = 450
-MIN_VIEWS = 5000
-
 # How many of the top-ranked candidates to randomly choose between, so we never
 # keep picking the exact same viral video every cycle.
 VIDEO_CHOICE_POOL = 6
@@ -602,10 +595,7 @@ CATEGORY_SEARCH = {
     "Gin Stories": "Jinn stories Islam",
     "Scary facts": "Scary Facts",
     "Funny Videos": "Funny Videos",
-    "Predator Catches": "Predator catches",
-    # Faceless: generated locally (ASMR bg + AI chat overlay). Search term is
-    # only used for sourcing the ASMR background clip.
-    "Faceless": "asmr",
+    "Predator Catches": "Pred catches",
 }
 
 # Categories offered when adding a YouTube account.
@@ -638,8 +628,6 @@ CATEGORY_HASHTAGS = {
     "fruit story animation": ["#fruit", "#animation", "#kids", "#story", "#shorts", "#cute"],
     "horror animations": ["#horror", "#animation", "#scary", "#horrorstory", "#shorts", "#creepy"],
     "edits": ["#edits", "#edit", "#aesthetic", "#trending", "#shorts", "#fyp"],
-    # Faceless: generated ASMR chat-reaction Shorts. Kept generic + broad.
-    "faceless": ["#shorts", "#asmr", "#satisfying", "#relax", "#fyp", "#viral", "#chat"],
 }
 
 
@@ -762,47 +750,14 @@ def _cookie_domain_for(c, platform):
     return c.get("domain", ".tiktok.com")
 
 
-def _proxy_is_reachable(server, timeout=4):
-    """Quick TCP liveness check for a proxy server URL. Returns True if the
-    proxy host:port accepts a connection within `timeout` seconds. Lets us
-    skip a dead proxy immediately instead of burning 30s on a navigation
-    timeout every single run. Works for http/https/socks/socks5 server URLs."""
-    try:
-        from urllib.parse import urlparse
-        p = urlparse(server if "://" in server else "http://" + server)
-        host = p.hostname
-        port = p.port or (443 if p.scheme == "https" else 80)
-        if not host:
-            return False
-        import socket
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except Exception:
-        return False
-
-
-def _tor_proxy():
-    """Return a Playwright proxy dict for a local Tor SOCKS5 proxy
-    (127.0.0.1:9050) if Tor is running and reachable, else None.
-    Tor is the default free proxy so the bot always has *some* egress IP
-    instead of the server's bare datacenter address."""
-    tor = "socks5://127.0.0.1:9050"
-    if _proxy_is_reachable(tor, timeout=3):
-        return {"server": tor}
-    return None
-
-
 def _get_proxy(account=None):
     """Build a Playwright proxy dict from (in priority order):
        1) account['proxy']  (DB field, full URL e.g. http://1.2.3.4:8080)
        2) env PROXY          (full URL)
        3) env PROXY_IP + PROXY_PORT  (e.g. your home IP 84.215.85.106:PORT)
-       4) local Tor SOCKS5 proxy at 127.0.0.1:9050 (started in bootstrap.sh)
     Returns a dict like {"server": "http://ip:port"} or None.
-    Routing the browser through a proxy IP (instead of the server's
+    Routing the browser through a residential IP (instead of the server's
     datacenter IP) greatly reduces YouTube's 'Verify that it's you' prompts.
-    A configured proxy that is NOT reachable is skipped so the bot connects
-    DIRECT (or falls through to the next option) instead of hanging.
     """
     proxy = None
     if account and isinstance(account, dict):
@@ -814,17 +769,8 @@ def _get_proxy(account=None):
         port = os.environ.get("PROXY_PORT")
         if ip and port:
             proxy = f"http://{ip}:{port}"
-    if proxy:
-        if _proxy_is_reachable(proxy):
-            return {"server": proxy}
-        print(f"[proxy] {proxy} not reachable -> trying next option")
-        proxy = None
-    # Fall back to local Tor if no usable explicit proxy is configured.
-    tor = _tor_proxy()
-    if tor:
-        print("[proxy] using local Tor SOCKS5 (127.0.0.1:9050)")
-        return tor
-    return None
+    if not proxy:
+        return None
     return {"server": proxy}
 
 
@@ -894,27 +840,17 @@ def _start_browser_session(username, account=None, no_proxy=False):
     else:
         print(f"[{username}] launching persistent browser (profile={profile_dir}) DIRECT")
 
-    # Prefer HEADLESS. Manual Google sign-in never worked reliably in automation
-    # (Google blocks headless login, and headed mode requires a working X display
-    # that is frequently absent on servers — causing the whole launch to fail).
-    # Only attempt HEADED first if a real $DISPLAY is actually present; otherwise
-    # go straight to headless so we never waste time on a doomed headed launch.
-    _has_display = bool(os.environ.get("DISPLAY"))
-    if _has_display:
-        headless_order = (False, True)
-    else:
-        headless_order = (True,)
-
+    # Try HEADED first (so you can log in manually). If that fails — e.g. no
+    # display available — fall back to headless so the app still runs; manual
+    # login then isn't possible, but cookie sessions still work.
     context = None
     last_err = None
-    for attempt_headless in headless_order:
+    for attempt_headless in (False, True):
         launch_kwargs = dict(base_kwargs, headless=attempt_headless)
         try:
             context = pw.chromium.launch_persistent_context(**launch_kwargs)
             if attempt_headless:
-                print(f"[{username}] NOTE: running headless (no usable display / manual login not supported).")
-            else:
-                print(f"[{username}] NOTE: running headed under display {os.environ.get('DISPLAY')}.")
+                print(f"[{username}] NOTE: headed launch failed (no display?); fell back to headless. Manual Google login needs a display (run under xvfb-run).")
             break
         except Exception as le:
             last_err = le
@@ -925,7 +861,7 @@ def _start_browser_session(username, account=None, no_proxy=False):
                 try:
                     context = pw.chromium.launch_persistent_context(**dict(base_kwargs, headless=attempt_headless))
                     if attempt_headless:
-                        print(f"[{username}] NOTE: running headless (fell back after dropping chrome channel).")
+                        print(f"[{username}] NOTE: fell back to headless (no display). Manual login needs xvfb-run.")
                     break
                 except Exception as le2:
                     last_err = le2
@@ -1269,12 +1205,7 @@ def find_viral_video(username, category, exclude=None):
             return
         if info["video_id"] in exclude:   # never repost the same clip
             return
-        # Accept anything with decent engagement, not only "viral". A clip with
-        # >=450 likes (digg_count) or >= a few thousand views is fair game, so we
-        # stop running dry with "No viral video found".
-        likes = info.get("digg_count", 0) or 0
-        views = info.get("play_count", 0) or 0
-        if likes < MIN_LIKES and views < MIN_VIEWS:
+        if info.get("play_count", 0) < 5000:
             return
         candidates.append(info)
 
@@ -1377,34 +1308,6 @@ def scrape_profile_videos(username, profile_link, exclude=None):
     if page is None:
         return []
     candidates = []
-
-    def _ingest(link):
-        if not link:
-            return
-        m = re.search(r"tiktok\.com/@([^/?#]+)/video/(\d+)", link)
-        if not m:
-            # also accept relative paths like /@user/video/123
-            m = re.search(r"/@([^/?#]+)/video/(\d+)", link)
-            if not m:
-                return
-            link = "https://www.tiktok.com" + link
-        vid = m.group(2)
-        if vid in seen:
-            return
-        seen.add(vid)
-        if vid in exclude:
-            return
-        candidates.append({
-            "url": link.split("?")[0],
-            "video_id": vid,
-            "title": "",
-            "play_count": 0,
-            "digg_count": 0,
-            "play": "",
-            "from_profile": True,
-        })
-
-    seen = set()
     try:
         url = profile_link
         if not url.startswith("http"):
@@ -1424,66 +1327,31 @@ def scrape_profile_videos(username, profile_link, exclude=None):
         take_screenshot(username)
 
         # Scroll down to lazy-load more videos.
-        for _ in range(8):
-            page.mouse.wheel(0, 2000)
+        for _ in range(5):
+            page.mouse.wheel(0, 1500)
             time.sleep(1.5)
-
-        # Primary: live DOM anchors (works once JS has hydrated the grid).
-        try:
-            links = page.eval_on_selector_all('a[href*="/video/"]', "els => els.map(e => e.href)")
-            for link in links:
-                _ingest(link)
-        except Exception as e:
-            print(f"[{username}] PROFILE MODE dom scrape failed: {e}")
-
-        # Robust fallback: TikTok embeds /video/ links in the initial HTML even
-        # before full hydration, so a regex over the page source catches clips
-        # the DOM scrape misses (e.g. when login/age walls interfere).
-        if len(candidates) < 3:
-            try:
-                html = page.content()
-                for link in re.findall(r'(?:https?://[^\s"\'<>]*?)?/@[^"\'\s?#]+/video/\d+', html):
-                    _ingest(link)
-            except Exception as e:
-                print(f"[{username}] PROFILE MODE html scrape failed: {e}")
-
         take_screenshot(username)
-        print(f"[{username}] PROFILE MODE: found {len(candidates)} unused videos on profile")
 
-        # Most reliable fallback: TikWM's user/posts API returns the profile's
-        # recent videos directly (no browser, no login wall). Use it whenever the
-        # browser scrape found too few clips.
-        if len(candidates) < 3:
-            try:
-                handle = re.search(r"tiktok\.com/@([^/?#]+)", profile_link)
-                handle = handle.group(1) if handle else None
-                if not handle and "/" in profile_link:
-                    handle = profile_link.rstrip("/").split("/")[-1].split("?")[0]
-                if handle:
-                    r = requests.get(
-                        "https://www.tikwm.com/api/user/posts",
-                        params={"unique_id": handle, "count": 30, "cursor": 0},
-                        timeout=25,
-                    )
-                    data = r.json()
-                    if data.get("code") == 0:
-                        for v in data.get("data", {}).get("videos", []) or []:
-                            vid = str(v.get("video_id") or "")
-                            if not vid or vid in seen or vid in exclude:
-                                continue
-                            seen.add(vid)
-                            candidates.append({
-                                "url": f"https://www.tiktok.com/@{handle}/video/{vid}",
-                                "video_id": vid,
-                                "title": v.get("title", "") or "",
-                                "play_count": v.get("play_count", 0) or 0,
-                                "digg_count": v.get("digg_count", 0) or 0,
-                                "play": v.get("hdplay") or v.get("play", "") or "",
-                                "from_profile": True,
-                            })
-                        print(f"[{username}] PROFILE MODE (tikwm) added {len(data.get('data', {}).get('videos', []) or [])} videos for @{handle}")
-            except Exception as e:
-                print(f"[{username}] PROFILE MODE tikwm fallback failed: {e}")
+        links = page.eval_on_selector_all('a[href*="/video/"]', "els => els.map(e => e.href)")
+        seen = set()
+        for link in links:
+            m = re.search(r"tiktok\.com/@[^/]+/video/(\d+)", link)
+            if m and m.group(1) not in seen:
+                seen.add(m.group(1))
+                if m.group(1) in exclude:
+                    continue
+                candidates.append({
+                    "url": link.split("?")[0],
+                    "video_id": m.group(1),
+                    "title": "",
+                    "play_count": 0,
+                    "digg_count": 0,
+                    "play": "",
+                    "from_profile": True,
+                })
+            if len(candidates) >= 20:
+                break
+        print(f"[{username}] PROFILE MODE: found {len(candidates)} unused videos on profile")
     except Exception as e:
         print(f"[{username}] PROFILE MODE scrape error: {e}")
     return candidates
@@ -1555,12 +1423,6 @@ def _get_video_duration_seconds(path):
     return 0.0
 
 
-def _ffmpeg_path():
-    """Return the ffmpeg executable path, or None if not available."""
-    import shutil
-    return shutil.which("ffmpeg")
-
-
 def prepare_video_for_platform(username, file_path, platform):
     """Return a processed video path sized/trimmed for the target platform.
 
@@ -1568,25 +1430,20 @@ def prepare_video_for_platform(username, file_path, platform):
     full HD portrait) and an exact, good duration (YOUTUBE_MIN_SEC..MAX_SEC s):
       - too short  -> loop the clip until it reaches the minimum length
       - too long   -> trim to the maximum length at a clean cut
-    The original audio (sound) is preserved via ffmpeg — OpenCV's VideoWriter
-    silently drops the audio track, which is why uploads came out muted.
-
-    For TikTok we keep the original (already a vertical short clip with sound).
+    For TikTok we keep the original (already a vertical short clip).
+    Skips re-encoding if the file already meets the constraints.
     """
     if platform != "YouTube":
         return file_path
 
-    ffmpeg = _ffmpeg_path()
-    if not ffmpeg:
-        # No ffmpeg: keep the ORIGINAL clip (which has its audio) instead of
-        # re-encoding with OpenCV and losing all sound. Most tikwm clips are
-        # already vertical/near-1080x1920, so this is a safe fallback.
-        print(f"[{username}] ffmpeg not found — uploading original (keeps audio)")
+    try:
+        import cv2
+    except Exception as e:
+        print(f"[{username}] cv2 unavailable, uploading original: {e}")
         return file_path
 
     update_account(username, current_task="Resizing to exact 1080x1920 Shorts...")
 
-    W, H = YOUTUBE_SHORTS_WIDTH, YOUTUBE_SHORTS_HEIGHT
     dur = _get_video_duration_seconds(file_path)
     target_dur = None
     if dur > 0:
@@ -1598,104 +1455,191 @@ def prepare_video_for_platform(username, file_path, platform):
     safe_user = re.sub(r"[^A-Za-z0-9_-]", "_", username)
     out_path = os.path.join(DOWNLOADS_DIR, f"{safe_user}_yt_{int(time.time())}.mp4")
 
-    # Scale preserving aspect ratio, center with black bars (pad), and keep the
-    # audio track (the -c:a copy / -map 0:a below). stream_loop loops short
-    # clips; -t trims long ones. -shortest ends when video finishes.
-    vf = (
-        f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-        f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
-        f"setsar=1,fps=30"
-    )
-    cmd = [
-        ffmpeg, "-y", "-i", file_path,
-        "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
-        "-map", "0:v:0", "-map", "0:a:0?",
-    ]
-    if target_dur and dur and dur < YOUTUBE_MIN_SEC:
-        # loop the short clip up to the target duration
-        loops = int(YOUTUBE_MIN_SEC // dur) + 2
-        cmd = [
-            ffmpeg, "-y", "-stream_loop", str(loops), "-i", file_path,
-            "-vf", vf,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k",
-            "-map", "0:v:0", "-map", "0:a:0?",
-            "-t", str(target_dur), "-shortest",
-        ]
-    elif target_dur:
-        # trim a too-long clip
-        cmd += ["-t", str(target_dur)]
-
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=300)
-    except Exception as e:
-        print(f"[{username}] ffmpeg processing failed ({e}); uploading original (keeps audio): {file_path}")
-        if os.path.exists(out_path):
-            try:
-                os.remove(out_path)
-            except Exception:
-                pass
+    cap = cv2.VideoCapture(file_path)
+    if not cap.isOpened():
+        print(f"[{username}] could not open video for processing")
         return file_path
+
+    src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    if src_fps <= 0:
+        src_fps = 30.0
+
+    W, H = YOUTUBE_SHORTS_WIDTH, YOUTUBE_SHORTS_HEIGHT
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(out_path, fourcc, src_fps, (W, H))
+
+    # Letterbox/pillarbox preserving aspect ratio, centered, black bars.
+    scale = min(W / src_w, H / src_h)
+    new_w = int(round(src_w * scale))
+    new_h = int(round(src_h * scale))
+    pad_x = (W - new_w) // 2
+    pad_y = (H - new_h) // 2
+
+    max_frames = int(target_dur * src_fps) if target_dur else 0
+    written = 0
+    loop_count = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            # Loop short clips up to the target duration.
+            if target_dur and written < max_frames and loop_count < 50:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                loop_count += 1
+                continue
+            break
+        if target_dur and written >= max_frames:
+            break
+        resized = cv2.resize(frame, (new_w, new_h))
+        canvas = cv2.copyMakeBorder(
+            resized, pad_y, H - new_h - pad_y, pad_x, W - new_w - pad_x,
+            cv2.BORDER_CONSTANT, value=(0, 0, 0),
+        ) if (pad_x or pad_y) else resized
+        # Ensure exact output dimensions (handles odd rounding).
+        if canvas.shape[1] != W or canvas.shape[0] != H:
+            canvas = cv2.resize(canvas, (W, H))
+        writer.write(canvas)
+        written += 1
+
+    cap.release()
+    writer.release()
 
     if os.path.exists(out_path) and os.path.getsize(out_path) > 10 * 1024:
         final_dur = _get_video_duration_seconds(out_path)
-        update_account(username, current_task=f"Shorts ready: {W}x{H}, {final_dur:.0f}s (with audio)")
-        print(f"[{username}] prepared YouTube Short: {out_path} ({W}x{H}, {final_dur:.1f}s, audio preserved)")
+        update_account(username, current_task=f"Shorts ready: {W}x{H}, {final_dur:.0f}s")
+        print(f"[{username}] prepared YouTube Short: {out_path} ({W}x{H}, {final_dur:.1f}s)")
         return out_path
-    print(f"[{username}] video processing failed, uploading original (keeps audio)")
+    print(f"[{username}] video processing failed, uploading original")
     return file_path
 
 
 def generate_caption(video_info, category, platform="TikTok"):
-    """Generate captions that mirror the SOURCE video, not just the category.
+    """Generate category-aware captions that actually match the content.
 
-    The hook line is derived from the original clip's real title (cleaned up),
-    so a horror clip reads like a horror clip and a dance clip like a dance —
-    instead of blindly pasting a generic category phrase. Hashtags come from the
-    video's own tags + keywords pulled from its title + a few category staples.
+    For YouTube we add #Shorts and write a longer, accurate caption that
+    describes the clip (good for retention + search). For TikTok we keep the
+    shorter, hashtag-forward style.
     """
     original = (video_info.get("title") or "").strip()
-    # Collect the source's own hashtags first (keeps us on the real topic).
-    src_tags = re.findall(r"#(\w+)", original)
-    src_tags = ["#" + t.lower() for t in dict.fromkeys(src_tags)]
-
-    # Clean the title down to a readable hook (drop the tags, collapse spaces).
     plain = re.sub(r"#\w+", "", original).strip()
-    plain = re.sub(r"\s{2,}", " ", plain).strip(" -|•·")
-    if len(plain) > 100:
-        plain = plain[:100].rsplit(" ", 1)[0]
+    plain = re.sub(r"\s{2,}", " ", plain)
+    if len(plain) > 90:
+        plain = plain[:90].rsplit(" ", 1)[0]
 
-    # Derive content keywords straight from the video title so hashtags reflect
-    # the ACTUAL clip, not just the broad category. Skip generic stopwords.
-    STOP = {"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is",
-            "this", "that", "with", "you", "your", "my", "me", "i", "it", "at",
-            "be", "are", "was", "video", "watch", "like", "when", "how", "what",
-            "the", "best", "part", "tiktok", "fyp", "viral", "trending"}
-    words = [w for w in re.findall(r"[A-Za-z']+", plain.lower()) if len(w) > 2 and w not in STOP]
-    topic_tags = ["#" + w for w in dict.fromkeys(words) if w not in STOP]
-    topic_tags = topic_tags[:6]
+    cat = (category or "dance").lower()
 
-    cat = (category or "").lower()
-    pool = CATEGORY_HASHTAGS.get(cat, ["#fyp", "#viral", "#trending"]) if cat else ["#fyp", "#viral", "#trending"]
+    # Category-specific caption templates (makes it feel real). Keys are LOWERCASE.
+    templates = {
+        "horror": [
+            "This actually gave me chills 😱",
+            "Would you survive this? 😭",
+            "Nightmare fuel fr",
+            "I can't unsee this...",
+            "This is actually terrifying",
+            "POV: you shouldn't have watched this at night",
+            plain or "This horror hit different",
+        ],
+        "dance": [
+            "The moves 🔥",
+            "This choreography is insane",
+            "Trying this rn",
+            "Dance of the day",
+            "The energy is unmatched",
+            plain or "This dance is too good",
+        ],
+        "story animation": [
+            "This horror story animation gave me chills 😱",
+            "POV: the story takes a dark turn...",
+            "Animation horror hits different",
+            plain or "This story animation is wild",
+        ],
+        "gin stories": [
+            "This jinn story is terrifying 😨",
+            "Islam teaches us about the unseen 👀",
+            "You won't believe this jinn story",
+            plain or "Jinn stories always hit different",
+        ],
+        "scary facts": [
+            "This fact gave me chills 🥶",
+            "Did you know this? 👀",
+            "Scary fact you weren't ready for",
+            plain or "This fact is unforgettable",
+        ],
+        "funny videos": [
+            "I can't stop laughing 😂",
+            "This is too real",
+            "The accuracy 💀",
+            plain or "This had me dying",
+        ],
+        "predator catches": [
+            "When the predator strikes 🐊",
+            "Nature is brutal 🔥",
+            "Caught in the act 📸",
+            plain or "This catch was insane",
+        ],
+        "viral clips": [
+            "This clip is blowing up everywhere 🔥",
+            "No way this went viral like that",
+            "POV: you find the best clip on the internet",
+            plain or "This viral clip is insane",
+        ],
+        "funny clips": [
+            "I can't stop laughing 😂",
+            "This is too real",
+            "The accuracy 💀",
+            plain or "This had me dying",
+        ],
+        "scary story animation": [
+            "This scary story animation gave me chills 😱",
+            "POV: the story takes a dark turn...",
+            "Animation horror hits different",
+            plain or "This story animation is wild",
+        ],
+        "fruit story animation": [
+            "This fruit story animation is so wholesome 🍓",
+            "POV: the cutest fruit story ever",
+            "Animation stories always hit different",
+            plain or "This fruit story is adorable",
+        ],
+        "horror animations": [
+            "This horror animation gave me chills 😱",
+            "POV: the demon appears...",
+            "Horror animation hits different",
+            plain or "This horror animation is wild",
+        ],
+        "edits": [
+            "This edit is fire 🔥",
+            "The transition tho…",
+            "Best edit I've seen all day",
+            plain or "This edit goes hard",
+        ],
+    }
 
-    # HOOK: based on the actual video title. If the source has no usable title,
-    # fall back to a short, content-keyword hook instead of a category phrase.
-    if plain:
-        base = plain
-    elif topic_tags:
-        base = f"Check out this {topic_tags[0][1:].replace('_', ' ')} clip 🔥"
-    else:
-        base = "Fresh content for you 👀"
+    base = random.choice(templates.get(cat, templates["dance"]))
 
-    # Keep it short and normal-sized: one line from the source clip plus a few
-    # on-topic hashtags (its own tags first, then title keywords, then a couple
-    # of category staples). No big multi-line block.
-    extra = ["#Shorts", "#fyp", "#foryou", "#viral"] if platform == "YouTube" else ["#fyp", "#foryou", "#viral"]
-    all_tags = list(dict.fromkeys(src_tags + topic_tags + pool + extra))[:6]
+    # Add relevant hashtags
+    pool = CATEGORY_HASHTAGS.get(cat, ["#fyp", "#viral", "#trending"])
+
+    if platform == "YouTube":
+        # YouTube Shorts: longer, accurate, searchable caption + #Shorts.
+        extra = ["#Shorts", "#YouTubeShorts", "#viralshorts"]
+        all_tags = list(set(pool + extra))[:8]
+        # Use the real video topic when available; otherwise a generic hook.
+        # NOTE: never repeat `base` (it's already the hook line above).
+        topic = plain or "Watch till the end!"
+        caption = (
+            f"{base}\n\n{topic}\n\n"
+            f"Drop a like and subscribe for more {cat} "
+            f"shorts every day! 🔔\n\n"
+            f"{' '.join(all_tags)}"
+        )
+        return caption.strip()[:300]
+
+    extra = ["#fyp", "#foryou", "#viral"]
+    all_tags = list(set(pool + extra))[:6]
+
     caption = f"{base} {' '.join(all_tags)}"
     return caption.strip()[:150]
 
@@ -3054,29 +2998,15 @@ def _posted_ids_path(username):
 
 
 def load_posted_ids(username):
-    """Load the set of already-posted video ids (so we never repeat a clip).
-
-    Reads from the DB first (survives worker restarts); falls back to the local
-    JSON file if the DB has nothing yet.
-    """
-    try:
-        db_ids = get_posted_ids(username)
-        if db_ids:
-            return set(db_ids)
-    except Exception:
-        pass
+    """Load the set of already-posted video ids (so we never repeat a clip)."""
     try:
         with open(_posted_ids_path(username), "r") as f:
             return set(json.load(f))
     except Exception:
         return set()
 
+
 def save_posted_ids(username, ids):
-    # Persist to DB (primary) and also to the local file as a backup.
-    try:
-        set_posted_ids(username, ids)
-    except Exception:
-        pass
     try:
         with open(_posted_ids_path(username), "w") as f:
             json.dump(sorted(ids), f)
@@ -3115,114 +3045,76 @@ def automation_worker(username):
             # Take a screenshot to show we're alive
             take_screenshot(username)
 
-            # category may be None (accounts added via Profile URL). Keep it as-is
-            # so captions/generation don't fall back to a bogus "dance" category.
-            category = (account.get("category") or "") or None
+            category = account.get("category") or "dance"
             platform = account.get("platform") or "TikTok"
             profile_link = (account.get("profile_link") or "").strip()
-            channel_link = (account.get("channel_link") or "").strip()
-
-            # --- FACELESS: generate the Short locally (ASMR bg + AI chat overlay)
-            #     instead of searching TikTok. Works for BOTH YouTube and TikTok. ---
-            if category.lower() == "faceless":
-                # Lazy import avoids a circular import (faceless imports from bot).
-                from faceless import generate_faceless_short
-                log(f"[{username}] Faceless mode: generating local chat Short...")
-                update_account(username, current_task="Faceless: generating chat Short...")
-                take_screenshot(username)
-                try:
-                    gen_path, gen_title, gen_caption = generate_faceless_short(username)
-                except Exception as _ge:
-                    log(f"[{username}] Faceless generation crashed: {_ge}")
-                    gen_path = None
-                if not gen_path:
-                    update_account(username, current_task="Faceless gen failed, retry in 2 min")
-                    time.sleep(120)
-                    continue
-                # Set both so the YouTube (prepared_file) and TikTok (video_file)
-                # upload branches both receive the generated clip (1080x1920, audio).
-                video_file = gen_path
-                prepared_file = gen_path
-                caption = gen_caption
-                title = gen_title
-                video_info = {"video_id": "faceless_" + str(int(time.time())),
-                              "title": gen_title, "url": ""}
-                # skip the search/download steps below
-                goto_upload = True
-            else:
-                goto_upload = False
 
             page = _get_page(username)
             if page:
                 handle_captcha_if_present(page, username)
                 handle_content_check_dialog(page, username)
 
-            if not goto_upload:
-                # --- PROFILE mode: source videos only from the configured creator profile (TikTok or YouTube target) ---
-                if profile_link:
-                    log(f"[{username}] PROFILE MODE — sourcing from {profile_link}")
-                    update_account(username, current_task="PROFILE MODE: picking a video from source profile...")
-                    candidates = scrape_profile_videos(username, profile_link, exclude=posted_video_ids)
-                    if not candidates:
-                        update_account(username, current_task="No unused profile videos found, retrying in 2 min")
-                        time.sleep(120)
-                        continue
-                    # Most-recent first; pick randomly within the first few to vary captions.
-                    pool = candidates[:6]
-                    video_info = random.choice(pool)
-                    print(f"[{username}] PROFILE MODE selected {video_info['url']}")
-                else:
-                    # --- Step1: search TikTok in the browser ---
-                    # NOTE: searches ALWAYS happen on TikTok (never YouTube) to source
-                    # the clips — both platforms reuse the TikTok search.
-                    log(f"[{username}] Step 1: Searching TikTok '{category}' (platform={platform})")
-                    update_account(username, current_task=f"Step 1: Searching '{category}'...")
-                    take_screenshot(username)
-
-                    search_ok = search_on_tiktok(username, category)
-                    if not search_ok:
-                        log(f"[{username}] search step failed, using API fallback")
-
-                    # --- Step2: find a video in the results (>= MIN_LIKES/ VIEWS) ---
-                    log(f"[{username}] Step 2: Finding a good video...")
-                    update_account(username, current_task="Step 2: Finding a good video...")
-                    take_screenshot(username)
-                    video_info = find_viral_video(username, category, exclude=posted_video_ids)
-                    if not video_info:
-                        update_account(username, current_task="No good video found, retrying in 2 min")
-                        time.sleep(120)
-                        continue
-
-                if video_info.get("video_id") in posted_video_ids:
-                    update_account(username, current_task="Already posted that one, searching again...")
-                    time.sleep(30)
+            # --- TikTok PROFILE mode: only post videos from the given profile ---
+            if platform == "TikTok" and profile_link:
+                log(f"[{username}] Step 1-2: PROFILE MODE — sourcing from {profile_link}")
+                update_account(username, current_task="PROFILE MODE: picking a video from source profile...")
+                candidates = scrape_profile_videos(username, profile_link, exclude=posted_video_ids)
+                if not candidates:
+                    update_account(username, current_task="No unused profile videos found, retrying in 2 min")
+                    time.sleep(120)
                     continue
+                # Most-recent first; pick randomly within the first few to vary captions.
+                pool = candidates[:6]
+                video_info = random.choice(pool)
+                print(f"[{username}] PROFILE MODE selected {video_info['url']}")
+            else:
+                # --- Step 1: search TikTok in the browser ---
+                # NOTE: searches ALWAYS happen on TikTok (never YouTube) to source
+                # the clips — both platforms reuse the TikTok search.
+                log(f"[{username}] Step 1: Searching TikTok '{category}' (platform={platform})")
+                update_account(username, current_task=f"Step 1: Searching '{category}'...")
 
-                # --- Step3: download without watermark ---
-                log(f"[{username}] Step 3: Downloading video (no watermark)...")
-                update_account(username, current_task="Step 3: Downloading video (no watermark)...")
-                take_screenshot(username)
-                video_file = download_video_no_watermark(username, video_info)
-                if not video_file:
-                    update_account(username, current_task="Download failed, retrying in 2 min")
+                search_ok = search_on_tiktok(username, category)
+                if not search_ok:
+                    log(f"[{username}] search step failed, using API fallback")
+
+                # --- Step 2: find a viral video in the results ---
+                log(f"[{username}] Step 2: Finding viral video...")
+                update_account(username, current_task="Step 2: Finding viral video...")
+                video_info = find_viral_video(username, category, exclude=posted_video_ids)
+                if not video_info:
+                    update_account(username, current_task="No viral video found, retrying in 2 min")
                     time.sleep(120)
                     continue
 
-                # --- Prepare video for the target platform (YouTube gets exact
-                #     1080x1920 + good duration; TikTok keeps the original clip) ---
-                prepared_file = prepare_video_for_platform(username, video_file, platform)
+            if video_info.get("video_id") in posted_video_ids:
+                update_account(username, current_task="Already posted that one, searching again...")
+                time.sleep(30)
+                continue
 
-                # --- Step4: generate category-matched, platform-aware caption ---
-                update_account(username, current_task="Step 4: Generating caption...")
-                caption = generate_caption(video_info, category, platform)
-                title = (video_info.get("title") or category or "Shorts").strip()[:100]
-                print(f"[{username}] caption: {caption}")
+            # --- Step 3: download without watermark ---
+            log(f"[{username}] Step 3: Downloading video (no watermark)...")
+            update_account(username, current_task="Step 3: Downloading video (no watermark)...")
+            video_file = download_video_no_watermark(username, video_info)
+            if not video_file:
+                update_account(username, current_task="Download failed, retrying in 2 min")
+                time.sleep(120)
+                continue
+
+            # --- Prepare video for the target platform (YouTube gets exact
+            #     1080x1920 + good duration; TikTok keeps the original clip) ---
+            prepared_file = prepare_video_for_platform(username, video_file, platform)
+
+            # --- Step 4: generate category-matched, platform-aware caption ---
+            update_account(username, current_task="Step 4: Generating caption...")
+            caption = generate_caption(video_info, category, platform)
+            title = category
+            print(f"[{username}] caption: {caption}")
 
             # --- Steps 5-6: upload & post ---
             if platform == "YouTube":
                 log(f"[{username}] Step 5: Uploading to YouTube Shorts...")
                 update_account(username, current_task="Step 5: Uploading to YouTube Shorts...")
-                take_screenshot(username)
                 page = _get_page(username)
                 if page:
                     _dismiss_youtube_popups(page, username)

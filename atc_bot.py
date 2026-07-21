@@ -1997,7 +1997,7 @@ def upload_video_to_tiktok(username, file_path, caption):
         page.on("response", ns)
 
         print(f"[{username}] === VERIFIED UPLOAD FLOW (accurate 100% + exact button) ===")
-        update_account(username, current_task="Opening verified upload...")
+        update_account(username, current_task="Opening TikTok upload page...")
 
         # Navigate to verified upload URL (prefer creator-center)
         upload_url_used = None
@@ -2058,6 +2058,7 @@ def upload_video_to_tiktok(username, file_path, caption):
         # The Post button is the source of truth: it only becomes enabled once
         # TikTok has finished uploading AND server-side processing. We also read
         # the visible percentage so we never click while still below 100%.
+        update_account(username, current_task="TikTok is processing the video upload (waiting for Post)...")
         print(f"[{username}] === WAITING FOR UPLOAD 100% + Post button ENABLED ===")
         upload_100 = False
         for sec in range(360):  # up to ~12 min

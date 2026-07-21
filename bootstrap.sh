@@ -1,0 +1,52 @@
+#!/bin/bash
+# Ensure Faceless deps (Piper TTS + two English voices) exist.
+# The Dockerfile tries to fetch them at build time, but if that download
+# was blocked/silent we re-attempt here so Faceless gets real voices.
+set -e
+mkdir -p /opt/piper/voices
+cd /opt/piper
+
+if [ ! -x /opt/piper/piper ]; then
+  echo "[bootstrap] fetching Piper binary..."
+  ( apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends wget >/dev/null 2>&1 ) || true
+  wget -q https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz -O piper.tar.gz 2>/dev/null || true
+  tar -xzf piper.tar.gz 2>/dev/null || true
+  chmod +x /opt/piper/piper 2>/dev/null || true
+fi
+
+cd /opt/piper/voices
+for v in en_US-ryan-high en_US-libritts_r-medium; do
+  if [ ! -f "$v.onnx" ]; then
+    echo "[bootstrap] fetching Piper voice $v ..."
+    case "$v" in
+      en_US-ryan-high)      wget -q https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/$v.onnx -O $v.onnx 2>/dev/null || true ;;
+      en_US-libritts_r-medium) wget -q https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/$v.onnx -O $v.onnx 2>/dev/null || true ;;
+    esac
+  fi
+done
+
+echo "[bootstrap] piper=$( [ -x /opt/piper/piper ] && echo present || echo MISSING )"
+echo "[bootstrap] voices: $(ls /opt/piper/voices 2>/dev/null | tr '\n' ' ')"
+
+# Start Tor so the bot has a free, rotating SOCKS5 proxy at 127.0.0.1:9050.
+# bot.py auto-detects and uses it as the default egress when no explicit
+# PROXY / account proxy is configured (or when those are unreachable).
+if command -v tor >/dev/null 2>&1; then
+  if ! pgrep -x tor >/dev/null 2>&1; then
+    echo "[bootstrap] starting Tor (SOCKS5 127.0.0.1:9050)..."
+    tor --SocksPort 9050 --RunAsDaemon 1 --DataDirectory /tmp/tor-data >/dev/null 2>&1 || true
+  fi
+  # Give Tor a moment to bootstrap; verify the port came up.
+  for i in $(seq 1 10); do
+    if timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/9050" 2>/dev/null; then
+      echo "[bootstrap] Tor SOCKS5 up on 127.0.0.1:9050"
+      break
+    fi
+    sleep 1
+  done
+else
+  echo "[bootstrap] tor not installed -> bot will connect DIRECT"
+fi
+
+# Hand off to the real server.
+exec xvfb-run -a --server-args="-screen 0 1280x720x24" gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --worker-class gthread --timeout 120 --keep-alive 5
